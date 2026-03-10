@@ -2,8 +2,10 @@
 
 ## 文档信息
 - 创建日期：2026-03-09
+- 更新日期：2026-03-10
 - 状态：可行性验证完成，等待项目启动
 - 来源：`docs/user_say.md`
+- 更新内容：添加 Mem0 AI 记忆管理集成设计
 
 ## 项目概述
 
@@ -38,6 +40,10 @@
 │  │  Shell   │ │  LM      │ │  Media   │ │  File    │   │
 │  │ Executor │ │  Studio  │ │ Processor│ │  System  │   │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────┘   │
+│  ┌──────────┐                                            │
+│  │  Mem0    │                                            │
+│  │  Client  │                                            │
+│  └──────────┘                                            │
 └─────────────────────────────────────────────────────────┘
                         ↓
 ┌─────────────────────────────────────────────────────────┐
@@ -46,6 +52,11 @@
 │  │LM Studio │ │  Web     │ │  System  │ │  Node.js │   │
 │  │   API    │ │ Browser  │ │  Shell   │ │Playwright│   │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────┘   │
+│  ┌──────────┐                                            │
+│  │  Mem0    │                                            │
+│  │  Server  │                                            │
+│  │ (独立进程) │                                            │
+│  └──────────┘                                            │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -166,7 +177,61 @@ sealed class MessageContent {
 }
 ```
 
-#### 3.6 LM Studio 集成
+#### 3.6 AI 记忆管理 (Mem0)
+**设计要点**:
+- Mem0 集成：使用独立的 Mem0 服务管理 AI 会话记忆
+- 本地部署：Mem0 构建为独立可执行文件，随项目启动
+- REST API 调用：通过 Ktor Client 与 Mem0 服务通信
+- LM Studio 集成：使用 LM Studio 提供 LLM 和 Embedding 服务
+- 记忆持久化：使用 FAISS 向量存储本地持久化记忆
+- 智能提取：自动从对话中提取和存储关键记忆
+- 语义搜索：支持基于语义的记忆搜索和检索
+
+**实现方案**:
+```kotlin
+// Mem0 REST API 客户端
+class Mem0Client(baseUrl: String = "http://localhost:8000") {
+    suspend fun addMemory(messages: List<Message>, userId: String): MemoryResult
+    suspend fun getMemories(userId: String): List<Memory>
+    suspend fun searchMemories(query: String, userId: String): List<Memory>
+    suspend fun deleteMemory(memoryId: String): Boolean
+    suspend fun deleteAllMemories(userId: String): Boolean
+}
+
+// 记忆数据模型
+data class Memory(
+    val id: String,
+    val memory: String,
+    val hash: String,
+    val metadata: Map<String, Any?>?,
+    val createdAt: Instant,
+    val updatedAt: Instant?,
+    val userId: String
+)
+
+// 记忆管理器
+class MemoryManager(private val mem0Client: Mem0Client) {
+    suspend fun addConversation(messages: List<Message>, userId: String)
+    suspend fun getRelevantMemories(query: String, userId: String): List<Memory>
+    suspend fun clearMemories(userId: String)
+}
+```
+
+**Mem0 服务配置**:
+- 可执行文件：`mem0-server.exe` (约 50MB)
+- 默认端口：8000
+- LLM: LM Studio (qwen3.5-9b-uncensored-hauhaucs-aggressive)
+- Embedding: LM Studio (nomic-embed-text-v1.5, 768 维)
+- 向量存储：FAISS (本地文件持久化)
+- 配置文件：`.env` (LM Studio 地址、模型名称等)
+
+**启动方式**:
+```bash
+# 随项目启动时自动运行
+./mem0-server/mem0-server.exe
+```
+
+#### 3.7 LM Studio 集成
 **设计要点**:
 - 自动发现：检测本地运行的 LM Studio 服务
 - 模型管理：获取和切换可用模型
@@ -200,6 +265,13 @@ class LMStudioClient(baseUrl: String = "http://localhost:1234/v1") {
 ### 服务端
 - **框架**: Ktor Server (Netty/CIO)
 - **平台**: Kotlin Native (推荐) 或 JVM
+
+### 记忆管理
+- **Mem0**: Mem0 1.0.5 (AI 记忆管理框架)
+- **向量存储**: FAISS (Facebook AI 相似性搜索)
+- **部署方式**: PyInstaller 打包的独立可执行文件
+- **LLM**: LM Studio (通过 REST API)
+- **Embedding**: LM Studio (nomic-embed-text-v1.5)
 
 ### 数据库 (可选)
 - **跨平台**: SQLDelight (推荐)
@@ -285,6 +357,12 @@ project-root/
 - [ ] 命令行执行器
 - [ ] LM Studio 集成
 - [ ] 多模态会话处理
+- [ ] **Mem0 记忆管理集成**
+  - [ ] 实现 Mem0 REST API 客户端
+  - [ ] 创建记忆数据模型
+  - [ ] 实现记忆管理器
+  - [ ] 集成 Mem0 服务启动
+  - [ ] 测试记忆创建/获取/搜索功能
 
 ### 阶段 3: 浏览器控制 (2-3 周)
 - [ ] Node.js Playwright 集成
@@ -341,7 +419,9 @@ project-root/
 
 ## 参考文档
 - [可行性测试报告](../test-available/index.md)
+- [Mem0 集成验证报告](../test-available/mem0-integration/verification-report.md)
 - [nanobot 分析](../references/nanobot/nanobot-analysis.md)
 - [openclaw 设计模式](../references/openclaw/docs/patterns/INDEX.md)
 - [Ktor 集成指南](../references/ktor/ktor-integration.md)
 - [LM Studio API](../references/lm-studio/lm-studio-rest-api.md)
+- [Mem0 官方文档](https://docs.mem0.ai)
