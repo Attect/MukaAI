@@ -1,0 +1,3 @@
+[submodule "references/cdp-protocol"]
+	path = references/cdp-protocol
+	url = https://github.com/ChromeDevTools/devtools-protocol.git

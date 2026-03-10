@@ -20,6 +20,7 @@
 - 除Android App的模块实现外，避免在项目中使用Android的库。
 - 除iOS App的模块实现外，避免在项目中使用iOS的库。
 - 除在Web的模块实现外，避免在项目中使用Web的库。
+- 网络请求应尽允许使用ktor client，不允许使用java等其他简化实现和库。
 - 使用Ktor作为项目的网络框架，以满足跨平台和native的要求，不低于3.4.1版本。
 
 ## 项目构建管理
@@ -43,3 +44,8 @@
 - 建议使用Kotlin的序列化库，如Kotlinx.serialization，进行数据的序列化和反序列化。
 - 避免在项目中使用自定义的序列化库，如Jackson、Gson等，因为使用自定义的序列化库会增加项目的复杂性和安全风险。
 - 设计RPC接口，使用Ktor的RPC功能，进行服务端和客户端的通信。
+
+## 禁止使用
+- HttpURLConnection
+- OkHttp
+- JavaWebSocket

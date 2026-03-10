@@ -60,13 +60,42 @@
   - 支持超时控制和输出捕获
   - 需要安全限制防止恶意命令
 
-### 05. 浏览器控制能力 (Playwright)
-- **技术栈**: Node.js Playwright, 进程调用
-- **验证结果**: 技术可行，需外部依赖
+### 05. 浏览器控制能力 (CDP 完整实现)
+- **技术栈**: CDP (Chrome DevTools Protocol) 1.3, Ktor WebSocket 3.4.1+, Kotlinx Serialization 1.8.0+
+- **验证结果**: 完全可行 (2026-03-10 更新)
+- **测试状态**: ✅ 通过验证 (真实浏览器控制，中文编码正确处理，智能浏览器检测，文件下载功能)
 - **关键发现**:
-  - 需要 Node.js 和 Playwright 环境
-  - 通过进程调用方式可实现浏览器控制
-  - 替代方案：Selenium WebDriver 或 CDP
+  - 完整实现 CDP 客户端 (630 行 Kotlin 代码)
+  - 支持 HTTP 端点调用和 WebSocket 实时通信
+  - 实现 7 个核心 Domain: Target, Page, Runtime, DOM, Input, Network, **Browser**
+  - 完整的中文编码处理 (转义字符、UTF-8)
+  - 使用独立用户数据目录，避免污染原用户数据
+  - 浏览器启动配置优化 (`--accept-lang=zh-CN`)
+  - 智能浏览器检测 (自动检测 Edge 和 Chrome，按优先级)
+  - 详细的调试输出，便于问题定位
+  - 性能优秀：连接建立~8 秒，命令响应<100ms，浏览器检测<1 秒
+  - **支持文件下载，可指定下载路径，保留浏览器认证信息**
+  - **支持下载进度监控和文件验证**
+- **实现方案**:
+  1. **CDP 客户端架构**: 双模式通信 (HTTP + WebSocket)
+  2. **HTTP 端点**: `/json/version`, `/json/list`, `/json/new`, `/json/close`
+  3. **WebSocket 连接**: `ws://localhost:9222/devtools/page/:pageId`
+  4. **核心功能**: 导航、截图、JS 执行、DOM 操作、元素交互、**文件下载**
+  5. **浏览器检测**: 智能检测 Edge 和 Chrome，支持多个安装路径
+  6. **下载功能**: 使用 `Browser.setDownloadBehavior` 指定下载路径，保留认证信息
+- **测试验证** (2026-03-10):
+  - ✅ 成功检测并使用 Edge 浏览器 (`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`)
+  - ✅ 找到多个标签页 (包括扩展页面)
+  - ✅ 中文内容正确显示 (页面标题：百度一下，你就知道)
+  - ✅ 截图生成成功 (26697 字节)
+  - ✅ 元素交互成功 (按钮点击)
+  - ✅ DOM 操作成功 (Body 标签获取)
+  - ✅ **文件下载成功 (百度 Logo，7877 字节，PNG 格式验证通过)**
+  - ✅ **下载路径指定成功 (downloads 目录)**
+  - ✅ **文件验证成功 (PNG 文件头验证)**
+- **文档**:
+  - [README.md](05-browser-control/README.md) - 完整测试文档 (已更新浏览器检测和下载功能)
+  - [README-alternative.md](05-browser-control/README-alternative.md) - 备选方案说明
 
 ### 06. LM Studio 模型自动发现
 - **技术栈**: Ktor Client, OpenAI 兼容 API

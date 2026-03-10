@@ -1,37 +1,15 @@
 [versions]
 kotlin = "2.3.10"
-coroutines = "1.9.0"
-serialization = "1.7.3"
+kotlinx-coroutines = "1.10.1"
+kotlinx-serialization = "1.8.0"
 ktor = "3.4.1"
-kotlinCrypto = "0.4.0"
-datetime = "0.6.0"
-io = "0.5.0"
-bignum = "0.3.10"
 
 [libraries]
-# Kotlinx 库
-kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
-kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
-kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
-kotlinx-serialization-core = { module = "org.jetbrains.kotlinx:kotlinx-serialization-core", version.ref = "serialization" }
-kotlinx-serialization-protobuf = { module = "org.jetbrains.kotlinx:kotlinx-serialization-protobuf", version.ref = "serialization" }
-kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "datetime" }
-kotlinx-io-core = { module = "org.jetbrains.kotlinx:kotlinx-io-core", version.ref = "io" }
-
-# Ktor 库
-ktor-network = { module = "io.ktor:ktor-network", version.ref = "ktor" }
-ktor-network-tls = { module = "io.ktor:ktor-network-tls", version.ref = "ktor" }
-ktor-io = { module = "io.ktor:ktor-io", version.ref = "ktor" }
-ktor-utils = { module = "io.ktor:ktor-utils", version.ref = "ktor" }
-
-# 加密库
-bignum = { module = "com.ionspin.kotlin:bignum", version.ref = "bignum" }
-kotlincrypto-sha2 = { module = "org.kotlincrypto.hash:sha2", version.ref = "kotlinCrypto" }
-kotlincrypto-sha3 = { module = "org.kotlincrypto.hash:sha3", version.ref = "kotlinCrypto" }
-kotlincrypto-hmac = { module = "org.kotlincrypto.hash:hmac", version.ref = "kotlinCrypto" }
-kotlincrypto-random = { module = "org.kotlincrypto.random:crypto-rand", version.ref = "kotlinCrypto" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
+ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
+ktor-client-cio = { module = "io.ktor:ktor-client-cio", version.ref = "ktor" }
+ktor-client-websockets = { module = "io.ktor:ktor-client-websockets", version.ref = "ktor" }
 
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
-kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
-kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
