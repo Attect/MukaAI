@@ -1,427 +1,4849 @@
-# 基于用户口述的软件设计需求
+# AI 角色和会话系统 - 设计需求
 
-## 文档信息
-- 创建日期：2026-03-09
-- 更新日期：2026-03-10
-- 状态：可行性验证完成，等待项目启动
-- 来源：`docs/user_say.md`
-- 更新内容：添加 Mem0 AI 记忆管理集成设计
+> 基于用户口述需求整理  
+> 创建时间：2026-03-10  
+> 状态：设计完成，待进行可行性测试
 
-## 项目概述
+## 需求来源
 
-### 项目名称 (暂定)
-**Kotlin AI Assistant (KAA)** - Kotlin 多平台 AI 助手
+详见 [`docs/user_say.md`](../user_say.md#2026-03-10-ai-角色和会话系统详细需求)
 
-### 项目定位
-一个基于 Kotlin Multiplatform 的个人 AI 助手系统，参考 nanobot 和 openclaw 的设计理念，提供多工作区管理、可扩展技能系统、多模态交互能力。
+## 需求概述
 
-## 核心架构设计
+### 核心架构
 
-### 1. 技术架构
+系统采用多 AI 角色架构，每个角色具有独立的工作区、记忆、配置和模型选择。支持用户与单个 AI 角色的一对一会话，以及多个 AI 角色参与的群聊会话。
+
+### 关键技术决策
+
+1. **后端技术栈**: Kotlin/JVM（利用 JVM 生态系统的成熟库）
+2. **网络框架**: Ktor（支持 JVM，异步非阻塞）
+3. **异步处理**: Kotlin 协程
+4. **记忆系统**: mem0（独立进程，REST API 调用）
+5. **数据存储**: 统一使用 mem0 存储所有数据（会话历史、记忆、配置等）
+6. **限流算法**: 令牌桶算法（替代疲劳值系统）
+
+## 详细设计
+
+### 1. AI 角色工作区设计
+
+#### 1.1 文件系统结构
+
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    客户端层 (KMP)                        │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐   │
-│  │ Desktop  │ │ Android  │ │   iOS    │ │Web (WASM)│   │
-│  │Compose MP│ │Compose MP│ │Swift UI  │ │Compose JS│   │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────┘   │
-└─────────────────────────────────────────────────────────┘
-                        ↓ Ktor Client
-┌─────────────────────────────────────────────────────────┐
-│                   服务端层 (Kotlin Native)                │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │              Ktor Server Core                     │   │
-│  └──────────────────────────────────────────────────┘   │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐   │
-│  │Workspace │ │  Skill   │ │  Session │ │  Browser │   │
-│  │ Manager  │ │  System  │ │ Manager  │ │ Controller│   │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────┘   │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐   │
-│  │  Shell   │ │  LM      │ │  Media   │ │  File    │   │
-│  │ Executor │ │  Studio  │ │ Processor│ │  System  │   │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────┘   │
-│  ┌──────────┐                                            │
-│  │  Mem0    │                                            │
-│  │  Client  │                                            │
-│  └──────────┘                                            │
-└─────────────────────────────────────────────────────────┘
-                        ↓
-┌─────────────────────────────────────────────────────────┐
-│                    外部服务层                            │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐   │
-│  │LM Studio │ │  Web     │ │  System  │ │  Node.js │   │
-│  │   API    │ │ Browser  │ │  Shell   │ │Playwright│   │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────┘   │
-│  ┌──────────┐                                            │
-│  │  Mem0    │                                            │
-│  │  Server  │                                            │
-│  │ (独立进程) │                                            │
-│  └──────────┘                                            │
-└─────────────────────────────────────────────────────────┘
+workspaces/
+└── {ai_role_id}/
+    ├── config/
+    │   ├── profile.json          # 角色配置（名称、描述、头像等）
+    │   ├── system_prompt.md      # 系统提示词
+    │   ├── behavior_rules.md     # 行为准则和约束
+    │   └── model_config.json     # 模型配置（model_id、参数等）
+    ├── skills/
+    │   ├── whitelist.json        # 技能白名单
+    │   ├── blacklist.json        # 技能黑名单
+    │   ├── installed/            # 已安装技能
+    │   │   ├── skill_1/
+    │   │   ├── skill_2/
+    │   │   └── ...
+    │   └── custom/               # 角色自定义技能
+    │       ├── custom_skill_1/
+    │       │   ├── manifest.json
+    │       │   ├── main.py
+    │       │   └── versions/
+    │       └── ...
+    ├── tools/                    # 工具配置和状态
+    │   ├── browser/              # 浏览器数据
+    │   │   └── user_data/        # 独立的浏览器用户数据
+    │   ├── python_venv/          # Python虚拟环境（技能执行用）
+    │   └── tool_state.json       # 工具状态（CDP端口等）
+    └── token_bucket.json         # 令牌桶状态数据
 ```
 
-### 2. 模块划分
+#### 1.2 会话架构设计
 
-#### 2.1 共享模块 (shared)
-- **数据模型**: 所有平台共享的数据类
-- **业务逻辑**: 核心业务逻辑抽象
-- **接口定义**: 平台特定实现的接口
+**会话类型**
 
-#### 2.2 服务端模块 (server)
-- **Ktor 服务端**: HTTP/WebSocket服务
-- **工作区管理**: 多工作区支持
-- **技能系统**: Skill 加载和执行
-- **会话管理**: 多模态会话处理
-- **AI 集成**: LM Studio 和其他 LLM 提供商
+系统采用固定会话架构：
 
-#### 2.3 客户端模块
-- **desktop**: 桌面客户端 (Compose Desktop)
-- **android**: Android 客户端 (Compose Android)
-- **ios**: iOS 客户端 (SwiftUI + KMP)
-- **web**: Web 客户端 (Compose Web/WASM)
+1. **一对一会话**：每个 AI 角色创建后，自动与用户建立一个永久会话
+2. **群聊会话**：所有 AI 角色默认加入群聊会话
 
-### 3. 核心功能模块
+**会话规则**
 
-#### 3.1 多工作区管理
-**设计要点**:
-- 工作区隔离：每个工作区有独立的文件系统访问范围
-- 配置独立：每个工作区有自己的配置文件和技能列表
-- 快速切换：支持在工作区之间快速切换
-- 安全性：基于白名单的路径访问控制
+- AI 角色创建后，永久存在于系统中
+- 每个 AI 角色与用户拥有且仅拥有一个一对一会话
+- 所有 AI 角色自动加入群聊会话
+- 会话不存在"结束"状态，只有"存在"状态
+- 会话历史统一存储在 mem0 中
 
-**实现方案**:
+#### 1.3 角色配置数据类
+
 ```kotlin
-data class Workspace(
+data class AIRoleConfig(
     val id: String,
-    val name: String,
-    val rootPath: String,
-    val config: WorkspaceConfig,
-    val metadata: Map<String, String>
-)
-
-class WorkspaceManager {
-    fun createWorkspace(name: String, rootPath: String): Workspace
-    fun switchWorkspace(workspaceId: String): Boolean
-    fun isPathAllowed(path: String): Boolean
-}
-```
-
-#### 3.2 Skill 系统
-**设计要点**:
-- SKILL.md 格式：标准化的技能定义文件
-- 动态加载：运行时发现和加载技能
-- 安全执行：沙箱环境执行技能代码
-- 可扩展：支持自定义技能和第三方技能
-
-**实现方案**:
-```kotlin
-data class SkillDefinition(
     val name: String,
     val description: String,
-    val parameters: Map<String, ParameterSpec>,
-    val requiredPermissions: List<String>
-)
-
-interface SkillExecutor {
-    suspend fun execute(parameters: Map<String, String>): SkillResult
-}
-```
-
-#### 3.3 命令行执行
-**设计要点**:
-- 跨平台支持：Windows (PowerShell/CMD), Linux (bash), macOS (zsh)
-- 安全限制：命令白名单、超时控制、资源限制
-- 输出捕获：实时捕获 stdout/stderr
-- 环境变量：支持自定义环境变量
-
-**实现方案**:
-```kotlin
-suspend fun executeCommand(
-    command: List<String>,
-    timeout: Long = 30000,
-    workingDir: String? = null,
-    environment: Map<String, String>? = null
-): CommandResult
-```
-
-#### 3.4 浏览器控制
-**设计要点**:
-- Playwright 集成：通过 Node.js 调用 Playwright
-- 页面自动化：导航、点击、输入、截图
-- 网络拦截：请求/响应拦截和修改
-- 无头模式：支持无头浏览器运行
-
-**实现方案**:
-```kotlin
-interface BrowserController {
-    suspend fun navigate(url: String)
-    suspend fun click(selector: String)
-    suspend fun screenshot(): ByteArray
-    suspend fun executeJavaScript(code: String): Any?
-}
-```
-
-#### 3.5 多模态会话
-**设计要点**:
-- 文本和图片支持：同时处理文本和图片消息
-- Base64 编码：图片数据传输
-- 格式转换：适配不同 LLM 的多模态接口
-- 历史记录：会话历史持久化
-
-**实现方案**:
-```kotlin
-sealed class MessageContent {
-    data class Text(val content: String) : MessageContent()
-    data class Image(val data: ByteArray, val mimeType: String) : MessageContent()
-    data class Multimodal(val text: String, val images: List<Image>) : MessageContent()
-}
-```
-
-#### 3.6 AI 记忆管理 (Mem0)
-**设计要点**:
-- Mem0 集成：使用独立的 Mem0 服务管理 AI 会话记忆
-- 本地部署：Mem0 构建为独立可执行文件，随项目启动
-- REST API 调用：通过 Ktor Client 与 Mem0 服务通信
-- LM Studio 集成：使用 LM Studio 提供 LLM 和 Embedding 服务
-- 记忆持久化：使用 FAISS 向量存储本地持久化记忆
-- 智能提取：自动从对话中提取和存储关键记忆
-- 语义搜索：支持基于语义的记忆搜索和检索
-
-**实现方案**:
-```kotlin
-// Mem0 REST API 客户端
-class Mem0Client(baseUrl: String = "http://localhost:8000") {
-    suspend fun addMemory(messages: List<Message>, userId: String): MemoryResult
-    suspend fun getMemories(userId: String): List<Memory>
-    suspend fun searchMemories(query: String, userId: String): List<Memory>
-    suspend fun deleteMemory(memoryId: String): Boolean
-    suspend fun deleteAllMemories(userId: String): Boolean
-}
-
-// 记忆数据模型
-data class Memory(
-    val id: String,
-    val memory: String,
-    val hash: String,
-    val metadata: Map<String, Any?>?,
+    val avatarPath: String?,
+    val personality: PersonalityType,
+    val modelId: String,
+    val systemPrompt: String,
+    val behaviorRules: List<String>,
+    val skills: SkillConfig = SkillConfig(),
     val createdAt: Instant,
-    val updatedAt: Instant?,
-    val userId: String
+    val updatedAt: Instant
 )
 
-// 记忆管理器
-class MemoryManager(private val mem0Client: Mem0Client) {
-    suspend fun addConversation(messages: List<Message>, userId: String)
-    suspend fun getRelevantMemories(query: String, userId: String): List<Memory>
-    suspend fun clearMemories(userId: String)
+data class SkillConfig(
+    val whitelist: List<String> = emptyList(),
+    val blacklist: List<String> = emptyList(),
+    val installedSkills: List<InstalledSkill> = emptyList()
+)
+
+enum class PersonalityType {
+    FRIENDLY,           // 友好型
+    PROFESSIONAL,       // 专业型
+    CREATIVE,           // 创意型
+    ANALYTICAL,         // 分析型
+    EMPATHETIC,         // 共情型
+    HUMOROUS,           // 幽默型
+    // 更多模板...
 }
 ```
 
-**Mem0 服务配置**:
-- 可执行文件：`mem0-server.exe` (约 50MB)
-- 默认端口：8000
-- LLM: LM Studio (qwen3.5-9b-uncensored-hauhaucs-aggressive)
-- Embedding: LM Studio (nomic-embed-text-v1.5, 768 维)
-- 向量存储：FAISS (本地文件持久化)
-- 配置文件：`.env` (LM Studio 地址、模型名称等)
+#### 1.4 会话数据模型
 
-**启动方式**:
-```bash
-# 随项目启动时自动运行
-./mem0-server/mem0-server.exe
-```
+**会话信息**
 
-#### 3.7 LM Studio 集成
-**设计要点**:
-- 自动发现：检测本地运行的 LM Studio 服务
-- 模型管理：获取和切换可用模型
-- OpenAI 兼容：使用 OpenAI API 格式
-- 备用方案：支持其他 LLM 提供商
-
-**实现方案**:
 ```kotlin
-class LMStudioClient(baseUrl: String = "http://localhost:1234/v1") {
-    suspend fun isAvailable(): Boolean
-    suspend fun getModels(): List<ModelInfo>
-    suspend fun chat(messages: List<Message>): ChatResponse
+/**
+ * 会话信息
+ */
+data class SessionInfo(
+    val id: String,                    // 会话ID
+    val type: SessionType,             // 会话类型
+    val participants: List<String>,    // 参与者角色ID列表
+    val createdAt: Instant,            // 创建时间
+    val updatedAt: Instant             // 最后更新时间
+)
+
+enum class SessionType {
+    ONE_ON_ONE,     // 一对一会话
+    GROUP_CHAT      // 群聊会话
 }
 ```
 
-## 技术栈选型
+**消息模型**
 
-### 核心技术
-- **语言**: Kotlin 2.3.10+
-- **多平台**: Kotlin Multiplatform
-- **网络**: Ktor 3.4.1+
-- **序列化**: Kotlinx Serialization 1.7.3+
-- **协程**: Kotlinx Coroutines 1.9.0+
+```kotlin
+/**
+ * 消息数据类
+ */
+data class Message(
+    val id: String,                    // 消息唯一ID
+    val senderId: String,              // 发送者ID（用户或AI角色ID）
+    val senderType: SenderType,        // 发送者类型
+    val sessionId: String,             // 所属会话ID
+    val content: MessageContent,       // 消息内容
+    val timestamp: Instant,            // 发送时间
+    val status: MessageStatus,         // 消息状态
+    val replyTo: String? = null,       // 回复的消息ID（可选）
+    val mentions: List<String> = emptyList()  // @提及的角色ID列表
+)
 
-### UI 框架
-- **Desktop**: Compose Multiplatform Desktop
-- **Android**: Jetpack Compose
-- **iOS**: SwiftUI (原生) + KMP 共享逻辑
-- **Web**: Compose Multiplatform Web (WASM)
+enum class SenderType {
+    USER,           // 用户
+    AI_ROLE,        // AI角色
+    SYSTEM          // 系统消息
+}
 
-### 服务端
-- **框架**: Ktor Server (Netty/CIO)
-- **平台**: Kotlin Native (推荐) 或 JVM
+/**
+ * 消息内容
+ */
+sealed class MessageContent {
+    data class Text(val text: String) : MessageContent()
+    data class Image(val url: String, val description: String? = null) : MessageContent()
+    data class Link(val url: String, val title: String? = null) : MessageContent()
+    data class File(val fileName: String, val filePath: String, val fileSize: Long) : MessageContent()
+    data class Audio(val url: String, val duration: Int? = null) : MessageContent()
+}
 
-### 记忆管理
-- **Mem0**: Mem0 1.0.5 (AI 记忆管理框架)
-- **向量存储**: FAISS (Facebook AI 相似性搜索)
-- **部署方式**: PyInstaller 打包的独立可执行文件
-- **LLM**: LM Studio (通过 REST API)
-- **Embedding**: LM Studio (nomic-embed-text-v1.5)
-
-### 数据库 (可选)
-- **跨平台**: SQLDelight (推荐)
-- **轻量级**: Kotlinx Serialization JSON 文件
-
-### 日志
-- **多平台**: Kermit (推荐)
-- **服务端**: Ktor 内置日志
-
-## 安全性设计
-
-### 1. 工作区隔离
-- 文件系统访问限制在工作区根目录内
-- 支持配置允许的额外路径
-- 禁止访问系统敏感目录
-
-### 2. 命令执行安全
-- 命令白名单机制
-- 超时和取消控制
-- 资源使用限制
-- 环境变量隔离
-
-### 3. Skill 沙箱
-- 独立的执行环境
-- 权限分级控制
-- 资源使用配额
-- 异常隔离
-
-### 4. 网络安全
-- CORS 配置
-- 认证和授权
-- 请求速率限制
-- SSRF 防护
-
-## 项目结构规划
-
-```
-project-root/
-├── shared/                    # 共享模块
-│   ├── src/
-│   │   ├── commonMain/       # 公共代码
-│   │   ├── jvmMain/          # JVM 特定代码
-│   │   ├── androidMain/      # Android 特定代码
-│   │   ├── iosMain/          # iOS 特定代码
-│   │   └── jsMain/           # Web 特定代码
-│   └── build.gradle.kts
-├── server/                    # 服务端模块
-│   ├── src/
-│   │   └── nativeMain/       # Kotlin Native 代码
-│   └── build.gradle.kts
-├── desktop/                   # 桌面客户端
-│   ├── src/
-│   │   └── jvmMain/          # JVM + Compose Desktop
-│   └── build.gradle.kts
-├── android/                   # Android 客户端
-│   ├── src/
-│   │   └── androidMain/      # Android + Compose
-│   └── build.gradle.kts
-├── ios/                       # iOS 客户端
-│   ├── src/
-│   │   └── iosMain/          # iOS + SwiftUI
-│   └── build.gradle.kts
-├── web/                       # Web 客户端
-│   ├── src/
-│   │   └── jsMain/           # Web + Compose JS/WASM
-│   └── build.gradle.kts
-├── gradle/
-│   └── libs.versions.toml    # 版本目录
-├── settings.gradle.kts        # 项目设置
-└── build.gradle.kts           # 根构建脚本
+enum class MessageStatus {
+    COMPLETE,       // 完整消息
+    PARTIAL         // 未完全生成消息（不可删除）
+}
 ```
 
-## 开发阶段规划
+**会话状态（针对AI角色与用户的会话关系）**
 
-### 阶段 1: 基础架构 (2-3 周)
-- [ ] 项目初始化和 Gradle 配置
-- [ ] 共享模块基础数据模型
-- [ ] Ktor 服务端基础框架
-- [ ] 工作区管理实现
+```kotlin
+/**
+ * AI角色与会话的交互状态
+ * 用于记录AI是否已读消息、是否正在处理等
+ */
+data class SessionInteractionState(
+    val roleId: String,                // AI角色ID
+    val sessionId: String,             // 会话ID
+    val lastReadMessageId: String?,    // 最后已读消息ID
+    val hasUnreadMessages: Boolean,    // 是否有未读消息
+    val isProcessing: Boolean,         // 是否正在处理中（正在生成回应）
+    val processingMessageId: String?,  // 正在处理的消息ID
+    val lastActivityAt: Instant        // 最后活动时间
+)
 
-### 阶段 2: 核心功能 (3-4 周)
-- [ ] Skill 系统实现
-- [ ] 命令行执行器
-- [ ] LM Studio 集成
-- [ ] 多模态会话处理
-- [ ] **Mem0 记忆管理集成**
-  - [ ] 实现 Mem0 REST API 客户端
-  - [ ] 创建记忆数据模型
-  - [ ] 实现记忆管理器
-  - [ ] 集成 Mem0 服务启动
-  - [ ] 测试记忆创建/获取/搜索功能
+/**
+ * 会话状态管理器
+ */
+class SessionStateManager(
+    private val mem0Client: Mem0Client
+) {
+    /**
+     * 标记消息已读
+     */
+    suspend fun markAsRead(roleId: String, sessionId: String, messageId: String) {
+        val state = getState(roleId, sessionId)
+        val newState = state.copy(
+            lastReadMessageId = messageId,
+            hasUnreadMessages = false,
+            lastActivityAt = Instant.now()
+        )
+        saveState(newState)
+    }
+    
+    /**
+     * 开始处理消息
+     */
+    suspend fun startProcessing(roleId: String, sessionId: String, messageId: String) {
+        val state = getState(roleId, sessionId)
+        val newState = state.copy(
+            isProcessing = true,
+            processingMessageId = messageId,
+            lastActivityAt = Instant.now()
+        )
+        saveState(newState)
+    }
+    
+    /**
+     * 结束处理消息
+     */
+    suspend fun finishProcessing(roleId: String, sessionId: String) {
+        val state = getState(roleId, sessionId)
+        val newState = state.copy(
+            isProcessing = false,
+            processingMessageId = null,
+            lastActivityAt = Instant.now()
+        )
+        saveState(newState)
+    }
+    
+    /**
+     * 新消息到达时更新未读状态
+     */
+    suspend fun onNewMessage(sessionId: String, messageId: String) {
+        // 获取该会话的所有参与者
+        val participants = getSessionParticipants(sessionId)
+        
+        participants.forEach { roleId ->
+            val state = getState(roleId, sessionId)
+            if (state.lastReadMessageId != messageId) {
+                saveState(state.copy(hasUnreadMessages = true))
+            }
+        }
+    }
+    
+    private suspend fun getState(roleId: String, sessionId: String): SessionInteractionState {
+        // 从mem0读取状态
+        val memories = mem0Client.searchMemories(
+            userId = "state_$roleId",
+            query = "session_state_$sessionId",
+            limit = 1
+        )
+        
+        return if (memories.isNotEmpty()) {
+            Json.decodeFromString(memories.first().text)
+        } else {
+            SessionInteractionState(
+                roleId = roleId,
+                sessionId = sessionId,
+                lastReadMessageId = null,
+                hasUnreadMessages = false,
+                isProcessing = false,
+                processingMessageId = null,
+                lastActivityAt = Instant.now()
+            )
+        }
+    }
+    
+    private suspend fun saveState(state: SessionInteractionState) {
+        mem0Client.addMemory(
+            userId = "state_${state.roleId}",
+            data = MemoryData(
+                text = Json.encodeToString(state),
+                metadata = mapOf(
+                    "type" to "session_state",
+                    "sessionId" to state.sessionId,
+                    "timestamp" to Instant.now().toString()
+                )
+            )
+        )
+    }
+}
+```
 
-### 阶段 3: 浏览器控制 (2-3 周)
-- [ ] Node.js Playwright 集成
-- [ ] 浏览器控制 API
-- [ ] 网页自动化功能
+### 2. 错误处理和重试机制
 
-### 阶段 4: 客户端开发 (4-6 周)
-- [ ] Desktop 客户端 UI
-- [ ] Android 客户端 UI
-- [ ] iOS 客户端 UI
-- [ ] Web 客户端 UI
+#### 2.1 模型请求失败重试
 
-### 阶段 5: 集成测试 (2-3 周)
-- [ ] 端到端测试
-- [ ] 跨平台兼容性测试
+**网络错误重试策略**
+
+```kotlin
+/**
+ * 模型请求重试管理器
+ */
+class ModelRequestRetryManager {
+    companion object {
+        const val RETRY_INTERVAL_MINUTES = 5L  // 每5分钟重试一次
+        const val MAX_RETRY_DURATION_HOURS = 1L  // 持续一小时
+    }
+    
+    private val retryJobs = ConcurrentHashMap<String, Job>()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    
+    /**
+     * 执行带重试的模型请求
+     * @param requestId 请求唯一标识
+     * @param request 请求执行块
+     */
+    suspend fun <T> executeWithRetry(
+        requestId: String,
+        request: suspend () -> T
+    ): T {
+        val startTime = Instant.now()
+        val maxDuration = Duration.ofHours(MAX_RETRY_DURATION_HOURS)
+        
+        while (Duration.between(startTime, Instant.now()) < maxDuration) {
+            try {
+                return request()
+            } catch (e: NetworkException) {
+                // 网络错误，等待后重试
+                Logger.warn("模型请求网络错误，将在 ${RETRY_INTERVAL_MINUTES} 分钟后重试: ${e.message}")
+                delay(Duration.ofMinutes(RETRY_INTERVAL_MINUTES).toMillis())
+            } catch (e: Exception) {
+                // 其他错误，直接抛出
+                throw e
+            }
+        }
+        
+        throw RetryExhaustedException("模型请求在 ${MAX_RETRY_DURATION_HOURS} 小时内重试耗尽")
+    }
+    
+    /**
+     * 取消指定请求的重试
+     */
+    fun cancelRetry(requestId: String) {
+        retryJobs[requestId]?.cancel()
+        retryJobs.remove(requestId)
+    }
+}
+
+class RetryExhaustedException(message: String) : Exception(message)
+```
+
+#### 2.2 工具调用失败处理
+
+**工具错误重试机制**
+
+```kotlin
+/**
+ * 工具调用重试处理器
+ */
+class ToolCallRetryHandler {
+    /**
+     * 处理工具调用失败
+     * 在会话中重新附加工具错误原因和使用说明后再次请求
+     */
+    suspend fun handleToolFailure(
+        originalRequest: AIRequest,
+        toolError: ToolExecutionError,
+        sessionMessages: MutableList<Message>,
+        requestAI: suspend (AIRequest) -> AIResponse
+    ): AIResponse {
+        // 构建错误提示
+        val errorPrompt = buildString {
+            appendLine("=== 工具调用失败 ===")
+            appendLine("工具: ${toolError.toolName}")
+            appendLine("错误: ${toolError.errorMessage}")
+            appendLine()
+            appendLine("=== 工具使用说明 ===")
+            appendLine(getToolUsageGuide(toolError.toolName))
+            appendLine()
+            appendLine("请根据错误信息和说明重新尝试，或采取其他方式完成任务。")
+        }
+        
+        // 将错误信息添加到会话上下文
+        val errorMessage = Message(
+            id = generateId(),
+            senderId = "system",
+            senderType = SenderType.SYSTEM,
+            sessionId = originalRequest.sessionId,
+            content = MessageContent.Text(errorPrompt),
+            timestamp = Instant.now(),
+            status = MessageStatus.COMPLETE
+        )
+        sessionMessages.add(errorMessage)
+        
+        // 重新构造请求，包含错误上下文
+        val retryRequest = originalRequest.copy(
+            messages = sessionMessages,
+            retryCount = originalRequest.retryCount + 1
+        )
+        
+        // 再次请求
+        return requestAI(retryRequest)
+    }
+    
+    private fun getToolUsageGuide(toolName: String): String {
+        return when (toolName) {
+            "read" -> """
+                read 工具使用说明:
+                - path: 文件路径（相对于工作区）
+                - offset: 起始行号（可选，从1开始）
+                - limit: 读取行数（可选）
+                注意: 只能读取工作区内的文件
+            """.trimIndent()
+            "find" -> """
+                find 工具使用说明:
+                - pattern: 通配符模式，如 "*.kt", "**/*.md"
+                - path: 搜索起始路径（可选，默认为当前目录）
+            """.trimIndent()
+            "edit" -> """
+                edit 工具使用说明:
+                - path: 文件路径
+                - oldString: 原文内容（用于定位，必须唯一匹配）
+                - newString: 新内容（用于替换）
+                注意: oldString 必须在文件中有且仅有一处匹配
+            """.trimIndent()
+            else -> "请参考工具定义获取使用说明"
+        }
+    }
+}
+
+data class ToolExecutionError(
+    val toolName: String,
+    val errorMessage: String,
+    val originalParams: Map<String, JsonElement>
+)
+```
+
+#### 2.3 mem0 不可用处理
+
+**mem0 服务监控和退出机制**
+
+```kotlin
+/**
+ * mem0 服务健康检查器
+ */
+class Mem0HealthChecker(
+    private val mem0Client: Mem0Client,
+    private val checkInterval: Duration = Duration.ofSeconds(30)
+) {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var healthCheckJob: Job? = null
+    
+    /**
+     * 启动健康检查
+     */
+    fun start() {
+        healthCheckJob = scope.launch {
+            while (isActive) {
+                if (!checkHealth()) {
+                    // mem0 不可用，终止程序
+                    Logger.error("mem0 服务不可用，程序即将终止")
+                    shutdownApplication()
+                }
+                delay(checkInterval.toMillis())
+            }
+        }
+    }
+    
+    /**
+     * 检查 mem0 健康状态
+     */
+    private suspend fun checkHealth(): Boolean {
+        return try {
+            // 尝试一个简单的API调用来检查服务状态
+            mem0Client.healthCheck()
+            true
+        } catch (e: Exception) {
+            Logger.error("mem0 健康检查失败: ${e.message}")
+            false
+        }
+    }
+    
+    /**
+     * 终止应用程序
+     */
+    private fun shutdownApplication() {
+        // 终止所有任务
+        Runtime.getRuntime().exit(1)
+    }
+    
+    fun stop() {
+        healthCheckJob?.cancel()
+    }
+}
+
+interface Mem0Client {
+    /**
+     * 健康检查
+     */
+    suspend fun healthCheck(): Boolean
+    
+    /**
+     * 添加记忆
+     */
+    suspend fun addMemory(userId: String, data: MemoryData): Memory
+    
+    /**
+     * 搜索记忆
+     */
+    suspend fun searchMemories(userId: String, query: String, limit: Int = 10): List<Memory>
+    
+    /**
+     * 获取所有记忆
+     */
+    suspend fun getAllMemories(userId: String, limit: Int? = null): List<Memory>
+}
+```
+
+### 3. AI 群聊调度机制
+
+#### 3.1 调度架构
+
+```
+用户消息
+  ↓
+消息分发器
+  ↓
+┌──────────────────────────────────────┐
+│  调度器 AI                            │
+│  - 拥有群聊记忆                       │
+│  - 分析话题，识别相关角色             │
+│  - 处理@提及                          │
+└──────────────────────────────────────┘
+  ↓
+遍历选中的 AI 角色
+  ↓
+┌──────────────────────────────────────┐
+│  角色 A: 是否需要回应？               │
+│  角色 B: 是否需要回应？               │
+│  角色 C: 是否需要回应？               │
+└──────────────────────────────────────┘
+  ↓
+收集回应，按顺序发送
+```
+
+#### 3.2 调度器 AI 设计
+
+**调度器特性**
+
+- 调度器自身**无疲劳值/令牌桶限制**
+- 调度器**拥有群聊记忆**，可以访问群聊历史
+- 调度器根据话题相关性选择角色（曾经发表过相关话题的角色优先）
+- 支持 **@提及机制**：用户或AI角色可以@一个或多个角色触发回应
+
+**实现方式**:
+
+```kotlin
+/**
+ * 调度器上下文
+ */
+data class DispatcherContext(
+    val message: Message,                              // 当前消息
+    val recentMessages: List<Message>,                 // 最近上下文
+    val allAvailableRoles: List<AIRoleConfig>,         // 所有可用角色
+    val mentionedRoles: List<String>,                  // @提及的角色ID
+    val groupChatMemories: List<Memory>                // 群聊相关记忆
+)
+
+/**
+ * 调度结果
+ */
+data class DispatchResult(
+    val selectedRoles: List<String>,                   // 选中的角色ID列表
+    val reason: String                                 // 选择原因
+)
+
+/**
+ * 群聊调度器
+ */
+class GroupChatDispatcher(
+    private val mem0Client: Mem0Client,
+    private val dispatcherRoleConfig: AIRoleConfig,
+    private val aiClient: AIClient
+) {
+    companion object {
+        const val GROUP_CHAT_USER_ID = "group_chat_dispatcher"
+    }
+    
+    /**
+     * 分析消息并选择参与讨论的角色
+     */
+    suspend fun dispatch(context: DispatcherContext): DispatchResult {
+        // 1. 优先处理@提及
+        if (context.mentionedRoles.isNotEmpty()) {
+            return DispatchResult(
+                selectedRoles = context.mentionedRoles,
+                reason = "用户/角色明确@提及"
+            )
+        }
+        
+        // 2. 使用调度器AI分析话题
+        val analysisPrompt = buildAnalysisPrompt(context)
+        val response = aiClient.generate(
+            modelId = dispatcherRoleConfig.modelId,
+            systemPrompt = dispatcherRoleConfig.systemPrompt,
+            userPrompt = analysisPrompt
+        )
+        
+        // 3. 解析AI响应，获取选中的角色
+        val selectedRoles = parseSelectedRoles(response.text)
+        
+        return DispatchResult(
+            selectedRoles = selectedRoles,
+            reason = "调度器AI分析话题相关性"
+        )
+    }
+    
+    /**
+     * 构建分析提示词
+     */
+    private fun buildAnalysisPrompt(context: DispatcherContext): String {
+        return buildString {
+            appendLine("请分析以下群聊消息，决定哪些AI角色应该参与回应。")
+            appendLine()
+            appendLine("=== 当前消息 ===")
+            appendLine(formatMessage(context.message))
+            appendLine()
+            appendLine("=== 最近上下文 ===")
+            context.recentMessages.takeLast(10).forEach {
+                appendLine(formatMessage(it))
+            }
+            appendLine()
+            appendLine("=== 群聊相关记忆 ===")
+            context.groupChatMemories.take(5).forEach {
+                appendLine("- ${it.text}")
+            }
+            appendLine()
+            appendLine("=== 可用角色 ===")
+            context.allAvailableRoles.forEach { role ->
+                appendLine("- ${role.id}: ${role.name} - ${role.description}")
+            }
+            appendLine()
+            appendLine("=== 任务 ===")
+            appendLine("1. 分析消息话题")
+            appendLine("2. 根据话题相关性选择应该回应的角色（曾经讨论过相关话题的角色优先）")
+            appendLine("3. 返回选中的角色ID列表，格式: [\"role_id_1\", \"role_id_2\"]")
+            appendLine("4. 如果没有角色适合回应，返回空列表 []")
+        }
+    }
+    
+    private fun formatMessage(message: Message): String {
+        val sender = when (message.senderType) {
+            SenderType.USER -> "用户"
+            SenderType.AI_ROLE -> message.senderId
+            SenderType.SYSTEM -> "系统"
+        }
+        return "[$sender]: ${message.content}"
+    }
+    
+    private fun parseSelectedRoles(response: String): List<String> {
+        // 从AI响应中解析角色ID列表
+        val regex = Regex("\\[([^\\]]*)\\]")
+        val match = regex.find(response)
+        return match?.groupValues?.get(1)
+            ?.split(",")
+            ?.map { it.trim().trim('"', '\'') }
+            ?.filter { it.isNotEmpty() }
+            ?: emptyList()
+    }
+    
+    /**
+     * 获取群聊记忆
+     */
+    suspend fun getGroupChatMemories(query: String, limit: Int = 10): List<Memory> {
+        return mem0Client.searchMemories(
+            userId = GROUP_CHAT_USER_ID,
+            query = query,
+            limit = limit
+        )
+    }
+    
+    /**
+     * 存储群聊记忆
+     */
+    suspend fun storeGroupChatMemory(content: String, metadata: Map<String, String> = emptyMap()) {
+        mem0Client.addMemory(
+            userId = GROUP_CHAT_USER_ID,
+            data = MemoryData(
+                text = content,
+                metadata = metadata + mapOf("type" to "group_chat", "timestamp" to Instant.now().toString())
+            )
+        )
+    }
+}
+
+/**
+ * @提及解析器
+ */
+object MentionParser {
+    private val mentionRegex = Regex("@([a-zA-Z0-9_]+)")
+    
+    /**
+     * 解析消息中的@提及
+     * @param content 消息内容
+     * @param availableRoles 所有可用角色ID列表
+     * @return 被提及的角色ID列表
+     */
+    fun parse(content: String, availableRoles: List<String>): List<String> {
+        val mentions = mentionRegex.findAll(content).map { it.groupValues[1] }.toList()
+        return mentions.filter { it in availableRoles }
+    }
+}
+```
+
+#### 3.3 令牌桶限流配置
+
+```hocon
+groupChat {
+    # 调度器配置
+    dispatcher {
+        enabled = true
+        dispatcherRoleId = "dispatcher_001"
+    }
+    
+    # 令牌桶限流配置
+    tokenBucket {
+        # 全局令牌桶（限制整个群聊的响应频率）
+        global {
+            capacity = 10           # 桶容量（最大令牌数）
+            refillRate = 2          # 每秒补充令牌数
+        }
+        
+        # 角色级别令牌桶
+        perRole {
+            capacity = 5            # 每个角色的桶容量
+            refillRate = 0.5        # 每秒补充令牌数（每2秒1个）
+        }
+    }
+}
+```
+```
+
+### 4. 令牌桶限流系统
+
+#### 4.1 令牌桶算法实现
+
+```kotlin
+/**
+ * 令牌桶状态
+ */
+data class TokenBucketState(
+    val roleId: String,                  // 角色ID
+    var tokens: Double,                  // 当前令牌数
+    val capacity: Double,                // 桶容量（最大令牌数）
+    val refillRate: Double,              // 每秒补充令牌数
+    var lastRefillTime: Instant          // 最后补充时间
+)
+
+/**
+ * 令牌桶限流器
+ */
+class TokenBucketRateLimiter(
+    private val statePath: Path
+) {
+    private val buckets = ConcurrentHashMap<String, TokenBucketState>()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    
+    /**
+     * 初始化角色令牌桶
+     * @param roleId 角色ID
+     * @param capacity 桶容量
+     * @param refillRate 每秒补充令牌数
+     */
+    suspend fun initBucket(
+        roleId: String,
+        capacity: Double,
+        refillRate: Double
+    ) {
+        val state = loadState(roleId)
+        val bucket = if (state != null) {
+            // 恢复已有状态，但更新配置
+            state.copy(capacity = capacity, refillRate = refillRate)
+        } else {
+            TokenBucketState(
+                roleId = roleId,
+                tokens = capacity,  // 初始满桶
+                capacity = capacity,
+                refillRate = refillRate,
+                lastRefillTime = Instant.now()
+            )
+        }
+        buckets[roleId] = bucket
+        saveState(bucket)
+    }
+    
+    /**
+     * 尝试消费令牌
+     * @param roleId 角色ID
+     * @param tokens 需要消费的令牌数（默认为1）
+     * @return 是否消费成功
+     */
+    suspend fun tryConsume(roleId: String, tokens: Double = 1.0): Boolean {
+        val bucket = buckets[roleId] ?: return false
+        
+        // 先补充令牌
+        refill(bucket)
+        
+        return if (bucket.tokens >= tokens) {
+            bucket.tokens -= tokens
+            saveState(bucket)
+            true
+        } else {
+            false
+        }
+    }
+    
+    /**
+     * 获取当前令牌数
+     */
+    fun getAvailableTokens(roleId: String): Double {
+        val bucket = buckets[roleId] ?: return 0.0
+        refill(bucket)
+        return bucket.tokens
+    }
+    
+    /**
+     * 补充令牌
+     */
+    private fun refill(bucket: TokenBucketState) {
+        val now = Instant.now()
+        val elapsedSeconds = Duration.between(bucket.lastRefillTime, now).toMillis() / 1000.0
+        
+        if (elapsedSeconds > 0) {
+            val tokensToAdd = elapsedSeconds * bucket.refillRate
+            bucket.tokens = minOf(bucket.capacity, bucket.tokens + tokensToAdd)
+            bucket.lastRefillTime = now
+        }
+    }
+    
+    /**
+     * 从文件加载状态
+     */
+    private suspend fun loadState(roleId: String): TokenBucketState? {
+        return withContext(Dispatchers.IO) {
+            val file = statePath.resolve("$roleId.json")
+            if (Files.exists(file)) {
+                try {
+                    val json = Files.readString(file)
+                    Json.decodeFromString<TokenBucketState>(json)
+                } catch (e: Exception) {
+                    null
+                }
+            } else {
+                null
+            }
+        }
+    }
+    
+    /**
+     * 保存状态到文件
+     */
+    private suspend fun saveState(state: TokenBucketState) {
+        withContext(Dispatchers.IO) {
+            Files.createDirectories(statePath)
+            val file = statePath.resolve("${state.roleId}.json")
+            Files.writeString(file, Json.encodeToString(state))
+        }
+    }
+    
+    /**
+     * 定期持久化所有桶状态
+     */
+    fun startPersistenceJob(interval: Duration = Duration.ofMinutes(1)) {
+        scope.launch {
+            while (isActive) {
+                delay(interval.toMillis())
+                buckets.values.forEach { saveState(it) }
+            }
+        }
+    }
+}
+```
+
+#### 4.2 令牌桶配置和提示词注入
+
+```kotlin
+/**
+ * 构建包含令牌桶状态的系统提示词
+ */
+fun buildSystemPromptWithTokenBucket(
+    basePrompt: String,
+    availableTokens: Double,
+    capacity: Double
+): String {
+    val tokenRatio = availableTokens / capacity
+    
+    val availabilityInstruction = when {
+        tokenRatio > 0.7 -> 
+            "你当前精力充沛，可以积极回应。"
+        tokenRatio > 0.3 -> 
+            "你当前状态正常，可以适度回应。"
+        tokenRatio > 0.1 -> 
+            "你当前有些疲劳，建议减少回应频率。"
+        else -> 
+            "你当前非常疲劳，建议简短回应或等待恢复。"
+    }
+    
+    return """
+        $basePrompt
+        
+        === 当前状态 ===
+        可用响应额度：${availableTokens.toInt()}/${capacity.toInt()}
+        $availabilityInstruction
+    """.trimIndent()
+}
+
+/**
+ * 构建工具使用约束提示词
+ * 告知AI角色工具使用的安全约束
+ */
+fun buildToolConstraintsPrompt(): String {
+    return """
+        === 工具使用约束 ===
+        
+        你拥有以下基础工具能力：
+        1. read - 读取工作区内的文件内容
+        2. find - 在工作区内查找文件
+        3. edit - 修改工作区内的文件内容
+        4. delete - 删除工作区内的文件或目录（软删除到回收站）
+        5. browser - 浏览器控制工具（导航、获取内容、执行脚本、截图等）
+        6. skill - 创建和管理自定义Python技能
+        7. memory - 从mem0检索你的记忆
+        8. selfAware - 查看和修改你的认知和行为准则
+        
+        重要约束：
+        - 所有文件操作仅限于你的工作区内，禁止访问工作区外的文件系统
+        - 浏览器工具仅用于合法的信息获取和自动化操作，禁止用于恶意攻击
+        - Python技能创建约束：
+          * 禁止执行越界行为（如访问系统文件、网络攻击等）
+          * 技能应专注于完成特定任务
+          * 禁止在技能中执行有害操作或恶意代码
+          * 技能代码将在独立进程中执行，但请自觉遵守安全规范
+        - 记忆查找仅用于获取与你相关的上下文信息
+        - 自我认知修改仅限于可配置属性（name, description, personality, behaviorRules, systemPrompt）
+          核心属性（id, createdAt）不可修改
+        
+        请负责任地使用这些工具，专注于帮助用户完成任务。
+    """.trimIndent()
+}
+```
+
+### 5. 实时打断功能
+
+#### 5.1 打断架构
+
+```kotlin
+class AIExecutionContext(
+    private val roleId: String,
+    private val sessionId: String
+) {
+    // 协程 Job，用于取消模型请求
+    private var currentJob: Job? = null
+    
+    // 正在执行的工具调用
+    private val runningTools = ConcurrentHashMap<String, ToolExecution>()
+    
+    // 子进程管理（用于 shell 命令等）
+    private val childProcesses = ConcurrentHashMap<String, Process>()
+    
+    // 中断信号通道
+    private val interruptionChannel = Channel<Unit>(Channel.CONFLATED)
+    
+    /**
+     * 中断所有执行
+     */
+    suspend fun interruptAll() {
+        Logger.info("中断AI角色[$roleId]在会话[$sessionId]中的所有执行")
+        
+        // 1. 发送中断信号
+        interruptionChannel.trySend(Unit)
+        
+        // 2. 取消模型请求
+        currentJob?.cancel()
+        currentJob = null
+        
+        // 3. 中断工具调用
+        runningTools.values.forEach { it.cancel() }
+        runningTools.clear()
+        
+        // 4. 终止子进程
+        childProcesses.values.forEach { process ->
+            try {
+                process.destroyForcibly()
+            } catch (e: Exception) {
+                Logger.warn("终止子进程失败: ${e.message}")
+            }
+        }
+        childProcesses.clear()
+    }
+    
+    /**
+     * 执行模型请求（可中断）
+     */
+    suspend fun executeModelRequest(
+        request: AIRequest,
+        block: suspend () -> AIResponse
+    ): AIResponse {
+        return coroutineScope {
+            val job = launch {
+                try {
+                    block()
+                } catch (e: CancellationException) {
+                    // 被中断，清理部分回复
+                    cleanupPartialResponse()
+                    throw e
+                }
+            }
+            
+            currentJob = job
+            
+            // 监听中断信号
+            val interruptionListener = launch {
+                interruptionChannel.receive()
+                job.cancel()
+            }
+            
+            try {
+                job.join()
+                job.getCompletionOrNull() ?: throw CancellationException()
+            } finally {
+                currentJob = null
+                interruptionListener.cancel()
+            }
+        }
+    }
+    
+    /**
+     * 注册工具执行
+     */
+    fun registerToolExecution(toolId: String, execution: ToolExecution) {
+        runningTools[toolId] = execution
+    }
+    
+    /**
+     * 注册子进程
+     */
+    fun registerChildProcess(processId: String, process: Process) {
+        childProcesses[processId] = process
+    }
+    
+    /**
+     * 清理部分回复
+     */
+    private suspend fun cleanupPartialResponse() {
+        // 通知会话管理器清理该角色的部分回复
+        SessionManager.markPartialMessagesAsInterrupted(roleId, sessionId)
+    }
+}
+
+/**
+ * 工具执行接口
+ */
+interface ToolExecution {
+    fun cancel()
+    suspend fun execute(): Any
+}
+```
+```
+
+#### 4.2 消息撤回机制
+
+```kotlin
+interface MessageManager {
+    /**
+     * 撤回消息
+     */
+    suspend fun recallMessage(messageId: String): Boolean
+    
+    /**
+     * 撤回 AI 的所有部分回复
+     */
+    suspend fun recallPartialResponses(roleId: String, sessionId: String): List<String>
+}
+
+class MessageManagerImpl(
+    private val sessionStorage: SessionStorage
+) : MessageManager {
+    override suspend fun recallMessage(messageId: String): Boolean {
+        return sessionStorage.markAsRecalled(messageId)
+    }
+    
+    override suspend fun recallPartialResponses(
+        roleId: String, 
+        sessionId: String
+    ): List<String> {
+        val session = sessionStorage.getSession(sessionId)
+        val partialMessages = session.messages
+            .filter { it.roleId == roleId && it.status == MessageStatus.PARTIAL }
+        
+        partialMessages.forEach { 
+            sessionStorage.markAsRecalled(it.id)
+        }
+        
+        return partialMessages.map { it.id }
+    }
+}
+```
+
+#### 4.3 打断事件总线
+
+```kotlin
+class InterruptionEventBus {
+    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private val channel = Channel<InterruptionEvent>(Channel.BUFFERED)
+    
+    // 用户消息触发打断
+    suspend fun onUserMessage(userId: String, sessionId: String) {
+        channel.send(InterruptionEvent.UserMessage(userId, sessionId))
+    }
+    
+    // AI 监听打断事件
+    fun subscribe(roleId: String): Flow<InterruptionEvent> {
+        return channel.consumeAsFlow()
+            .filter { it.shouldInterrupt(roleId) }
+    }
+}
+
+sealed class InterruptionEvent {
+    data class UserMessage(val userId: String, val sessionId: String) : InterruptionEvent()
+    
+    fun shouldInterrupt(roleId: String): Boolean {
+        return this is UserMessage  // 只有用户消息能打断 AI
+    }
+}
+```
+
+### 5. 技能黑白名单系统
+
+#### 5.1 技能管理架构
+
+```kotlin
+data class InstalledSkill(
+    val id: String,
+    val name: String,
+    val version: String,
+    val path: Path,
+    val manifest: SkillManifest,
+    val installedAt: Instant
+)
+
+data class SkillManifest(
+    val id: String,
+    val name: String,
+    val description: String,
+    val version: String,
+    val requiredPermissions: List<Permission>,
+    val entryPoint: String  // 入口函数或脚本
+)
+
+class SkillManager(private val roleWorkspace: Path) {
+    private val skillsPath = roleWorkspace.resolve("skills/installed")
+    private val whitelistPath = roleWorkspace.resolve("skills/whitelist.json")
+    private val blacklistPath = roleWorkspace.resolve("skills/blacklist.json")
+    
+    /**
+     * 检查技能是否可用
+     */
+    suspend fun isSkillAvailable(skillId: String): Boolean {
+        val whitelist = loadWhitelist()
+        val blacklist = loadBlacklist()
+        
+        // 白名单优先
+        if (whitelist.isNotEmpty()) {
+            return skillId in whitelist
+        }
+        
+        // 没有白名单时，检查黑名单
+        return skillId !in blacklist
+    }
+    
+    /**
+     * 获取可用的技能列表
+     */
+    suspend fun getAvailableSkills(): List<InstalledSkill> {
+        val allSkills = listInstalledSkills()
+        return allSkills.filter { isSkillAvailable(it.id) }
+    }
+    
+    /**
+     * 安装技能（不检查黑白名单，由使用时检查）
+     */
+    suspend fun installSkill(skillPackage: Path): InstalledSkill {
+        // 解压、验证、安装技能
+        // 不阻止安装，使用时才检查黑白名单
+    }
+}
+```
+
+#### 5.2 技能调用拦截器
+
+```kotlin
+class SkillCallInterceptor(
+    private val skillManager: SkillManager
+) {
+    /**
+     * 拦截技能调用，检查黑白名单
+     */
+    suspend fun intercept(
+        roleId: String,
+        skillId: String,
+        args: Map<String, Any>
+    ): Any? {
+        if (!skillManager.isSkillAvailable(skillId)) {
+            throw SkillUnavailableException(
+                "技能 '$skillId' 不可用（受黑白名单限制）"
+            )
+        }
+        
+        return executeSkill(roleId, skillId, args)
+    }
+}
+
+class SkillUnavailableException(message: String) : Exception(message)
+```
+
+### 6. 模型选择限制
+
+#### 6.1 模型验证器
+
+```kotlin
+data class ModelCapability(
+    val modelId: String,
+    val contextLength: Int,          // 上下文长度（tokens）
+    val supportsMultimodal: Boolean, // 是否支持多模态（图片）
+    val supportsToolCalling: Boolean, // 是否支持工具调用
+    val provider: String             // 提供者（如 LM Studio）
+)
+
+class ModelValidator(private val lmStudioClient: LMStudioClient) {
+    companion object {
+        const val MIN_CONTEXT_LENGTH = 100_000  // 至少 100K
+    }
+    
+    /**
+     * 验证模型是否满足要求
+     */
+    suspend fun validateModel(modelId: String): ModelValidationResult {
+        val capability = lmStudioClient.getModelCapability(modelId)
+        
+        val errors = mutableListOf<String>()
+        
+        if (capability.contextLength < MIN_CONTEXT_LENGTH) {
+            errors.add("上下文长度不足：${capability.contextLength} < $MIN_CONTEXT_LENGTH")
+        }
+        
+        if (!capability.supportsMultimodal) {
+            errors.add("不支持多模态（图片）")
+        }
+        
+        if (!capability.supportsToolCalling) {
+            errors.add("不支持工具调用")
+        }
+        
+        return ModelValidationResult(
+            valid = errors.isEmpty(),
+            capability = capability,
+            errors = errors
+        )
+    }
+    
+    /**
+     * 获取所有可用的模型（过滤不满足要求的）
+     */
+    suspend fun getAvailableModels(): List<ModelCapability> {
+        val allModels = lmStudioClient.listModels()
+        
+        return allModels.mapNotNull { model ->
+            val result = validateModel(model.id)
+            if (result.valid) model else null
+        }
+    }
+}
+
+data class ModelValidationResult(
+    val valid: Boolean,
+    val capability: ModelCapability,
+    val errors: List<String>
+)
+```
+
+#### 6.2 LM Studio API 集成
+
+```kotlin
+interface LMStudioClient {
+    /**
+     * 获取模型列表
+     */
+    suspend fun listModels(): List<ModelInfo>
+    
+    /**
+     * 获取模型能力信息
+     */
+    suspend fun getModelCapability(modelId: String): ModelCapability
+}
+
+class LMStudioClientImpl(
+    private val baseUrl: String,
+    private val httpClient: HttpClient
+) : LMStudioClient {
+    override suspend fun listModels(): List<ModelInfo> {
+        val response = httpClient.get("$baseUrl/api/v1/models")
+        return Json.decodeFromString<ModelsResponse>(response).data
+    }
+    
+    override suspend fun getModelCapability(modelId: String): ModelCapability {
+        // 方案 1: 从模型信息 API 获取
+        val response = httpClient.get("$baseUrl/api/v1/models/$modelId")
+        val modelInfo = Json.decodeFromString<ModelInfoResponse>(response)
+        
+        return ModelCapability(
+            modelId = modelId,
+            contextLength = modelInfo.context_length ?: modelInfo.max_tokens ?: 0,
+            supportsMultimodal = modelInfo.supports_vision ?: false,
+            supportsToolCalling = modelInfo.supports_tool_calling ?: false,
+            provider = "LM Studio"
+        )
+    }
+}
+```
+
+### 6. 统一存储系统（基于mem0）
+
+#### 6.1 存储架构设计
+
+系统统一使用 mem0 作为唯一数据存储，包括：
+- 会话历史记录
+- AI角色记忆
+- 群聊共享记忆
+- 会话状态
+- 配置历史
+
+#### 6.2 记忆隔离架构
+
+```kotlin
+class Mem0Integration(
+    private val mem0Client: Mem0Client
+) {
+    /**
+     * 获取 AI 角色的记忆用户 ID（隔离）
+     */
+    fun getRoleUserId(roleId: String): String {
+        return "role_$roleId"
+    }
+    
+    /**
+     * 获取群聊记忆用户 ID（共享）
+     */
+    fun getGroupChatUserId(): String {
+        return "group_chat_shared"
+    }
+    
+    /**
+     * 获取会话存储用户ID
+     */
+    fun getSessionUserId(sessionId: String): String {
+        return "session_$sessionId"
+    }
+    
+    /**
+     * 存储会话消息
+     */
+    suspend fun storeMessage(message: Message) {
+        val userId = getSessionUserId(message.sessionId)
+        mem0Client.addMemory(
+            userId = userId,
+            data = MemoryData(
+                text = Json.encodeToString(message),
+                metadata = mapOf(
+                    "type" to "message",
+                    "messageId" to message.id,
+                    "senderId" to message.senderId,
+                    "timestamp" to message.timestamp.toString()
+                )
+            )
+        )
+    }
+    
+    /**
+     * 获取会话历史
+     */
+    suspend fun getSessionMessages(
+        sessionId: String,
+        limit: Int = 100,
+        before: Instant? = null
+    ): List<Message> {
+        val userId = getSessionUserId(sessionId)
+        val memories = mem0Client.getAllMemories(userId = userId, limit = limit * 2)
+        
+        return memories
+            .filter { it.metadata["type"] == "message" }
+            .sortedBy { it.metadata["timestamp"] }
+            .takeLast(limit)
+            .mapNotNull { memory ->
+                try {
+                    Json.decodeFromString<Message>(memory.text)
+                } catch (e: Exception) {
+                    null
+                }
+            }
+    }
+    
+    /**
+     * 存储会话压缩内容
+     */
+    suspend fun storeCompressionMemory(
+        roleId: String,
+        sessionId: String,
+        summary: String
+    ) {
+        val userId = getRoleUserId(roleId)
+        mem0Client.addMemory(
+            userId = userId,
+            data = MemoryData(
+                text = summary,
+                metadata = mapOf(
+                    "type" to "session_summary",
+                    "sessionId" to sessionId,
+                    "timestamp" to Instant.now().toString()
+                )
+            )
+        )
+    }
+    
+    /**
+     * 检索相关记忆
+     */
+    suspend fun searchMemories(
+        roleId: String,
+        query: String,
+        limit: Int = 10
+    ): List<Memory> {
+        val userId = getRoleUserId(roleId)
+        return mem0Client.searchMemories(userId = userId, query = query, limit = limit)
+    }
+    
+    /**
+     * 检索群聊记忆
+     */
+    suspend fun searchGroupChatMemories(
+        query: String,
+        limit: Int = 10
+    ): List<Memory> {
+        val userId = getGroupChatUserId()
+        return mem0Client.searchMemories(userId = userId, query = query, limit = limit)
+    }
+}
+```
+
+#### 7.2 记忆注入上下文
+
+```kotlin
+class MemoryContextInjector(
+    private val mem0Integration: Mem0Integration
+) {
+    /**
+     * 在对话前注入相关记忆
+     */
+    suspend fun injectMemories(
+        roleId: String,
+        currentMessage: String,
+        context: List<Message>
+    ): String {
+        // 检索相关记忆
+        val memories = mem0Integration.searchMemories(
+            roleId = roleId,
+            query = currentMessage,
+            limit = 5
+        )
+        
+        if (memories.isEmpty()) {
+            return ""  // 没有记忆，不注入
+        }
+        
+        // 构建记忆上下文
+        val memoryContext = memories.joinToString("\n") { memory ->
+            "[记忆] ${memory.text} (时间：${memory.timestamp})"
+        }
+        
+        return """
+            
+            === 相关记忆 ===
+            $memoryContext
+            """.trimIndent()
+    }
+}
+```
+
+#### 6.3 会话压缩触发
+
+**配置化压缩提示词**
+
+```kotlin
+/**
+ * 会话压缩配置
+ */
+data class SessionCompressionConfig(
+    val enabled: Boolean = true,
+    val thresholdPercent: Double = 0.7,      // 达到模型最大token的70%时触发
+    val retainPercent: Double = 0.3,          // 保留最近30%的消息
+    val promptConfigPath: Path                // 压缩提示词配置文件路径
+)
+
+/**
+ * 压缩提示词配置
+ */
+data class CompressionPromptConfig(
+    val systemPrompt: String,                  // 系统提示词
+    val userPromptTemplate: String,            // 用户提示词模板
+    val maxSummaryLength: Int = 2000           // 摘要最大长度
+)
+
+/**
+ * 压缩提示词加载器
+ */
+class CompressionPromptLoader(
+    private val configPath: Path
+) {
+    private var currentConfig: CompressionPromptConfig = loadDefaultConfig()
+    
+    /**
+     * 加载提示词配置
+     */
+    fun loadConfig(): CompressionPromptConfig {
+        return try {
+            if (Files.exists(configPath)) {
+                val json = Files.readString(configPath)
+                Json.decodeFromString<CompressionPromptConfig>(json)
+            } else {
+                loadDefaultConfig()
+            }
+        } catch (e: Exception) {
+            Logger.warn("加载压缩提示词配置失败，使用默认配置: ${e.message}")
+            loadDefaultConfig()
+        }
+    }
+    
+    /**
+     * 重新加载配置（热更新）
+     */
+    fun reloadConfig() {
+        currentConfig = loadConfig()
+        Logger.info("压缩提示词配置已重新加载")
+    }
+    
+    fun getCurrentConfig(): CompressionPromptConfig = currentConfig
+    
+    private fun loadDefaultConfig(): CompressionPromptConfig {
+        return CompressionPromptConfig(
+            systemPrompt = """
+                你是一个会话摘要助手。你的任务是对对话历史进行压缩摘要。
+                请保留以下关键信息：
+                1. 重要的决策和结论
+                2. 用户的偏好和要求
+                3. 未完成的任务和行动项
+                4. 关键的时间点和事件
+                
+                摘要应该简洁明了，便于后续对话时快速理解上下文。
+            """.trimIndent(),
+            userPromptTemplate = """
+                请对以下对话进行摘要：
+                
+                {messages}
+                
+                请生成一个简洁的摘要，长度不超过{maxLength}字。
+            """.trimIndent(),
+            maxSummaryLength = 2000
+        )
+    }
+}
+
+class SessionCompressionManager(
+    private val tokenCounter: TokenCounter,
+    private val mem0Integration: Mem0Integration,
+    private val promptLoader: CompressionPromptLoader,
+    private val config: SessionCompressionConfig
+) {
+    /**
+     * 检查是否需要压缩
+     */
+    suspend fun shouldCompress(
+        roleId: String,
+        sessionId: String,
+        messages: List<Message>
+    ): Boolean {
+        if (!config.enabled) return false
+        
+        val currentTokens = tokenCounter.countTokens(messages)
+        val modelMaxTokens = getModelMaxTokens(roleId)
+        val threshold = modelMaxTokens * config.thresholdPercent
+        
+        return currentTokens >= threshold
+    }
+    
+    /**
+     * 执行会话压缩
+     */
+    suspend fun compressSession(
+        roleId: String,
+        sessionId: String,
+        messages: List<Message>,
+        aiClient: AIClient
+    ): CompressionResult {
+        val promptConfig = promptLoader.getCurrentConfig()
+        
+        // 1. 使用 AI 对早期对话进行摘要
+        val summary = generateSummary(messages, promptConfig, aiClient)
+        
+        // 2. 存储到 mem0
+        mem0Integration.storeCompressionMemory(
+            roleId = roleId,
+            sessionId = sessionId,
+            summary = summary
+        )
+        
+        // 3. 保留最近的对话，替换早期对话为摘要
+        val retainedCount = (messages.size * config.retainPercent).toInt()
+        val recentMessages = messages.takeLast(retainedCount)
+        
+        val summaryMessage = Message(
+            id = generateId(),
+            senderId = "system",
+            senderType = SenderType.SYSTEM,
+            sessionId = sessionId,
+            content = MessageContent.Text("[会话摘要] $summary"),
+            timestamp = Instant.now(),
+            status = MessageStatus.COMPLETE
+        )
+        
+        return CompressionResult(
+            compressedMessages = listOf(summaryMessage) + recentMessages,
+            summary = summary,
+            originalTokenCount = tokenCounter.countTokens(messages),
+            newTokenCount = tokenCounter.countTokens(listOf(summaryMessage) + recentMessages)
+        )
+    }
+    
+    /**
+     * 生成摘要
+     */
+    private suspend fun generateSummary(
+        messages: List<Message>,
+        promptConfig: CompressionPromptConfig,
+        aiClient: AIClient
+    ): String {
+        // 只压缩早期的消息
+        val messagesToCompress = messages.take((messages.size * 0.7).toInt())
+        
+        val formattedMessages = messagesToCompress.joinToString("\n") { msg ->
+            val sender = when (msg.senderType) {
+                SenderType.USER -> "用户"
+                SenderType.AI_ROLE -> msg.senderId
+                SenderType.SYSTEM -> "系统"
+            }
+            "[$sender]: ${msg.content}"
+        }
+        
+        val userPrompt = promptConfig.userPromptTemplate
+            .replace("{messages}", formattedMessages)
+            .replace("{maxLength}", promptConfig.maxSummaryLength.toString())
+        
+        val response = aiClient.generate(
+            systemPrompt = promptConfig.systemPrompt,
+            userPrompt = userPrompt
+        )
+        
+        return response.text
+    }
+}
+
+data class CompressionResult(
+    val compressedMessages: List<Message>,
+    val summary: String,
+    val originalTokenCount: Int,
+    val newTokenCount: Int
+)
+```
+
+### 7. 日志和监控系统
+
+#### 7.1 日志记录规范
+
+**日志级别**
+
+```kotlin
+enum class LogLevel {
+    DEBUG,      // 调试信息
+    INFO,       // 一般信息
+    WARN,       // 警告
+    ERROR       // 错误
+}
+```
+
+**日志内容**
+
+需要记录以下行为：
+
+1. **AI行为日志**
+   - 角色启动/停止
+   - 会话开始/结束处理
+   - 消息接收和响应
+   - 工具调用请求和结果
+   - 配置变更
+
+2. **对话日志**
+   - 所有收发的消息内容
+   - 消息状态变更
+   - 会话压缩事件
+
+3. **工具调用日志**
+   - 工具名称和参数
+   - 执行结果或错误
+   - 执行耗时
+
+4. **程序输出日志**
+   - 系统启动/关闭
+   - 服务健康状态
+   - 异常和错误
+
+**重复行为监控**
+
+```kotlin
+/**
+ * 重复行为检测器
+ */
+class DuplicateBehaviorDetector {
+    private val recentActions = ConcurrentHashMap<String, CircularFifoQueue<ActionRecord>>()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    
+    data class ActionRecord(
+        val action: String,
+        val content: String,
+        val timestamp: Instant
+    )
+    
+    /**
+     * 记录行为
+     */
+    fun recordAction(roleId: String, action: String, content: String) {
+        val queue = recentActions.getOrPut(roleId) { 
+            CircularFifoQueue(100)  // 保留最近100条记录
+        }
+        queue.add(ActionRecord(action, content, Instant.now()))
+        
+        // 检查重复
+        checkForDuplicates(roleId, action, content)
+    }
+    
+    /**
+     * 检查重复行为
+     */
+    private fun checkForDuplicates(roleId: String, action: String, content: String) {
+        val queue = recentActions[roleId] ?: return
+        val recentRecords = queue.toList().takeLast(10)
+        
+        // 检查相同行为重复次数
+        val sameActionCount = recentRecords.count { 
+            it.action == action && it.content == content 
+        }
+        
+        if (sameActionCount >= 3) {
+            Logger.warn("检测到角色[$roleId]重复执行相同行为[$action] $sameActionCount 次")
+        }
+        
+        // 检查相同文本重复
+        val sameContentCount = recentRecords.count { it.content == content }
+        if (sameContentCount >= 3) {
+            Logger.warn("检测到角色[$roleId]重复输出相同内容 $sameContentCount 次")
+        }
+    }
+}
+```
+
+#### 7.2 日志存储
+
+日志采用文件存储，按日期和角色分类：
+
+```
+logs/
+├── system/
+│   ├── 2026-03-11.log
+│   └── 2026-03-12.log
+├── roles/
+│   ├── role_001/
+│   │   ├── 2026-03-11.log
+│   │   └── 2026-03-12.log
+│   └── role_002/
+│       └── ...
+└── conversations/
+    ├── session_001/
+    │   └── 2026-03-11.log
+    └── group_chat/
+        └── 2026-03-11.log
+```
+
+### 8. 数据备份和升级机制
+
+#### 8.1 每日备份
+
+**备份策略**
+
+```kotlin
+/**
+ * 备份管理器
+ */
+class BackupManager(
+    private val workspacesPath: Path,
+    private val backupPath: Path
+) {
+    companion object {
+        const val BACKUP_TIME_HOUR = 2  // 凌晨2点备份
+        const val KEEP_DAYS = 30        // 保留30天
+    }
+    
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    
+    /**
+     * 启动定时备份任务
+     */
+    fun startScheduledBackup() {
+        scope.launch {
+            while (isActive) {
+                val now = LocalDateTime.now()
+                val nextBackup = now.withHour(BACKUP_TIME_HOUR)
+                    .withMinute(0)
+                    .withSecond(0)
+                
+                val delayMillis = if (now.hour >= BACKUP_TIME_HOUR) {
+                    // 今天已过了备份时间，预约明天
+                    Duration.between(now, nextBackup.plusDays(1)).toMillis()
+                } else {
+                    Duration.between(now, nextBackup).toMillis()
+                }
+                
+                delay(delayMillis)
+                performBackup()
+            }
+        }
+    }
+    
+    /**
+     * 执行备份
+     */
+    suspend fun performBackup(): Path = withContext(Dispatchers.IO) {
+        val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
+        val backupFileName = "workspaces_backup_$timestamp.7z"
+        val backupFile = backupPath.resolve(backupFileName)
+        
+        Files.createDirectories(backupPath)
+        
+        // 使用7z压缩
+        val process = ProcessBuilder(
+            "7z", "a", "-t7z", "-m0=lzma2", "-mx=9",
+            backupFile.toString(),
+            workspacesPath.toString()
+        ).start()
+        
+        val success = process.waitFor(300, TimeUnit.SECONDS)
+        
+        if (!success || process.exitValue() != 0) {
+            throw RuntimeException("备份失败")
+        }
+        
+        Logger.info("备份完成: $backupFileName")
+        
+        // 清理旧备份
+        cleanupOldBackups()
+        
+        backupFile
+    }
+    
+    /**
+     * 清理旧备份
+     */
+    private suspend fun cleanupOldBackups() = withContext(Dispatchers.IO) {
+        val cutoffDate = LocalDateTime.now().minusDays(KEEP_DAYS.toLong())
+        
+        Files.list(backupPath)
+            .filter { it.fileName.toString().startsWith("workspaces_backup_") }
+            .filter { 
+                val fileTime = Files.getLastModifiedTime(it).toInstant()
+                fileTime.isBefore(cutoffDate.atZone(ZoneId.systemDefault()).toInstant())
+            }
+            .forEach { 
+                Files.deleteIfExists(it)
+                Logger.info("删除旧备份: ${it.fileName}")
+            }
+    }
+}
+```
+
+#### 8.2 数据升级机制
+
+**版本检测和升级**
+
+```kotlin
+/**
+ * 数据版本管理器
+ */
+class DataVersionManager(
+    private val workspacesPath: Path
+) {
+    companion object {
+        const val CURRENT_VERSION = 1
+    }
+    
+    /**
+     * 检测并执行升级
+     */
+    suspend fun checkAndUpgrade() {
+        val currentVersion = readCurrentVersion()
+        
+        if (currentVersion < CURRENT_VERSION) {
+            Logger.info("检测到数据版本 $currentVersion，需要升级到 $CURRENT_VERSION")
+            
+            for (version in currentVersion until CURRENT_VERSION) {
+                upgradeFrom(version)
+            }
+            
+            writeCurrentVersion(CURRENT_VERSION)
+            Logger.info("数据升级完成")
+        }
+    }
+    
+    /**
+     * 从指定版本升级
+     */
+    private suspend fun upgradeFrom(fromVersion: Int) {
+        Logger.info("执行从版本 $fromVersion 的升级")
+        
+        when (fromVersion) {
+            0 -> upgradeFromV0ToV1()
+            // 未来版本添加更多升级路径
+        }
+    }
+    
+    /**
+     * V0 -> V1 升级
+     * 示例：添加 token_bucket.json 文件
+     */
+    private suspend fun upgradeFromV0ToV1() = withContext(Dispatchers.IO) {
+        Files.list(workspacesPath).forEach { roleDir ->
+            val tokenBucketFile = roleDir.resolve("token_bucket.json")
+            if (!Files.exists(tokenBucketFile)) {
+                // 创建默认令牌桶配置
+                val defaultConfig = TokenBucketState(
+                    roleId = roleDir.fileName.toString(),
+                    tokens = 5.0,
+                    capacity = 5.0,
+                    refillRate = 0.5,
+                    lastRefillTime = Instant.now()
+                )
+                Files.writeString(tokenBucketFile, Json.encodeToString(defaultConfig))
+            }
+        }
+    }
+    
+    private fun readCurrentVersion(): Int {
+        val versionFile = workspacesPath.resolve(".version")
+        return try {
+            if (Files.exists(versionFile)) {
+                Files.readString(versionFile).toInt()
+            } else {
+                0
+            }
+        } catch (e: Exception) {
+            0
+        }
+    }
+    
+    private fun writeCurrentVersion(version: Int) {
+        val versionFile = workspacesPath.resolve(".version")
+        Files.writeString(versionFile, version.toString())
+    }
+}
+```
+
+### 9. 配置热加载机制
+
+#### 9.1 配置变更处理
+
+```kotlin
+/**
+ * 配置热加载管理器
+ */
+class ConfigHotReloadManager(
+    private val roleId: String,
+    private val configPath: Path,
+    private val onConfigChanged: (AIRoleConfig) -> Unit
+) {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var watchJob: Job? = null
+    
+    /**
+     * 启动配置监控
+     */
+    fun startWatching() {
+        watchJob = scope.launch {
+            val watchService = FileSystems.getDefault().newWatchService()
+            configPath.register(watchService, StandardWatchEventKinds.ENTRY_MODIFY)
+            
+            while (isActive) {
+                val key = watchService.poll(1, TimeUnit.SECONDS) ?: continue
+                
+                key.pollEvents().forEach { event ->
+                    val fileName = event.context() as? Path
+                    if (fileName != null) {
+                        handleConfigFileChange(fileName.toString())
+                    }
+                }
+                
+                key.reset()
+            }
+        }
+    }
+    
+    /**
+     * 处理配置文件变更
+     */
+    private fun handleConfigFileChange(fileName: String) {
+        when (fileName) {
+            "profile.json", "system_prompt.md", "behavior_rules.md" -> {
+                Logger.info("检测到角色[$roleId]配置变更: $fileName")
+                // 重新加载配置
+                scope.launch {
+                    val newConfig = loadRoleConfig(configPath)
+                    onConfigChanged(newConfig)
+                }
+            }
+        }
+    }
+    
+    /**
+     * 加载角色配置
+     */
+    private suspend fun loadRoleConfig(path: Path): AIRoleConfig = withContext(Dispatchers.IO) {
+        val profilePath = path.resolve("profile.json")
+        val systemPromptPath = path.resolve("system_prompt.md")
+        val behaviorRulesPath = path.resolve("behavior_rules.md")
+        
+        val profile = Json.decodeFromString<AIRoleProfile>(
+            Files.readString(profilePath)
+        )
+        
+        val systemPrompt = if (Files.exists(systemPromptPath)) {
+            Files.readString(systemPromptPath)
+        } else ""
+        
+        val behaviorRules = if (Files.exists(behaviorRulesPath)) {
+            Files.readAllLines(behaviorRulesPath)
+        } else emptyList()
+        
+        AIRoleConfig(
+            id = profile.id,
+            name = profile.name,
+            description = profile.description,
+            avatarPath = null,
+            personality = PersonalityType.valueOf(profile.personality),
+            modelId = "",  // 从model_config.json读取
+            systemPrompt = systemPrompt,
+            behaviorRules = behaviorRules,
+            createdAt = profile.createdAt,
+            updatedAt = profile.updatedAt
+        )
+    }
+    
+    fun stop() {
+        watchJob?.cancel()
+    }
+}
+
+/**
+ * 配置变更通知
+ * 
+ * 说明：
+ * - 修改的配置都是与提示词相关，影响系统提示词
+ * - 已有的会话内容保持不变
+ * - 配置切换只是文本更替
+ * - 不考虑因变动系统提示词导致的模型缓存失效增加的Token使用
+ */
+class ConfigChangeNotifier {
+    private val listeners = ConcurrentHashMap<String, MutableList<suspend (ConfigChangeEvent) -> Unit>>()
+    
+    data class ConfigChangeEvent(
+        val roleId: String,
+        val changedFiles: List<String>,
+        val newConfig: AIRoleConfig
+    )
+    
+    fun subscribe(roleId: String, listener: suspend (ConfigChangeEvent) -> Unit) {
+        listeners.getOrPut(roleId) { mutableListOf() }.add(listener)
+    }
+    
+    suspend fun notify(event: ConfigChangeEvent) {
+        listeners[event.roleId]?.forEach { listener ->
+            try {
+                listener(event)
+            } catch (e: Exception) {
+                Logger.error("配置变更通知失败: ${e.message}")
+            }
+        }
+    }
+}
+```
+
+## 实施计划
+
+### 阶段 1: 基础架构（优先级：高）
+
+- [ ] 设计工作区文件系统结构
+- [ ] 实现 AI 角色配置管理
+- [ ] 实现模型验证器（100K 上下文、多模态、工具调用）
+- [ ] 实现技能黑白名单基础功能
+- [ ] 集成 mem0 客户端
+- [ ] 实现统一存储系统（mem0）
+
+### 阶段 2: 会话系统（优先级：高）
+
+- [ ] 实现永久会话管理（一对一会话、群聊会话）
+- [ ] 实现消息模型和存储
+- [ ] 实现会话状态流转（已读、处理中）
+- [ ] 实现会话压缩基础功能（配置化提示词）
+- [ ] 实现 token 计数和阈值检测
+
+### 阶段 3: 群聊调度（优先级：中）
+
+- [ ] 实现调度器 AI（群聊记忆、@提及机制）
+- [ ] 实现令牌桶限流算法
+- [ ] 实现调度器话题分析
+- [ ] 实现令牌桶状态注入提示词
+
+### 阶段 4: 实时打断（优先级：中）
+
+- [ ] 实现协程取消机制
+- [ ] 实现工具调用中断
+- [ ] 实现子进程终止
+- [ ] 实现消息撤回
+- [ ] 实现打断事件总线
+
+### 阶段 5: 工具系统（优先级：中）
+
+- [ ] 实现浏览器工具（自动启动、CDP协议）
+- [ ] 实现文件操作工具（读、查、改、删）
+- [ ] 实现技能管理工具
+- [ ] 实现记忆检索工具
+- [ ] 实现自我认知工具
+
+### 阶段 6: 基础设施（优先级：中）
+
+- [ ] 实现错误处理和重试机制
+- [ ] 实现日志和监控系统
+- [ ] 实现数据备份机制
+- [ ] 实现数据升级机制
+- [ ] 实现配置热加载
+
+### 阶段 7: 测试和优化（优先级：低）
+
+- [ ] 编写单元测试
+- [ ] 编写集成测试
 - [ ] 性能优化
-- [ ] 安全性加固
+- [ ] 用户体验优化
+- [ ] 文档完善
+
+## 10. 数据流图
+
+### 10.1 消息处理流程
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   用户输入   │────▶│  消息解析器  │────▶│  会话路由   │
+└─────────────┘     └─────────────┘     └──────┬──────┘
+                                               │
+                    ┌──────────────────────────┼──────────────────────────┐
+                    │                          │                          │
+                    ▼                          ▼                          ▼
+            ┌───────────────┐          ┌───────────────┐          ┌───────────────┐
+            │  一对一会话    │          │   群聊会话     │          │  @提及处理    │
+            │  (直接发送)    │          │  (调度器分析)  │          │  (强制调度)    │
+            └───────┬───────┘          └───────┬───────┘          └───────┬───────┘
+                    │                          │                          │
+                    │    ┌─────────────────────┘                          │
+                    │    │                                                │
+                    ▼    ▼                                                ▼
+            ┌───────────────────────────────────────────────────────────────────────┐
+            │                          群聊调度器 AI                                 │
+            │  - 分析话题相关性                                                    │
+            │  - 查询群聊记忆                                                      │
+            │  - 选择参与角色                                                      │
+            └─────────────────────────────────┬─────────────────────────────────────┘
+                                              │
+                                              ▼
+                              ┌───────────────────────────────┐
+                              │    遍历选中的 AI 角色          │
+                              │  1. 检查令牌桶余额             │
+                              │  2. 注入记忆和状态             │
+                              │  3. 调用模型生成响应           │
+                              └───────────────┬───────────────┘
+                                              │
+                    ┌─────────────────────────┼─────────────────────────┐
+                    │                         │                         │
+                    ▼                         ▼                         ▼
+            ┌───────────────┐         ┌───────────────┐         ┌───────────────┐
+            │   工具调用     │         │   正常响应     │         │   令牌不足     │
+            │  (执行并返回)  │         │  (直接返回)    │         │  (跳过该角色)  │
+            └───────┬───────┘         └───────┬───────┘         └───────────────┘
+                    │                         │
+                    └───────────┬─────────────┘
+                                │
+                                ▼
+                    ┌───────────────────────┐
+                    │    存储到 mem0        │
+                    │  - 会话历史           │
+                    │  - 角色记忆           │
+                    │  - 群聊记忆           │
+                    └───────────┬───────────┘
+                                │
+                                ▼
+                    ┌───────────────────────┐
+                    │      返回给用户        │
+                    └───────────────────────┘
+```
+
+### 10.2 AI 角色内部处理流程
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        AI 角色处理流程                           │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ 1. 接收消息                                                      │
+│    - 更新会话状态（标记已读）                                     │
+│    - 设置处理中状态                                              │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ 2. 构建上下文                                                    │
+│    - 获取会话历史（从 mem0）                                      │
+│    - 检索相关记忆                                                │
+│    - 获取令牌桶状态                                              │
+│    - 加载系统提示词                                              │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ 3. 调用模型                                                      │
+│    - 发送请求到 LM Studio                                        │
+│    - 支持流式响应                                                │
+│    - 可中断处理                                                  │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ 4. 处理响应                                                      │
+│    - 解析工具调用请求                                            │
+│    - 执行工具（文件、浏览器、技能等）                              │
+│    - 工具结果返回模型                                            │
+│    - 生成最终响应                                                │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ 5. 完成处理                                                      │
+│    - 存储消息到 mem0                                             │
+│    - 更新会话状态（处理完成）                                     │
+│    - 消费令牌                                                    │
+│    - 检查是否需要会话压缩                                         │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## 11. 并发控制策略
+
+### 11.1 并发场景分析
+
+**需要控制的并发场景：**
+
+1. **多角色同时响应群聊消息**
+2. **同一角色同时处理多个会话**
+3. **工具调用的并发执行**
+4. **配置热加载的并发访问**
+
+### 11.2 并发控制实现
+
+```kotlin
+/**
+ * 角色并发控制器
+ * 确保同一角色不会同时处理多个请求
+ */
+class RoleConcurrencyController {
+    private val processingRoles = ConcurrentHashMap<String, Mutex>()
+    
+    /**
+     * 获取角色的互斥锁
+     */
+    fun getMutex(roleId: String): Mutex {
+        return processingRoles.getOrPut(roleId) { Mutex() }
+    }
+    
+    /**
+     * 检查角色是否正在处理
+     */
+    fun isProcessing(roleId: String): Boolean {
+        val mutex = processingRoles[roleId] ?: return false
+        return mutex.isLocked
+    }
+    
+    /**
+     * 执行受控操作
+     */
+    suspend fun <T> withRoleLock(roleId: String, block: suspend () -> T): T {
+        val mutex = getMutex(roleId)
+        return mutex.withLock {
+            block()
+        }
+    }
+}
+
+/**
+ * 会话并发控制器
+ * 管理每个会话的并发访问
+ */
+class SessionConcurrencyController {
+    private val sessionLocks = ConcurrentHashMap<String, Mutex>()
+    private val messageQueues = ConcurrentHashMap<String, Channel<Message>>()
+    
+    /**
+     * 初始化会话队列
+     */
+    fun initSession(sessionId: String) {
+        sessionLocks.getOrPut(sessionId) { Mutex() }
+        messageQueues.getOrPut(sessionId) { Channel(Channel.BUFFERED) }
+    }
+    
+    /**
+     * 发送消息到会话队列
+     */
+    suspend fun sendMessage(sessionId: String, message: Message) {
+        val queue = messageQueues[sessionId] 
+            ?: throw IllegalStateException("会话 $sessionId 未初始化")
+        queue.send(message)
+    }
+    
+    /**
+     * 接收会话消息
+     */
+    suspend fun receiveMessage(sessionId: String): Message {
+        val queue = messageQueues[sessionId] 
+            ?: throw IllegalStateException("会话 $sessionId 未初始化")
+        return queue.receive()
+    }
+    
+    /**
+     * 在会话锁保护下执行操作
+     */
+    suspend fun <T> withSessionLock(sessionId: String, block: suspend () -> T): T {
+        val mutex = sessionLocks.getOrPut(sessionId) { Mutex() }
+        return mutex.withLock {
+            block()
+        }
+    }
+}
+
+/**
+ * 工具调用并发控制器
+ */
+class ToolConcurrencyController {
+    // 限制同时执行的工具调用数量
+    private val semaphore = Semaphore(10)
+    
+    /**
+     * 执行受控的工具调用
+     */
+    suspend fun <T> executeWithControl(block: suspend () -> T): T {
+        semaphore.acquire()
+        try {
+            return block()
+        } finally {
+            semaphore.release()
+        }
+    }
+}
+
+/**
+ * 全局并发管理器
+ */
+class ConcurrencyManager(
+    private val roleController: RoleConcurrencyController,
+    private val sessionController: SessionConcurrencyController,
+    private val toolController: ToolConcurrencyController
+) {
+    /**
+     * 处理群聊消息
+     * 并行调度多个角色，但每个角色串行处理
+     */
+    suspend fun processGroupChatMessage(
+        message: Message,
+        selectedRoles: List<String>,
+        processRole: suspend (String, Message) -> Unit
+    ) {
+        coroutineScope {
+            selectedRoles.forEach { roleId ->
+                launch {
+                    // 每个角色在独立的协程中处理，但受角色锁保护
+                    roleController.withRoleLock(roleId) {
+                        processRole(roleId, message)
+                    }
+                }
+            }
+        }
+    }
+    
+    /**
+     * 处理工具调用
+     */
+    suspend fun <T> executeTool(block: suspend () -> T): T {
+        return toolController.executeWithControl {
+            block()
+        }
+    }
+}
+```
+
+### 11.3 打断机制的并发处理
+
+```kotlin
+/**
+ * 打断信号管理器
+ */
+class InterruptionManager {
+    private val interruptionSignals = ConcurrentHashMap<String, Channel<Unit>>()
+    
+    /**
+     * 获取或创建打断信号通道
+     */
+    fun getSignalChannel(roleId: String): Channel<Unit> {
+        return interruptionSignals.getOrPut(roleId) { 
+            Channel(Channel.CONFLATED) 
+        }
+    }
+    
+    /**
+     * 发送打断信号
+     */
+    fun interrupt(roleId: String) {
+        getSignalChannel(roleId).trySend(Unit)
+    }
+    
+    /**
+     * 监听打断信号
+     */
+    suspend fun watchForInterruption(roleId: String, onInterrupt: suspend () -> Unit) {
+        val channel = getSignalChannel(roleId)
+        channel.receive()
+        onInterrupt()
+    }
+}
+```
+
+## 12. 单例部署结构
+
+### 12.1 部署架构
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        单服务器部署                              │
+│                     (Single Instance)                            │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        │                     │                     │
+        ▼                     ▼                     ▼
+┌───────────────┐    ┌───────────────┐    ┌───────────────┐
+│   AI 角色服务  │    │   mem0 服务   │    │  LM Studio   │
+│  (Kotlin/JVM) │    │  (独立进程)   │    │  (模型服务)   │
+└───────┬───────┘    └───────────────┘    └───────────────┘
+        │
+        │    ┌──────────────────────────────────────────┐
+        │    │           工作区文件系统                  │
+        │    │  workspaces/                             │
+        │    │  ├── role_001/                           │
+        │    │  ├── role_002/                           │
+        │    │  └── ...                                 │
+        │    │                                          │
+        │    │  logs/                                   │
+        │    │  backups/                                │
+        │    └──────────────────────────────────────────┘
+        │
+        ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      服务组件关系                                │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌─────────────┐      ┌─────────────┐      ┌─────────────┐     │
+│  │  HTTP API   │◀────▶│  核心业务逻辑 │◀────▶│  角色管理器  │     │
+│  │  (Ktor)     │      │             │      │             │     │
+│  └─────────────┘      └──────┬──────┘      └──────┬──────┘     │
+│                              │                    │            │
+│                              ▼                    ▼            │
+│                       ┌─────────────┐      ┌─────────────┐     │
+│                       │  会话管理器  │◀────▶│  工具管理器  │     │
+│                       │             │      │             │     │
+│                       └──────┬──────┘      └──────┬──────┘     │
+│                              │                    │            │
+│                              ▼                    ▼            │
+│                       ┌─────────────┐      ┌─────────────┐     │
+│                       │   mem0 客户端 │    │  浏览器管理  │     │
+│                       │             │      │             │     │
+│                       └──────┬──────┘      └─────────────┘     │
+│                              │                                 │
+│                              ▼                                 │
+│                       ┌─────────────┐                          │
+│                       │  LM Studio  │                          │
+│                       │   客户端    │                          │
+│                       └─────────────┘                          │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 12.2 服务启动顺序
+
+```kotlin
+/**
+ * 应用启动器
+ */
+class ApplicationBootstrapper {
+    suspend fun start() {
+        Logger.info("========== 启动 AI 角色系统 ==========")
+        
+        // 1. 检查并升级数据
+        Logger.info("[1/7] 检查数据版本...")
+        DataVersionManager(workspacesPath).checkAndUpgrade()
+        
+        // 2. 启动 mem0 健康检查
+        Logger.info("[2/7] 连接 mem0 服务...")
+        val mem0Client = createMem0Client()
+        val healthChecker = Mem0HealthChecker(mem0Client)
+        healthChecker.start()
+        
+        // 3. 初始化令牌桶
+        Logger.info("[3/7] 初始化令牌桶...")
+        val tokenBucketLimiter = TokenBucketRateLimiter(tokenBucketPath)
+        loadAllRoles().forEach { role ->
+            tokenBucketLimiter.initBucket(
+                roleId = role.id,
+                capacity = config.tokenBucket.capacity,
+                refillRate = config.tokenBucket.refillRate
+            )
+        }
+        
+        // 4. 初始化浏览器工具（结束残留进程）
+        Logger.info("[4/7] 初始化浏览器工具...")
+        BrowserTool.killAllBrowserProcesses()
+        
+        // 5. 加载 AI 角色
+        Logger.info("[5/7] 加载 AI 角色...")
+        val roleManager = RoleManager(workspacesPath, mem0Client)
+        roleManager.loadAllRoles()
+        
+        // 6. 启动会话管理器
+        Logger.info("[6/7] 启动会话管理器...")
+        val sessionManager = SessionManager(mem0Client)
+        sessionManager.initializeSessions()
+        
+        // 7. 启动 HTTP API 服务
+        Logger.info("[7/7] 启动 API 服务...")
+        val apiServer = APIServer(roleManager, sessionManager)
+        apiServer.start()
+        
+        // 8. 启动备份任务
+        Logger.info("启动定时备份任务...")
+        val backupManager = BackupManager(workspacesPath, backupPath)
+        backupManager.startScheduledBackup()
+        
+        Logger.info("========== 系统启动完成 ==========")
+    }
+}
+```
+
+### 12.3 配置文件结构
+
+```hocon
+# application.conf
+
+server {
+    host = "0.0.0.0"
+    port = 8080
+}
+
+storage {
+    workspacesPath = "./workspaces"
+    logsPath = "./logs"
+    backupPath = "./backups"
+}
+
+mem0 {
+    baseUrl = "http://localhost:8000"
+    healthCheckInterval = "30s"
+}
+
+lmStudio {
+    baseUrl = "http://localhost:1234"
+    minContextLength = 100000  # 可从配置文件指定
+    requireMultimodal = true
+    requireToolCalling = true
+}
+
+tokenBucket {
+    capacity = 5.0
+    refillRate = 0.5  # 每秒
+}
+
+compression {
+    enabled = true
+    thresholdPercent = 0.7
+    retainPercent = 0.3
+    promptConfigPath = "./config/compression_prompt.json"
+}
+
+dispatcher {
+    roleId = "dispatcher_001"
+    modelId = "default"
+}
+
+backup {
+    enabled = true
+    scheduleHour = 2
+    keepDays = 30
+}
+```
+
+## 可行性测试清单
+
+### 必需测试
+
+- [ ] **文件系统隔离测试**: 验证工作区目录结构
+- [ ] **令牌桶算法测试**: 验证令牌补充和消费逻辑
+- [ ] **实时打断测试**: 验证协程取消、工具中断、进程终止
+- [ ] **技能黑白名单测试**: 验证白名单优先、黑名单过滤
+- [ ] **模型验证测试**: 验证 100K 上下文、多模态、工具调用检测
+- [ ] **mem0 隔离测试**: 验证不同角色的记忆隔离
+- [ ] **mem0 共享测试**: 验证群聊记忆共享
+- [ ] **会话压缩测试**: 验证压缩触发和 mem0 存储
+- [ ] **浏览器自动启动测试**: 验证CDP检测和自动启动
+- [ ] **配置热加载测试**: 验证配置文件变更检测和加载
+- [ ] **数据升级测试**: 验证版本检测和数据迁移
+- [ ] **并发控制测试**: 验证多角色并发和锁机制
+
+### 可选测试
+
+- [ ] **调度器 AI 测试**: 验证话题分析和角色选择
+- [ ] **令牌桶限流测试**: 验证限流效果和提示词注入
+- [ ] **多角色并发测试**: 验证多个 AI 同时回应的场景
+- [ ] **备份恢复测试**: 验证备份创建和恢复流程
+
+## 技术依赖
+
+### JVM 库
+
+```toml
+[dependencies]
+# Ktor (网络框架)
+ktor-client-core = "3.4.1"
+ktor-client-cio = "3.4.1"
+ktor-server-core = "3.4.1"
+ktor-server-cio = "3.4.1"
+
+# Kotlin 协程
+kotlinx-coroutines-core = "1.9.0"
+kotlinx-coroutines-jdk8 = "1.9.0"
+
+# 序列化
+kotlinx-serialization-json = "1.7.3"
+
+# 配置 (HOCON)
+typesafe-config = "1.4.3"
+kotlinx-config = "0.5.0"
+
+# 日志
+kotlin-logging = "3.0.5"
+slf4j = "2.0.16"
+logback = "1.5.16"
+
+# 时间处理
+kotlinx-datetime = "0.6.2"
+
+# JSON 处理
+kotlinx-serialization-json = "1.7.3"
+
+# 文件系统
+kotlinx-io = "0.6.0"
+```
 
 ## 风险评估
 
-### 技术风险
-1. **Kotlin Native 成熟度**: 某些平台可能支持不完善
-   - 缓解方案：使用 JVM 作为备选
-   
-2. **Compose Web 限制**: Web 平台功能可能受限
-   - 缓解方案：使用 React/Vue 作为备选
+### 低风险
 
-3. **浏览器控制依赖**: Node.js 依赖增加复杂性
-   - 缓解方案：提供 Selenium 备选方案
+- ✅ 文件系统隔离实现简单
+- ✅ Kotlin 协程取消机制成熟
+- ✅ mem0 REST API 调用直接
+- ✅ JVM 生态系统库丰富
 
-### 安全风险
-1. **命令执行**: 恶意命令执行风险
-   - 缓解方案：严格的白名单和沙箱
+### 中风险
 
-2. **文件系统访问**: 未授权文件访问
-   - 缓解方案：工作区隔离和权限控制
+- ⚠️ 调度器 AI 的话题分析准确性
+  - 缓解：提供手动配置和规则匹配
+- ⚠️ 疲劳值算法需要调优
+  - 缓解：提供配置参数，支持动态调整
+- ⚠️ 工具调用中断可能不完整
+  - 缓解：为每种工具类型实现专门的取消逻辑
 
-3. **Skill 安全**: 恶意技能代码
-   - 缓解方案：代码审查和沙箱执行
+### 高风险
 
-## 下一步行动
+- ❓ 实时打断在极端情况下的稳定性
+  - 缓解：进行充分的压力测试
+- ❓ 多个 AI 角色并发场景下的性能
+  - 缓解：实现并发控制和队列管理
 
-### 立即行动
-1. ✅ 完成可行性测试 (已完成)
-2. 🔄 创建详细的项目计划
-3. ⏳ 初始化项目结构和 Gradle 配置
-4. ⏳ 实现基础服务端框架
+## 验收标准
 
-### 需要用户确认
-1. 项目名称和 Logo 设计
-2. 优先开发的客户端平台
-3. 是否需要数据库支持
-4. 部署方式 (本地/云端)
+### 功能验收
 
-## 参考文档
-- [可行性测试报告](../test-available/index.md)
-- [Mem0 集成验证报告](../test-available/mem0-integration/verification-report.md)
-- [nanobot 分析](../references/nanobot/nanobot-analysis.md)
-- [openclaw 设计模式](../references/openclaw/docs/patterns/INDEX.md)
-- [Ktor 集成指南](../references/ktor/ktor-integration.md)
-- [LM Studio API](../references/lm-studio/lm-studio-rest-api.md)
-- [Mem0 官方文档](https://docs.mem0.ai)
+- [ ] 成功创建多个 AI 角色，每个角色有独立工作区
+- [ ] 角色间记忆完全隔离
+- [ ] 群聊中记忆共享
+- [ ] 疲劳值系统正常工作（增长、衰减、持久化）
+- [ ] 实时打断功能正常（模型请求、工具调用、子进程）
+- [ ] 技能黑白名单正常工作
+- [ ] 模型选择限制正常工作（过滤不满足要求的模型）
+- [ ] 会话压缩正常触发并存储到 mem0
+
+### 性能验收
+
+- [ ] 打断响应时间 < 100ms
+- [ ] 记忆检索时间 < 500ms
+- [ ] 群聊调度时间 < 1s
+- [ ] 疲劳值计算时间 < 10ms
+
+### 文档验收
+
+- [ ] 用户手册完整
+- [ ] 开发者文档完整
+- [ ] API 文档完整
+- [ ] 配置示例完整
+
+## 8. AI 角色基础工具系统
+
+### 8.1 工具架构设计
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     AI 角色工具管理器                        │
+│                  (AIToolManager)                             │
+└─────────────────────────────────────────────────────────────┘
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        │                     │                     │
+        ▼                     ▼                     ▼
+┌───────────────┐    ┌───────────────┐    ┌───────────────┐
+│   文件工具     │    │   浏览器工具   │    │   技能工具     │
+│ FileToolKit   │    │ BrowserTool   │    │  SkillTool    │
+└───────────────┘    └───────────────┘    └───────────────┘
+        │                     │                     │
+        ▼                     ▼                     ▼
+┌───────────────┐    ┌───────────────┐    ┌───────────────┐
+│   记忆工具     │    │   自我认知工具 │    │   删除工具     │
+│  MemoryTool   │    │ SelfAwareTool │    │  DeleteTool   │
+└───────────────┘    └───────────────┘    └───────────────┘
+```
+
+### 8.2 读取工具 (ReadTool)
+
+```kotlin
+/**
+ * 读取工具 - 用于读取工作区内的文件内容
+ */
+class ReadTool(
+    private val workspacePath: Path
+) {
+    /**
+     * 读取文件内容
+     * @param relativePath 相对于工作区的文件路径
+     * @param offset 起始行号（从1开始）
+     * @param limit 读取行数
+     * @return 文件内容
+     */
+    suspend fun read(
+        relativePath: String,
+        offset: Int? = null,
+        limit: Int? = null
+    ): ReadResult {
+        // 验证路径在工作区内
+        val filePath = validateAndResolvePath(relativePath)
+        
+        return withContext(Dispatchers.IO) {
+            if (!Files.exists(filePath)) {
+                return@withContext ReadResult.Error("文件不存在: $relativePath")
+            }
+            
+            if (Files.isDirectory(filePath)) {
+                return@withContext ReadResult.Error("路径是目录，不是文件: $relativePath")
+            }
+            
+            val content = if (offset != null && limit != null) {
+                // 读取指定范围
+                readRange(filePath, offset, limit)
+            } else {
+                // 读取全部内容
+                Files.readString(filePath)
+            }
+            
+            ReadResult.Success(
+                content = content,
+                totalLines = Files.readAllLines(filePath).size,
+                readLines = content.lines().size
+            )
+        }
+    }
+    
+    /**
+     * 验证并解析路径，确保在工作区内
+     */
+    private fun validateAndResolvePath(relativePath: String): Path {
+        val resolved = workspacePath.resolve(relativePath).normalize()
+        if (!resolved.startsWith(workspacePath)) {
+            throw SecurityException("路径超出工作区范围: $relativePath")
+        }
+        return resolved
+    }
+}
+
+sealed class ReadResult {
+    data class Success(
+        val content: String,
+        val totalLines: Int,
+        val readLines: Int
+    ) : ReadResult()
+    
+    data class Error(val message: String) : ReadResult()
+}
+```
+
+### 8.3 查找工具 (FindTool)
+
+```kotlin
+/**
+ * 查找工具 - 用于在工作区内查找文件
+ */
+class FindTool(
+    private val workspacePath: Path
+) {
+    /**
+     * 查找文件
+     * @param pattern 通配符模式，如 "*.kt", "**/*.md"
+     * @param path 搜索的起始路径（相对于工作区）
+     * @return 匹配的文件列表
+     */
+    suspend fun find(
+        pattern: String,
+        path: String = "."
+    ): FindResult {
+        val searchPath = workspacePath.resolve(path).normalize()
+        
+        if (!searchPath.startsWith(workspacePath)) {
+            return FindResult.Error("搜索路径超出工作区范围")
+        }
+        
+        return withContext(Dispatchers.IO) {
+            try {
+                val matcher = FileSystems.getDefault()
+                    .getPathMatcher("glob:$pattern")
+                
+                val matches = Files.walk(searchPath)
+                    .filter { matcher.matches(it.fileName) }
+                    .map { workspacePath.relativize(it).toString() }
+                    .toList()
+                
+                FindResult.Success(matches)
+            } catch (e: Exception) {
+                FindResult.Error("查找失败: ${e.message}")
+            }
+        }
+    }
+}
+
+sealed class FindResult {
+    data class Success(val files: List<String>) : FindResult()
+    data class Error(val message: String) : FindResult()
+}
+```
+
+### 8.4 修改工具 (EditTool)
+
+```kotlin
+/**
+ * 修改工具 - 用于修改工作区内的文件
+ */
+class EditTool(
+    private val workspacePath: Path
+) {
+    /**
+     * 修改文件内容
+     * @param relativePath 相对于工作区的文件路径
+     * @param oldString 原文内容（用于定位）
+     * @param newString 新内容（用于替换）
+     * @return 修改结果
+     */
+    suspend fun edit(
+        relativePath: String,
+        oldString: String,
+        newString: String
+    ): EditResult {
+        val filePath = validateAndResolvePath(relativePath)
+        
+        return withContext(Dispatchers.IO) {
+            if (!Files.exists(filePath)) {
+                return@withContext EditResult.Error("文件不存在: $relativePath")
+            }
+            
+            val content = Files.readString(filePath)
+            
+            // 检查匹配次数
+            val matchCount = content.split(oldString).size - 1
+            
+            when {
+                matchCount == 0 -> {
+                    EditResult.Error("未找到匹配的内容，请检查原文是否正确")
+                }
+                matchCount > 1 -> {
+                    EditResult.Error("找到 $matchCount 处匹配，请提供更多上下文以精确定位")
+                }
+                else -> {
+                    // 唯一匹配，执行替换
+                    val newContent = content.replaceFirst(oldString, newString)
+                    Files.writeString(filePath, newContent)
+                    EditResult.Success(
+                        originalContent = content,
+                        newContent = newContent
+                    )
+                }
+            }
+        }
+    }
+    
+    private fun validateAndResolvePath(relativePath: String): Path {
+        val resolved = workspacePath.resolve(relativePath).normalize()
+        if (!resolved.startsWith(workspacePath)) {
+            throw SecurityException("路径超出工作区范围: $relativePath")
+        }
+        return resolved
+    }
+}
+
+sealed class EditResult {
+    data class Success(
+        val originalContent: String,
+        val newContent: String
+    ) : EditResult()
+    
+    data class Error(val message: String) : EditResult()
+}
+```
+
+### 8.5 删除工具 (DeleteTool)
+
+```kotlin
+/**
+ * 删除工具 - 软删除工作区内的文件或目录
+ */
+class DeleteTool(
+    private val workspacePath: Path,
+    private val recycleBinPath: Path,
+    private val roleId: String
+) {
+    /**
+     * 删除文件或目录（软删除，移动到回收站）
+     * @param relativePath 相对于工作区的路径
+     * @return 删除结果
+     */
+    suspend fun delete(relativePath: String): DeleteResult {
+        val sourcePath = validateAndResolvePath(relativePath)
+        
+        return withContext(Dispatchers.IO) {
+            if (!Files.exists(sourcePath)) {
+                return@withContext DeleteResult.Error("路径不存在: $relativePath")
+            }
+            
+            // 生成回收站中的新名称
+            val timestamp = System.currentTimeMillis()
+            val originalName = sourcePath.fileName.toString()
+            val recycleName = "${roleId}-${timestamp}-${originalName}"
+            val targetPath = recycleBinPath.resolve(recycleName)
+            
+            try {
+                // 确保回收站目录存在
+                Files.createDirectories(recycleBinPath)
+                
+                // 移动到回收站
+                Files.move(sourcePath, targetPath, StandardCopyOption.ATOMIC_MOVE)
+                
+                DeleteResult.Success(
+                    originalPath = relativePath,
+                    recyclePath = targetPath.toString(),
+                    recycleName = recycleName
+                )
+            } catch (e: Exception) {
+                DeleteResult.Error("删除失败: ${e.message}")
+            }
+        }
+    }
+    
+    private fun validateAndResolvePath(relativePath: String): Path {
+        val resolved = workspacePath.resolve(relativePath).normalize()
+        if (!resolved.startsWith(workspacePath)) {
+            throw SecurityException("路径超出工作区范围: $relativePath")
+        }
+        return resolved
+    }
+}
+
+sealed class DeleteResult {
+    data class Success(
+        val originalPath: String,
+        val recyclePath: String,
+        val recycleName: String
+    ) : DeleteResult()
+    
+    data class Error(val message: String) : DeleteResult()
+}
+```
+
+### 8.6 浏览器工具 (BrowserTool)
+
+**设计方案B**: 共享浏览器实例，使用独立的用户数据目录 + 端口持久化和动态分配
+
+```kotlin
+/**
+ * 浏览器工具 - 通过CDP协议控制浏览器
+ * 
+ * 设计方案：
+ * - 共享浏览器实例，每个角色使用独立的用户数据目录
+ * - 通过 --user-data-dir 参数为每个角色创建独立的浏览器配置
+ * - 端口持久化：优先使用上次分配的端口，被占用时再动态分配
+ * - 启动时结束所有浏览器进程以确保端口释放
+ * - 使用共享的Chrome实例，通过不同的CDP端口连接
+ * - 平衡资源消耗和隔离性
+ */
+class BrowserTool(
+    private val roleId: String,
+    private val workspacePath: Path,
+    private val baseCdpPort: Int = 9222,
+    private val maxPortRange: Int = 1000
+) {
+    private val httpClient = HttpClient(CIO)
+    private var webSocket: WebSocketSession? = null
+    
+    // 每个角色有独立的用户数据目录
+    private val userDataDir: Path = workspacePath.resolve("tools/browser/user_data")
+    
+    // 工具状态文件路径（用于持久化端口分配）
+    private val toolStatePath: Path = workspacePath.resolve("tools/tool_state.json")
+    
+    // 实际分配的CDP端口
+    private var assignedCdpPort: Int? = null
+    
+    companion object {
+        /**
+         * 系统启动时调用：结束所有浏览器进程以确保端口释放
+         * 应在应用启动时执行一次
+         */
+        fun killAllBrowserProcesses() {
+            try {
+                val os = System.getProperty("os.name").lowercase()
+                val processBuilder = when {
+                    os.contains("win") -> ProcessBuilder(
+                        "taskkill", "/F", "/IM", "chrome.exe", "/T"
+                    )
+                    os.contains("mac") -> ProcessBuilder(
+                        "pkill", "-9", "Google Chrome"
+                    )
+                    else -> ProcessBuilder(
+                        "pkill", "-9", "chrome"
+                    )
+                }
+                processBuilder.inheritIO().start()
+                // 等待进程结束
+                Thread.sleep(1000)
+            } catch (e: Exception) {
+                // 忽略错误（可能没有运行的浏览器进程）
+            }
+        }
+    }
+    
+    /**
+     * 获取当前角色的CDP端口
+     * 策略：
+     * 1. 如果已分配，直接返回
+     * 2. 尝试读取持久化的端口配置
+     * 3. 如果持久化端口可用，使用它
+     * 4. 否则动态分配新端口并持久化
+     */
+    suspend fun getCdpPort(): Int {
+        assignedCdpPort?.let { return it }
+        
+        // 尝试读取持久化的端口
+        val persistedPort = loadPersistedPort()
+        
+        if (persistedPort != null && isPortAvailable(persistedPort)) {
+            // 使用持久化的端口
+            assignedCdpPort = persistedPort
+            return persistedPort
+        }
+        
+        // 动态分配新端口
+        val newPort = allocatePort()
+        assignedCdpPort = newPort
+        
+        // 持久化端口配置
+        persistPort(newPort)
+        
+        return newPort
+    }
+    
+    /**
+     * 从配置文件加载持久化的端口
+     */
+    private suspend fun loadPersistedPort(): Int? {
+        return withContext(Dispatchers.IO) {
+            try {
+                if (!Files.exists(toolStatePath)) {
+                    return@withContext null
+                }
+                
+                val content = Files.readString(toolStatePath)
+                val state = Json.decodeFromString<ToolState>(content)
+                state.browserCdpPort
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
+    
+    /**
+     * 持久化端口配置
+     */
+    private suspend fun persistPort(port: Int) {
+        withContext(Dispatchers.IO) {
+            try {
+                Files.createDirectories(toolStatePath.parent)
+                
+                val state = ToolState(
+                    roleId = roleId,
+                    browserCdpPort = port,
+                    updatedAt = Instant.now()
+                )
+                
+                Files.writeString(toolStatePath, Json.encodeToString(state))
+            } catch (e: Exception) {
+                // 忽略持久化错误
+            }
+        }
+    }
+    
+    /**
+     * 动态分配可用端口
+     * 策略：基于角色ID哈希起始，扫描找到第一个可用端口
+     */
+    private suspend fun allocatePort(): Int {
+        // 计算起始端口（基于角色ID的哈希，增加随机性）
+        val hashOffset = (roleId.hashCode() and 0x7FFFFFFF) % maxPortRange
+        
+        // 扫描可用端口
+        for (offset in 0 until maxPortRange) {
+            val port = baseCdpPort + ((hashOffset + offset) % maxPortRange)
+            
+            if (isPortAvailable(port)) {
+                return port
+            }
+        }
+        
+        throw IllegalStateException(
+            "无法为角色 $roleId 分配可用的CDP端口，" +
+            "端口范围 ${baseCdpPort}-${baseCdpPort + maxPortRange} 已被占用"
+        )
+    }
+    
+    /**
+     * 检测端口是否可用
+     * 端口可用条件：未被CDP占用且未被系统其他进程占用
+     */
+    private suspend fun isPortAvailable(port: Int): Boolean {
+        // 1. 检测是否被CDP占用（有浏览器实例在运行）
+        val cdpInUse = try {
+            val response = httpClient.get("http://localhost:$port/json/version") {
+                timeout { requestTimeoutMillis = 1000 }
+            }
+            response.status == HttpStatusCode.OK
+        } catch (e: Exception) {
+            false
+        }
+        
+        if (cdpInUse) {
+            return false
+        }
+        
+        // 2. 检测是否被系统其他进程占用
+        return !isPortInUseBySystem(port)
+    }
+    
+    /**
+     * 检测端口是否被系统其他进程占用
+     */
+    private fun isPortInUseBySystem(port: Int): Boolean {
+        return try {
+            ServerSocket(port).use { 
+                // 端口可用
+                false 
+            }
+        } catch (e: Exception) {
+            // 端口被占用
+            true
+        }
+    }
+    
+    /**
+     * 获取浏览器启动参数
+     * @return Chrome启动参数列表
+     */
+    suspend fun getBrowserArgs(): List<String> {
+        val port = getCdpPort()
+        return listOf(
+            "--remote-debugging-port=$port",
+            "--user-data-dir=$userDataDir",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-default-apps",
+            "--disable-extensions",
+            "--disable-background-networking",
+            "--disable-background-timer-throttling",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-breakpad",
+            "--disable-component-update",
+            "--disable-default-apps",
+            "--disable-features=TranslateUI",
+            "--disable-hang-monitor",
+            "--disable-ipc-flooding-protection",
+            "--disable-popup-blocking",
+            "--disable-prompt-on-repost",
+            "--disable-renderer-backgrounding",
+            "--force-color-profile=srgb",
+            "--metrics-recording-only",
+            "--safebrowsing-disable-auto-update",
+            "--enable-automation",
+            "--password-store=basic",
+            "--use-mock-keychain",
+            "--headless=new"  // 使用新的无头模式
+        )
+    }
+    
+    // 浏览器进程
+    private var browserProcess: Process? = null
+    
+    /**
+     * 确保浏览器连接
+     * 如果浏览器未运行，自动启动并恢复连接
+     */
+    private suspend fun ensureConnection(): Boolean {
+        val port = getCdpPort()
+        
+        // 尝试连接CDP
+        val isConnected = try {
+            val response = httpClient.get("http://localhost:$port/json/version")
+            response.status == HttpStatusCode.OK
+        } catch (e: Exception) {
+            false
+        }
+        
+        if (isConnected) {
+            return true
+        }
+        
+        // 浏览器未运行，尝试自动启动
+        return try {
+            startBrowser()
+        } catch (e: Exception) {
+            Logger.error("自动启动浏览器失败: ${e.message}")
+            false
+        }
+    }
+    
+    /**
+     * 启动浏览器
+     */
+    private suspend fun startBrowser(): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                val port = getCdpPort()
+                val chromePath = findChromeExecutable()
+                    ?: throw IllegalStateException("未找到Chrome可执行文件")
+                
+                val args = getBrowserArgs()
+                
+                Logger.info("启动浏览器，角色: $roleId, 端口: $port")
+                
+                browserProcess = ProcessBuilder(listOf(chromePath.toString()) + args)
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .redirectError(ProcessBuilder.Redirect.DISCARD)
+                    .start()
+                
+                // 等待浏览器启动
+                var attempts = 0
+                while (attempts < 30) {
+                    delay(500)
+                    try {
+                        val response = httpClient.get("http://localhost:$port/json/version")
+                        if (response.status == HttpStatusCode.OK) {
+                            Logger.info("浏览器启动成功")
+                            return@withContext true
+                        }
+                    } catch (e: Exception) {
+                        // 继续等待
+                    }
+                    attempts++
+                }
+                
+                throw IllegalStateException("浏览器启动超时")
+            } catch (e: Exception) {
+                Logger.error("启动浏览器失败: ${e.message}")
+                false
+            }
+        }
+    }
+    
+    /**
+     * 查找Chrome可执行文件
+     */
+    private fun findChromeExecutable(): Path? {
+        val os = System.getProperty("os.name").lowercase()
+        val possiblePaths = when {
+            os.contains("win") -> listOf(
+                Paths.get("C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"),
+                Paths.get("C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe"),
+                Paths.get(System.getenv("LOCALAPPDATA") ?: "", "Google\\Chrome\\Application\\chrome.exe")
+            )
+            os.contains("mac") -> listOf(
+                Paths.get("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+            )
+            else -> listOf(
+                Paths.get("/usr/bin/google-chrome"),
+                Paths.get("/usr/bin/chromium-browser"),
+                Paths.get("/usr/bin/chromium")
+            )
+        }
+        
+        return possiblePaths.firstOrNull { Files.exists(it) }
+    }
+    
+    /**
+     * 关闭浏览器
+     */
+    suspend fun closeBrowser() {
+        withContext(Dispatchers.IO) {
+            try {
+                // 先尝试通过CDP优雅关闭
+                try {
+                    sendCDPCommand("Browser.close", emptyMap())
+                } catch (e: Exception) {
+                    // 忽略
+                }
+                
+                // 强制终止进程
+                browserProcess?.destroyForcibly()
+                browserProcess = null
+                
+                // 关闭WebSocket
+                webSocket?.close()
+                webSocket = null
+                
+                Logger.info("浏览器已关闭")
+            } catch (e: Exception) {
+                Logger.warn("关闭浏览器时出错: ${e.message}")
+            }
+        }
+    }
+    
+    /**
+     * 打开网页
+     * @param url 目标URL
+     * @return 页面加载结果
+     */
+    suspend fun navigate(url: String): BrowserResult {
+        return try {
+            if (!ensureConnection()) {
+                return BrowserResult.Error("浏览器未连接，请确保浏览器已启动")
+            }
+            
+            // 通过CDP发送导航命令
+            val response = sendCDPCommand(
+                "Page.navigate",
+                mapOf("url" to url)
+            )
+            BrowserResult.Success("页面加载完成: $url")
+        } catch (e: Exception) {
+            BrowserResult.Error("导航失败: ${e.message}")
+        }
+    }
+    
+    /**
+     * 获取页面内容
+     * @return 页面HTML内容
+     */
+    suspend fun getContent(): BrowserResult {
+        return try {
+            if (!ensureConnection()) {
+                return BrowserResult.Error("浏览器未连接")
+            }
+            
+            val response = sendCDPCommand(
+                "Runtime.evaluate",
+                mapOf("expression" to "document.documentElement.outerHTML")
+            )
+            BrowserResult.Success(response)
+        } catch (e: Exception) {
+            BrowserResult.Error("获取内容失败: ${e.message}")
+        }
+    }
+    
+    /**
+     * 执行JavaScript
+     * @param script JavaScript代码
+     * @return 执行结果
+     */
+    suspend fun executeScript(script: String): BrowserResult {
+        return try {
+            if (!ensureConnection()) {
+                return BrowserResult.Error("浏览器未连接")
+            }
+            
+            val response = sendCDPCommand(
+                "Runtime.evaluate",
+                mapOf("expression" to script)
+            )
+            BrowserResult.Success(response)
+        } catch (e: Exception) {
+            BrowserResult.Error("脚本执行失败: ${e.message}")
+        }
+    }
+    
+    /**
+     * 截图
+     * @param outputPath 截图保存路径（相对于工作区）
+     * @return 截图结果
+     */
+    suspend fun screenshot(outputPath: String): BrowserResult {
+        return try {
+            if (!ensureConnection()) {
+                return BrowserResult.Error("浏览器未连接")
+            }
+            
+            val response = sendCDPCommand(
+                "Page.captureScreenshot",
+                mapOf("format" to "png", "fromSurface" to true)
+            )
+            
+            // 解码base64并保存到工作区
+            val screenshotData = Json.decodeFromString<CDPScreenshotResponse>(response)
+            val imageBytes = Base64.getDecoder().decode(screenshotData.data)
+            
+            val fullOutputPath = workspacePath.resolve(outputPath)
+            Files.createDirectories(fullOutputPath.parent)
+            Files.write(fullOutputPath, imageBytes)
+            
+            BrowserResult.Success("截图已保存到: $outputPath")
+        } catch (e: Exception) {
+            BrowserResult.Error("截图失败: ${e.message}")
+        }
+    }
+    
+    /**
+     * 点击元素
+     * @param selector CSS选择器
+     * @return 操作结果
+     */
+    suspend fun click(selector: String): BrowserResult {
+        return try {
+            if (!ensureConnection()) {
+                return BrowserResult.Error("浏览器未连接")
+            }
+            
+            val script = """
+                (function() {
+                    const element = document.querySelector('$selector');
+                    if (element) {
+                        element.click();
+                        return '点击成功';
+                    } else {
+                        return '元素未找到: $selector';
+                    }
+                })()
+            """.trimIndent()
+            
+            val response = sendCDPCommand(
+                "Runtime.evaluate",
+                mapOf("expression" to script)
+            )
+            BrowserResult.Success(response)
+        } catch (e: Exception) {
+            BrowserResult.Error("点击失败: ${e.message}")
+        }
+    }
+    
+    /**
+     * 输入文本
+     * @param selector CSS选择器
+     * @param text 要输入的文本
+     * @return 操作结果
+     */
+    suspend fun type(selector: String, text: String): BrowserResult {
+        return try {
+            if (!ensureConnection()) {
+                return BrowserResult.Error("浏览器未连接")
+            }
+            
+            val script = """
+                (function() {
+                    const element = document.querySelector('$selector');
+                    if (element) {
+                        element.value = '$text';
+                        element.dispatchEvent(new Event('input', { bubbles: true }));
+                        element.dispatchEvent(new Event('change', { bubbles: true }));
+                        return '输入成功';
+                    } else {
+                        return '元素未找到: $selector';
+                    }
+                })()
+            """.trimIndent()
+            
+            val response = sendCDPCommand(
+                "Runtime.evaluate",
+                mapOf("expression" to script)
+            )
+            BrowserResult.Success(response)
+        } catch (e: Exception) {
+            BrowserResult.Error("输入失败: ${e.message}")
+        }
+    }
+    
+    private suspend fun sendCDPCommand(method: String, params: Map<String, Any>): String {
+        val port = getCdpPort()
+        
+        // 1. 获取可用的WebSocket调试页面
+        val pagesResponse = httpClient.get("http://localhost:$port/json/list")
+        val pages = Json.decodeFromString<List<CDPPage>>(pagesResponse.bodyAsText())
+        
+        if (pages.isEmpty()) {
+            throw IllegalStateException("没有可用的浏览器页面")
+        }
+        
+        val page = pages.first()
+        
+        // 2. 建立WebSocket连接（如果尚未连接）
+        if (webSocket == null || webSocket?.isActive != true) {
+            webSocket = httpClient.webSocketSession(page.webSocketDebuggerUrl)
+        }
+        
+        // 3. 发送CDP命令
+        val command = CDPCommand(
+            id = System.currentTimeMillis().toInt(),
+            method = method,
+            params = params
+        )
+        
+        webSocket?.send(Json.encodeToString(command))
+        
+        // 4. 接收响应
+        val response = webSocket?.incoming?.receive() as? Frame.Text
+            ?: throw IllegalStateException("未收到响应")
+        
+        return response.readText()
+    }
+    
+    /**
+     * 关闭浏览器连接
+     */
+    suspend fun close() {
+        webSocket?.close()
+        httpClient.close()
+    }
+}
+
+@Serializable
+data class CDPCommand(
+    val id: Int,
+    val method: String,
+    val params: Map<String, @Contextual Any>
+)
+
+@Serializable
+data class CDPPage(
+    val id: String,
+    val title: String,
+    val type: String,
+    val url: String,
+    @SerialName("webSocketDebuggerUrl") val webSocketDebuggerUrl: String
+)
+
+@Serializable
+data class CDPScreenshotResponse(
+    val data: String
+)
+
+/**
+ * 工具状态数据类
+ * 用于持久化工具配置（如CDP端口分配）
+ */
+@Serializable
+data class ToolState(
+    val roleId: String,
+    val browserCdpPort: Int? = null,
+    val updatedAt: Instant
+)
+
+sealed class BrowserResult {
+    data class Success(val data: String) : BrowserResult()
+    data class Error(val message: String) : BrowserResult()
+}
+```
+
+### 8.7 技能创建和修改工具 (SkillTool)
+
+**设计方案**: 使用系统Python + 角色工作区虚拟环境隔离依赖 + 提示词约束
+
+```kotlin
+/**
+ * 技能工具 - 创建和管理角色的独有技能
+ * 
+ * 设计方案：
+ * - 使用系统Python解释器执行技能代码
+ * - 每个角色有独立的虚拟环境（venv），隔离依赖
+ * - 虚拟环境位于角色工作区内
+ * - 技能代码在独立进程中执行，确保安全
+ * 
+ * 安全约束（通过系统提示词告知AI角色）：
+ * - AI角色不应通过Python技能执行越界行为
+ * - 禁止访问工作区外的文件系统
+ * - 禁止执行网络攻击、恶意代码等有害操作
+ * - 技能应专注于完成特定任务，而非破坏系统
+ */
+class SkillTool(
+    private val workspacePath: Path,
+    private val roleId: String
+) {
+    private val skillsPath = workspacePath.resolve("skills/custom")
+    private val venvPath = workspacePath.resolve("tools/python_venv")
+    
+    /**
+     * 获取Python解释器路径
+     */
+    private fun getPythonExecutable(): Path {
+        return if (System.getProperty("os.name").lowercase().contains("win")) {
+            venvPath.resolve("Scripts/python.exe")
+        } else {
+            venvPath.resolve("bin/python")
+        }
+    }
+    
+    /**
+     * 确保虚拟环境存在
+     */
+    private suspend fun ensureVenv(): Boolean {
+        return withContext(Dispatchers.IO) {
+            if (Files.exists(getPythonExecutable())) {
+                return@withContext true
+            }
+            
+            // 创建虚拟环境
+            try {
+                val process = ProcessBuilder(
+                    "python", "-m", "venv", venvPath.toString()
+                ).start()
+                
+                process.waitFor(60, TimeUnit.SECONDS)
+                Files.exists(getPythonExecutable())
+            } catch (e: Exception) {
+                false
+            }
+        }
+    }
+    
+    /**
+     * 安装Python依赖
+     * @param packages 依赖包列表
+     * @return 安装结果
+     */
+    suspend fun installDependencies(packages: List<String>): SkillResult {
+        return withContext(Dispatchers.IO) {
+            try {
+                if (!ensureVenv()) {
+                    return@withContext SkillResult.Error("无法创建Python虚拟环境")
+                }
+                
+                val pipExecutable = if (System.getProperty("os.name").lowercase().contains("win")) {
+                    venvPath.resolve("Scripts/pip.exe")
+                } else {
+                    venvPath.resolve("bin/pip")
+                }
+                
+                val process = ProcessBuilder(
+                    listOf(pipExecutable.toString(), "install") + packages
+                ).start()
+                
+                val success = process.waitFor(120, TimeUnit.SECONDS)
+                
+                if (success && process.exitValue() == 0) {
+                    SkillResult.Success("依赖安装成功: ${packages.joinToString(", ")}")
+                } else {
+                    val error = process.errorStream.bufferedReader().readText()
+                    SkillResult.Error("依赖安装失败: $error")
+                }
+            } catch (e: Exception) {
+                SkillResult.Error("安装依赖失败: ${e.message}")
+            }
+        }
+    }
+    
+    /**
+     * 创建新技能
+     * @param skillId 技能ID
+     * @param name 技能名称
+     * @param description 技能描述
+     * @param pythonCode Python实现代码
+     * @param dependencies 依赖包列表（可选）
+     * @return 创建结果
+     */
+    suspend fun createSkill(
+        skillId: String,
+        name: String,
+        description: String,
+        pythonCode: String,
+        dependencies: List<String> = emptyList()
+    ): SkillResult {
+        return withContext(Dispatchers.IO) {
+            try {
+                // 确保虚拟环境存在
+                if (!ensureVenv()) {
+                    return@withContext SkillResult.Error("无法创建Python虚拟环境")
+                }
+                
+                val skillDir = skillsPath.resolve(skillId)
+                Files.createDirectories(skillDir)
+                
+                // 创建技能清单
+                val manifest = SkillManifest(
+                    id = skillId,
+                    name = name,
+                    description = description,
+                    version = "1.0.0",
+                    createdBy = roleId,
+                    createdAt = Instant.now(),
+                    entryPoint = "main.py",
+                    dependencies = dependencies
+                )
+                
+                // 保存清单
+                val manifestPath = skillDir.resolve("manifest.json")
+                Files.writeString(
+                    manifestPath,
+                    Json.encodeToString(manifest)
+                )
+                
+                // 保存Python代码
+                val codePath = skillDir.resolve("main.py")
+                Files.writeString(codePath, pythonCode)
+                
+                // 安装依赖
+                if (dependencies.isNotEmpty()) {
+                    val depResult = installDependencies(dependencies)
+                    if (depResult is SkillResult.Error) {
+                        return@withContext depResult
+                    }
+                }
+                
+                // 立即加载技能到当前角色
+                loadSkill(skillId, skillDir)
+                
+                SkillResult.Success("技能 '$name' 创建成功并已加载")
+            } catch (e: Exception) {
+                SkillResult.Error("创建技能失败: ${e.message}")
+            }
+        }
+    }
+    
+    /**
+     * 修改技能代码
+     * @param skillId 技能ID
+     * @param newCode 新的Python代码
+     * @return 修改结果
+     */
+    suspend fun updateSkill(
+        skillId: String,
+        newCode: String
+    ): SkillResult {
+        return withContext(Dispatchers.IO) {
+            try {
+                val skillDir = skillsPath.resolve(skillId)
+                val codePath = skillDir.resolve("main.py")
+                
+                if (!Files.exists(codePath)) {
+                    return@withContext SkillResult.Error("技能不存在: $skillId")
+                }
+                
+                // 备份旧代码（使用版本号管理）
+                val manifestPath = skillDir.resolve("manifest.json")
+                val manifest = Json.decodeFromString<SkillManifest>(
+                    Files.readString(manifestPath)
+                )
+                val backupDir = skillDir.resolve("versions")
+                Files.createDirectories(backupDir)
+                val backupPath = backupDir.resolve("main_v${manifest.version}.py")
+                Files.copy(codePath, backupPath, StandardCopyOption.REPLACE_EXISTING)
+                
+                // 写入新代码
+                Files.writeString(codePath, newCode)
+                
+                // 更新版本号
+                val newManifest = manifest.copy(
+                    version = incrementVersion(manifest.version),
+                    updatedAt = Instant.now()
+                )
+                Files.writeString(manifestPath, Json.encodeToString(newManifest))
+                
+                // 重新加载技能
+                reloadSkill(skillId)
+                
+                SkillResult.Success("技能 '$skillId' 更新成功并已重新加载")
+            } catch (e: Exception) {
+                SkillResult.Error("更新技能失败: ${e.message}")
+            }
+        }
+    }
+    
+    /**
+     * 执行技能
+     * @param skillId 技能ID
+     * @param params 执行参数
+     * @return 执行结果
+     */
+    suspend fun executeSkill(
+        skillId: String,
+        params: Map<String, Any>
+    ): SkillExecutionResult {
+        return withContext(Dispatchers.IO) {
+            try {
+                val skillDir = skillsPath.resolve(skillId)
+                val codePath = skillDir.resolve("main.py")
+                
+                if (!Files.exists(codePath)) {
+                    return@withContext SkillExecutionResult.Error("技能不存在: $skillId")
+                }
+                
+                // 创建临时参数文件
+                val paramsPath = skillDir.resolve("params.json")
+                Files.writeString(paramsPath, Json.encodeToString(params))
+                
+                // 执行Python脚本
+                val process = ProcessBuilder(
+                    getPythonExecutable().toString(),
+                    codePath.toString(),
+                    paramsPath.toString()
+                )
+                    .directory(skillDir.toFile())
+                    .redirectErrorStream(true)
+                    .start()
+                
+                // 设置超时
+                val completed = process.waitFor(30, TimeUnit.SECONDS)
+                
+                if (!completed) {
+                    process.destroyForcibly()
+                    return@withContext SkillExecutionResult.Error("技能执行超时")
+                }
+                
+                val output = process.inputStream.bufferedReader().readText()
+                
+                if (process.exitValue() == 0) {
+                    SkillExecutionResult.Success(output)
+                } else {
+                    SkillExecutionResult.Error("执行失败: $output")
+                }
+            } catch (e: Exception) {
+                SkillExecutionResult.Error("执行技能失败: ${e.message}")
+            }
+        }
+    }
+    
+    /**
+     * 获取技能历史版本
+     * @param skillId 技能ID
+     * @return 版本列表
+     */
+    suspend fun getSkillVersions(skillId: String): List<String> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val versionsDir = skillsPath.resolve(skillId).resolve("versions")
+                if (!Files.exists(versionsDir)) {
+                    return@withContext emptyList()
+                }
+                
+                Files.list(versionsDir)
+                    .map { it.fileName.toString() }
+                    .filter { it.startsWith("main_v") && it.endsWith(".py") }
+                    .sorted()
+                    .toList()
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+    }
+    
+    /**
+     * 回滚到指定版本
+     * @param skillId 技能ID
+     * @param version 版本号
+     * @return 回滚结果
+     */
+    suspend fun rollbackSkill(skillId: String, version: String): SkillResult {
+        return withContext(Dispatchers.IO) {
+            try {
+                val skillDir = skillsPath.resolve(skillId)
+                val backupPath = skillDir.resolve("versions/main_v$version.py")
+                val codePath = skillDir.resolve("main.py")
+                
+                if (!Files.exists(backupPath)) {
+                    return@withContext SkillResult.Error("版本不存在: $version")
+                }
+                
+                // 备份当前版本
+                val manifestPath = skillDir.resolve("manifest.json")
+                val manifest = Json.decodeFromString<SkillManifest>(
+                    Files.readString(manifestPath)
+                )
+                val currentBackupPath = skillDir.resolve(
+                    "versions/main_v${manifest.version}.py"
+                )
+                Files.copy(codePath, currentBackupPath, StandardCopyOption.REPLACE_EXISTING)
+                
+                // 恢复指定版本
+                Files.copy(backupPath, codePath, StandardCopyOption.REPLACE_EXISTING)
+                
+                // 更新版本号
+                val newManifest = manifest.copy(
+                    version = incrementVersion(manifest.version),
+                    updatedAt = Instant.now()
+                )
+                Files.writeString(manifestPath, Json.encodeToString(newManifest))
+                
+                // 重新加载
+                reloadSkill(skillId)
+                
+                SkillResult.Success("技能已回滚到版本 $version")
+            } catch (e: Exception) {
+                SkillResult.Error("回滚失败: ${e.message}")
+            }
+        }
+    }
+    
+    /**
+     * 版本号递增
+     */
+    private fun incrementVersion(version: String): String {
+        val parts = version.split(".").map { it.toInt() }.toMutableList()
+        parts[2] = parts[2] + 1
+        return parts.joinToString(".")
+    }
+    
+    /**
+     * 加载技能到当前角色
+     */
+    private suspend fun loadSkill(skillId: String, skillDir: Path) {
+        // 实现技能加载逻辑
+        // 验证技能代码语法，注册到技能管理器
+    }
+    
+    /**
+     * 重新加载技能
+     */
+    private suspend fun reloadSkill(skillId: String) {
+        // 实现技能重载逻辑
+    }
+}
+
+@Serializable
+data class SkillManifest(
+    val id: String,
+    val name: String,
+    val description: String,
+    val version: String,
+    val createdBy: String,
+    val createdAt: Instant,
+    val updatedAt: Instant? = null,
+    val entryPoint: String,
+    val dependencies: List<String> = emptyList()
+)
+
+sealed class SkillResult {
+    data class Success(val message: String) : SkillResult()
+    data class Error(val message: String) : SkillResult()
+}
+
+sealed class SkillExecutionResult {
+    data class Success(val output: String) : SkillExecutionResult()
+    data class Error(val message: String) : SkillExecutionResult()
+}
+```
+
+### 8.8 记忆查找工具 (MemoryTool)
+
+```kotlin
+/**
+ * 记忆工具 - 从mem0检索角色记忆
+ */
+class MemoryTool(
+    private val mem0Client: Mem0Client,
+    private val roleId: String
+) {
+    /**
+     * 搜索相关记忆
+     * @param query 查询内容
+     * @param limit 返回数量限制
+     * @return 记忆列表
+     */
+    suspend fun search(
+        query: String,
+        limit: Int = 10
+    ): MemoryResult {
+        return try {
+            val memories = mem0Client.searchMemories(
+                userId = "role_$roleId",
+                query = query,
+                limit = limit
+            )
+            MemoryResult.Success(memories)
+        } catch (e: Exception) {
+            MemoryResult.Error("搜索记忆失败: ${e.message}")
+        }
+    }
+    
+    /**
+     * 获取最近添加的记忆
+     * @param limit 返回数量限制
+     * @return 记忆列表
+     */
+    suspend fun getRecent(limit: Int = 10): MemoryResult {
+        return try {
+            val memories = mem0Client.getAllMemories(
+                userId = "role_$roleId",
+                limit = limit
+            )
+            MemoryResult.Success(memories)
+        } catch (e: Exception) {
+            MemoryResult.Error("获取记忆失败: ${e.message}")
+        }
+    }
+    
+    /**
+     * 获取特定类型的记忆
+     * @param type 记忆类型（如 "session_summary", "user_preference"）
+     * @param limit 返回数量限制
+     * @return 记忆列表
+     */
+    suspend fun getByType(
+        type: String,
+        limit: Int = 10
+    ): MemoryResult {
+        return try {
+            val allMemories = mem0Client.getAllMemories(
+                userId = "role_$roleId"
+            )
+            val filtered = allMemories.filter { 
+                it.metadata["type"] == type 
+            }.take(limit)
+            MemoryResult.Success(filtered)
+        } catch (e: Exception) {
+            MemoryResult.Error("获取记忆失败: ${e.message}")
+        }
+    }
+}
+
+sealed class MemoryResult {
+    data class Success(val memories: List<Memory>) : MemoryResult()
+    data class Error(val message: String) : MemoryResult()
+}
+```
+
+### 8.9 自我认知和行为准则修改工具 (SelfAwareTool)
+
+**设计方案**: 
+- 不允许修改核心属性（id, createdAt）
+- 只允许修改与提示词相关的可配置内容
+- 保留版本历史供用户回退
+- 无需用户审核，自动生效
+
+```kotlin
+/**
+ * 自我认知工具 - 查看和修改角色的认知和行为准则
+ * 
+ * 限制说明：
+ * - 核心属性（id, createdAt）不可修改
+ * - 只允许修改与提示词相关的内容（name, description, personality, behaviorRules, systemPrompt）
+ * - 修改自动生效，无需审核
+ * - 保留版本历史供用户回退
+ */
+class SelfAwareTool(
+    private val workspacePath: Path,
+    private val roleId: String
+) {
+    private val configPath = workspacePath.resolve("config")
+    private val profilePath = configPath.resolve("profile.json")
+    private val behaviorRulesPath = configPath.resolve("behavior_rules.md")
+    private val systemPromptPath = configPath.resolve("system_prompt.md")
+    private val versionsPath = configPath.resolve("versions")
+    
+    /**
+     * 获取当前角色配置
+     * @return 角色配置（只读视图，核心属性不可修改）
+     */
+    suspend fun getProfile(): SelfAwareResult {
+        return withContext(Dispatchers.IO) {
+            try {
+                if (!Files.exists(profilePath)) {
+                    return@withContext SelfAwareResult.Error("角色配置文件不存在")
+                }
+                
+                val content = Files.readString(profilePath)
+                val profile = Json.decodeFromString<AIRoleProfile>(content)
+                SelfAwareResult.ProfileSuccess(profile)
+            } catch (e: Exception) {
+                SelfAwareResult.Error("读取配置失败: ${e.message}")
+            }
+        }
+    }
+    
+    /**
+     * 更新角色可配置属性
+     * 可修改：name, description, personality
+     * 不可修改：id, createdAt
+     * @param updates 要更新的字段
+     * @return 更新结果
+     */
+    suspend fun updateProfile(
+        updates: ProfileUpdates
+    ): SelfAwareResult {
+        return withContext(Dispatchers.IO) {
+            try {
+                val currentProfile = when (val result = getProfile()) {
+                    is SelfAwareResult.ProfileSuccess -> result.profile
+                    else -> return@withContext SelfAwareResult.Error("无法读取当前配置")
+                }
+                
+                // 备份当前配置
+                backupConfigFile(profilePath, "profile")
+                
+                // 只更新允许修改的字段
+                val newProfile = currentProfile.copy(
+                    name = updates.name ?: currentProfile.name,
+                    description = updates.description ?: currentProfile.description,
+                    personality = updates.personality ?: currentProfile.personality,
+                    updatedAt = Instant.now()
+                    // id 和 createdAt 不允许修改
+                )
+                
+                Files.writeString(
+                    profilePath,
+                    Json.encodeToString(newProfile)
+                )
+                
+                // 触发角色重新加载配置
+                notifyConfigChanged()
+                
+                SelfAwareResult.Success("角色配置已更新")
+            } catch (e: Exception) {
+                SelfAwareResult.Error("更新配置失败: ${e.message}")
+            }
+        }
+    }
+    
+    /**
+     * 获取行为准则
+     * @return 行为准则内容
+     */
+    suspend fun getBehaviorRules(): SelfAwareResult {
+        return withContext(Dispatchers.IO) {
+            try {
+                if (!Files.exists(behaviorRulesPath)) {
+                    return@withContext SelfAwareResult.BehaviorRulesSuccess("")
+                }
+                
+                val content = Files.readString(behaviorRulesPath)
+                SelfAwareResult.BehaviorRulesSuccess(content)
+            } catch (e: Exception) {
+                SelfAwareResult.Error("读取行为准则失败: ${e.message}")
+            }
+        }
+    }
+    
+    /**
+     * 更新行为准则
+     * @param newRules 新的行为准则内容
+     * @return 更新结果
+     */
+    suspend fun updateBehaviorRules(
+        newRules: String
+    ): SelfAwareResult {
+        return withContext(Dispatchers.IO) {
+            try {
+                // 备份旧规则（版本化管理）
+                backupConfigFile(behaviorRulesPath, "behavior_rules")
+                
+                Files.writeString(behaviorRulesPath, newRules)
+                
+                // 触发角色重新加载配置
+                notifyConfigChanged()
+                
+                SelfAwareResult.Success("行为准则已更新")
+            } catch (e: Exception) {
+                SelfAwareResult.Error("更新行为准则失败: ${e.message}")
+            }
+        }
+    }
+    
+    /**
+     * 获取系统提示词
+     * @return 系统提示词内容
+     */
+    suspend fun getSystemPrompt(): SelfAwareResult {
+        return withContext(Dispatchers.IO) {
+            try {
+                if (!Files.exists(systemPromptPath)) {
+                    return@withContext SelfAwareResult.SystemPromptSuccess("")
+                }
+                
+                val content = Files.readString(systemPromptPath)
+                SelfAwareResult.SystemPromptSuccess(content)
+            } catch (e: Exception) {
+                SelfAwareResult.Error("读取系统提示词失败: ${e.message}")
+            }
+        }
+    }
+    
+    /**
+     * 更新系统提示词
+     * @param newPrompt 新的系统提示词
+     * @return 更新结果
+     */
+    suspend fun updateSystemPrompt(
+        newPrompt: String
+    ): SelfAwareResult {
+        return withContext(Dispatchers.IO) {
+            try {
+                // 备份旧提示词（版本化管理）
+                backupConfigFile(systemPromptPath, "system_prompt")
+                
+                Files.writeString(systemPromptPath, newPrompt)
+                
+                // 触发角色重新加载配置
+                notifyConfigChanged()
+                
+                SelfAwareResult.Success("系统提示词已更新")
+            } catch (e: Exception) {
+                SelfAwareResult.Error("更新系统提示词失败: ${e.message}")
+            }
+        }
+    }
+    
+    /**
+     * 获取配置历史版本列表
+     * @param configType 配置类型（profile, behavior_rules, system_prompt）
+     * @return 版本列表（按时间倒序）
+     */
+    suspend fun getConfigVersions(configType: String): List<ConfigVersion> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val typeVersionsPath = versionsPath.resolve(configType)
+                if (!Files.exists(typeVersionsPath)) {
+                    return@withContext emptyList()
+                }
+                
+                Files.list(typeVersionsPath)
+                    .filter { it.fileName.toString().matches(Regex("\\d{17}_.*")) }
+                    .map { path ->
+                        val fileName = path.fileName.toString()
+                        val timestamp = fileName.substring(0, 17).toLong()
+                        ConfigVersion(
+                            timestamp = timestamp,
+                            fileName = fileName,
+                            path = path.toString()
+                        )
+                    }
+                    .sortedByDescending { it.timestamp }
+                    .toList()
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+    }
+    
+    /**
+     * 回滚配置到指定版本
+     * @param configType 配置类型
+     * @param timestamp 版本时间戳
+     * @return 回滚结果
+     */
+    suspend fun rollbackConfig(
+        configType: String,
+        timestamp: Long
+    ): SelfAwareResult {
+        return withContext(Dispatchers.IO) {
+            try {
+                val typeVersionsPath = versionsPath.resolve(configType)
+                val backupFile = typeVersionsPath.resolve("${timestamp}_${configType}.backup")
+                
+                if (!Files.exists(backupFile)) {
+                    return@withContext SelfAwareResult.Error("版本不存在: $timestamp")
+                }
+                
+                // 备份当前版本
+                val targetPath = when (configType) {
+                    "profile" -> profilePath
+                    "behavior_rules" -> behaviorRulesPath
+                    "system_prompt" -> systemPromptPath
+                    else -> return@withContext SelfAwareResult.Error("未知的配置类型: $configType")
+                }
+                backupConfigFile(targetPath, configType)
+                
+                // 恢复指定版本
+                Files.copy(backupFile, targetPath, StandardCopyOption.REPLACE_EXISTING)
+                
+                // 触发角色重新加载配置
+                notifyConfigChanged()
+                
+                SelfAwareResult.Success("配置已回滚到版本 ${formatTimestamp(timestamp)}")
+            } catch (e: Exception) {
+                SelfAwareResult.Error("回滚失败: ${e.message}")
+            }
+        }
+    }
+    
+    /**
+     * 备份配置文件
+     */
+    private suspend fun backupConfigFile(sourcePath: Path, configType: String) {
+        if (!Files.exists(sourcePath)) {
+            return
+        }
+        
+        Files.createDirectories(versionsPath.resolve(configType))
+        
+        val timestamp = System.currentTimeMillis()
+        val backupFileName = "${timestamp}_${configType}.backup"
+        val backupPath = versionsPath.resolve(configType).resolve(backupFileName)
+        
+        Files.copy(sourcePath, backupPath, StandardCopyOption.REPLACE_EXISTING)
+        
+        // 清理旧版本（保留最近20个版本）
+        cleanupOldVersions(configType, keepCount = 20)
+    }
+    
+    /**
+     * 清理旧版本
+     */
+    private suspend fun cleanupOldVersions(configType: String, keepCount: Int) {
+        val typeVersionsPath = versionsPath.resolve(configType)
+        if (!Files.exists(typeVersionsPath)) {
+            return
+        }
+        
+        val versions = Files.list(typeVersionsPath)
+            .sorted { p1, p2 ->
+                val t1 = p1.fileName.toString().substring(0, 17).toLongOrNull() ?: 0
+                val t2 = p2.fileName.toString().substring(0, 17).toLongOrNull() ?: 0
+                t2.compareTo(t1) // 倒序
+            }
+            .toList()
+        
+        if (versions.size > keepCount) {
+            versions.drop(keepCount).forEach { Files.deleteIfExists(it) }
+        }
+    }
+    
+    /**
+     * 格式化时间戳
+     */
+    private fun formatTimestamp(timestamp: Long): String {
+        val instant = Instant.ofEpochMilli(timestamp)
+        return instant.toString()
+    }
+    
+    /**
+     * 通知配置已更改
+     */
+    private fun notifyConfigChanged() {
+        // 发送配置变更事件，触发角色重新加载
+    }
+}
+
+@Serializable
+data class AIRoleProfile(
+    val id: String,              // 核心属性，不可修改
+    val name: String,            // 可修改
+    val description: String,     // 可修改
+    val personality: String,     // 可修改
+    val createdAt: Instant,      // 核心属性，不可修改
+    val updatedAt: Instant       // 自动更新
+)
+
+data class ProfileUpdates(
+    val name: String? = null,
+    val description: String? = null,
+    val personality: String? = null
+    // 注意：不包含 id 和 createdAt
+)
+
+data class ConfigVersion(
+    val timestamp: Long,
+    val fileName: String,
+    val path: String
+)
+
+sealed class SelfAwareResult {
+    data class ProfileSuccess(val profile: AIRoleProfile) : SelfAwareResult()
+    data class BehaviorRulesSuccess(val content: String) : SelfAwareResult()
+    data class SystemPromptSuccess(val content: String) : SelfAwareResult()
+    data class Success(val message: String) : SelfAwareResult()
+    data class Error(val message: String) : SelfAwareResult()
+}
+```
+
+### 8.10 工具管理器
+
+```kotlin
+/**
+ * AI角色工具管理器 - 统一管理角色的所有工具
+ * 
+ * 说明：
+ * - 所有AI角色默认拥有8个基础工具
+ * - 基础工具不受技能黑白名单控制
+ * - 扩展技能（installed目录）受黑白名单控制
+ * - 自定义技能（custom目录）不受黑白名单限制
+ */
+class AIToolManager(
+    private val roleId: String,
+    private val workspacePath: Path,
+    private val recycleBinPath: Path,
+    private val mem0Client: Mem0Client,
+    private val baseCdpPort: Int = 9222
+) {
+    // 基础工具 - 所有AI角色默认拥有，不受黑白名单控制
+    val readTool: ReadTool = ReadTool(workspacePath)
+    val findTool: FindTool = FindTool(workspacePath)
+    val editTool: EditTool = EditTool(workspacePath)
+    val deleteTool: DeleteTool = DeleteTool(workspacePath, recycleBinPath, roleId)
+    val browserTool: BrowserTool = BrowserTool(roleId, workspacePath, baseCdpPort)
+    val skillTool: SkillTool = SkillTool(workspacePath, roleId)
+    val memoryTool: MemoryTool = MemoryTool(mem0Client, roleId)
+    val selfAwareTool: SelfAwareTool = SelfAwareTool(workspacePath, roleId)
+    
+    /**
+     * 获取所有基础工具列表
+     * 用于向AI模型注册工具调用能力
+     */
+    fun getBasicTools(): List<ToolDefinition> {
+        return listOf(
+            ToolDefinition(
+                name = "read",
+                description = "读取工作区内的文件内容，支持指定行数范围",
+                parameters = listOf(
+                    ToolParameter("path", "string", "文件路径（相对于工作区）", true),
+                    ToolParameter("offset", "integer", "起始行号（可选）", false),
+                    ToolParameter("limit", "integer", "读取行数（可选）", false)
+                )
+            ),
+            ToolDefinition(
+                name = "find",
+                description = "在工作区内查找文件，支持通配符",
+                parameters = listOf(
+                    ToolParameter("pattern", "string", "通配符模式，如 *.kt", true),
+                    ToolParameter("path", "string", "搜索起始路径（可选，默认为当前目录）", false)
+                )
+            ),
+            ToolDefinition(
+                name = "edit",
+                description = "修改工作区内的文件内容",
+                parameters = listOf(
+                    ToolParameter("path", "string", "文件路径", true),
+                    ToolParameter("oldString", "string", "原文内容（用于定位）", true),
+                    ToolParameter("newString", "string", "新内容（用于替换）", true)
+                )
+            ),
+            ToolDefinition(
+                name = "delete",
+                description = "删除工作区内的文件或目录（软删除到回收站）",
+                parameters = listOf(
+                    ToolParameter("path", "string", "要删除的路径", true)
+                )
+            ),
+            ToolDefinition(
+                name = "browser",
+                description = "浏览器控制工具，支持导航、获取内容、执行脚本、截图等",
+                parameters = listOf(
+                    ToolParameter("action", "string", "操作类型：navigate/getContent/executeScript/screenshot/click/type", true),
+                    ToolParameter("url", "string", "URL（navigate操作）", false),
+                    ToolParameter("script", "string", "JavaScript代码（executeScript操作）", false),
+                    ToolParameter("outputPath", "string", "截图保存路径（screenshot操作）", false),
+                    ToolParameter("selector", "string", "CSS选择器（click/type操作）", false),
+                    ToolParameter("text", "string", "输入文本（type操作）", false)
+                )
+            ),
+            ToolDefinition(
+                name = "skill",
+                description = "创建和管理角色的自定义技能",
+                parameters = listOf(
+                    ToolParameter("action", "string", "操作类型：create/update/execute/getVersions/rollback", true),
+                    ToolParameter("skillId", "string", "技能ID", false),
+                    ToolParameter("name", "string", "技能名称（create操作）", false),
+                    ToolParameter("description", "string", "技能描述（create操作）", false),
+                    ToolParameter("pythonCode", "string", "Python代码（create/update操作）", false),
+                    ToolParameter("dependencies", "array", "依赖包列表（create操作）", false),
+                    ToolParameter("params", "object", "执行参数（execute操作）", false),
+                    ToolParameter("version", "string", "版本号（rollback操作）", false)
+                )
+            ),
+            ToolDefinition(
+                name = "memory",
+                description = "从mem0检索角色记忆",
+                parameters = listOf(
+                    ToolParameter("action", "string", "操作类型：search/getRecent/getByType", true),
+                    ToolParameter("query", "string", "查询内容（search操作）", false),
+                    ToolParameter("type", "string", "记忆类型（getByType操作）", false),
+                    ToolParameter("limit", "integer", "返回数量限制（可选）", false)
+                )
+            ),
+            ToolDefinition(
+                name = "selfAware",
+                description = "查看和修改角色的认知和行为准则",
+                parameters = listOf(
+                    ToolParameter("action", "string", "操作类型：getProfile/updateProfile/getBehaviorRules/updateBehaviorRules/getSystemPrompt/updateSystemPrompt/getConfigVersions/rollbackConfig", true),
+                    ToolParameter("name", "string", "角色名称（updateProfile操作）", false),
+                    ToolParameter("description", "string", "角色描述（updateProfile操作）", false),
+                    ToolParameter("personality", "string", "性格特征（updateProfile操作）", false),
+                    ToolParameter("newRules", "string", "新行为准则（updateBehaviorRules操作）", false),
+                    ToolParameter("newPrompt", "string", "新系统提示词（updateSystemPrompt操作）", false),
+                    ToolParameter("configType", "string", "配置类型（getConfigVersions/rollbackConfig操作）", false),
+                    ToolParameter("timestamp", "integer", "版本时间戳（rollbackConfig操作）", false)
+                )
+            )
+        )
+    }
+    
+    /**
+     * 关闭所有工具资源
+     */
+    suspend fun close() {
+        browserTool.close()
+    }
+}
+
+data class ToolDefinition(
+    val name: String,
+    val description: String,
+    val parameters: List<ToolParameter>
+)
+
+data class ToolParameter(
+    val name: String,
+    val type: String,
+    val description: String,
+    val required: Boolean
+)
+```
+
+### 8.11 工具调用协议
+
+```kotlin
+/**
+ * 工具调用请求
+ */
+@Serializable
+data class ToolCallRequest(
+    val toolName: String,
+    val action: String,
+    val parameters: Map<String, JsonElement>
+)
+
+/**
+ * 工具调用响应
+ */
+@Serializable
+data class ToolCallResponse(
+    val success: Boolean,
+    val data: JsonElement? = null,
+    val error: String? = null
+)
+
+/**
+ * 工具调用处理器
+ */
+class ToolCallHandler(
+    private val toolManager: AIToolManager
+) {
+    suspend fun handle(request: ToolCallRequest): ToolCallResponse {
+        return try {
+            val result = when (request.toolName) {
+                "read" -> handleReadTool(request)
+                "find" -> handleFindTool(request)
+                "edit" -> handleEditTool(request)
+                "delete" -> handleDeleteTool(request)
+                "browser" -> handleBrowserTool(request)
+                "skill" -> handleSkillTool(request)
+                "memory" -> handleMemoryTool(request)
+                "selfAware" -> handleSelfAwareTool(request)
+                else -> throw IllegalArgumentException("未知工具: ${request.toolName}")
+            }
+            
+            ToolCallResponse(
+                success = true,
+                data = Json.encodeToJsonElement(result)
+            )
+        } catch (e: Exception) {
+            ToolCallResponse(
+                success = false,
+                error = e.message
+            )
+        }
+    }
+    
+    private suspend fun handleReadTool(request: ToolCallRequest): ReadResult {
+        val path = request.parameters["path"]?.jsonPrimitive?.content
+            ?: throw IllegalArgumentException("缺少path参数")
+        val offset = request.parameters["offset"]?.jsonPrimitive?.intOrNull
+        val limit = request.parameters["limit"]?.jsonPrimitive?.intOrNull
+        
+        return toolManager.readTool.read(path, offset, limit)
+    }
+    
+    private suspend fun handleFindTool(request: ToolCallRequest): FindResult {
+        val pattern = request.parameters["pattern"]?.jsonPrimitive?.content
+            ?: throw IllegalArgumentException("缺少pattern参数")
+        val path = request.parameters["path"]?.jsonPrimitive?.content ?: "."
+        
+        return toolManager.findTool.find(pattern, path)
+    }
+    
+    private suspend fun handleEditTool(request: ToolCallRequest): EditResult {
+        val path = request.parameters["path"]?.jsonPrimitive?.content
+            ?: throw IllegalArgumentException("缺少path参数")
+        val oldString = request.parameters["oldString"]?.jsonPrimitive?.content
+            ?: throw IllegalArgumentException("缺少oldString参数")
+        val newString = request.parameters["newString"]?.jsonPrimitive?.content
+            ?: throw IllegalArgumentException("缺少newString参数")
+        
+        return toolManager.editTool.edit(path, oldString, newString)
+    }
+    
+    private suspend fun handleDeleteTool(request: ToolCallRequest): DeleteResult {
+        val path = request.parameters["path"]?.jsonPrimitive?.content
+            ?: throw IllegalArgumentException("缺少path参数")
+        
+        return toolManager.deleteTool.delete(path)
+    }
+    
+    private suspend fun handleBrowserTool(request: ToolCallRequest): BrowserResult {
+        return when (request.action) {
+            "navigate" -> {
+                val url = request.parameters["url"]?.jsonPrimitive?.content
+                    ?: throw IllegalArgumentException("缺少url参数")
+                toolManager.browserTool.navigate(url)
+            }
+            "getContent" -> toolManager.browserTool.getContent()
+            "executeScript" -> {
+                val script = request.parameters["script"]?.jsonPrimitive?.content
+                    ?: throw IllegalArgumentException("缺少script参数")
+                toolManager.browserTool.executeScript(script)
+            }
+            "screenshot" -> {
+                val outputPath = request.parameters["outputPath"]?.jsonPrimitive?.content
+                    ?: throw IllegalArgumentException("缺少outputPath参数")
+                toolManager.browserTool.screenshot(outputPath)
+            }
+            else -> throw IllegalArgumentException("未知的浏览器操作: ${request.action}")
+        }
+    }
+    
+    private suspend fun handleSkillTool(request: ToolCallRequest): SkillResult {
+        return when (request.action) {
+            "create" -> {
+                val skillId = request.parameters["skillId"]?.jsonPrimitive?.content
+                    ?: throw IllegalArgumentException("缺少skillId参数")
+                val name = request.parameters["name"]?.jsonPrimitive?.content
+                    ?: throw IllegalArgumentException("缺少name参数")
+                val description = request.parameters["description"]?.jsonPrimitive?.content
+                    ?: throw IllegalArgumentException("缺少description参数")
+                val pythonCode = request.parameters["pythonCode"]?.jsonPrimitive?.content
+                    ?: throw IllegalArgumentException("缺少pythonCode参数")
+                toolManager.skillTool.createSkill(skillId, name, description, pythonCode)
+            }
+            "update" -> {
+                val skillId = request.parameters["skillId"]?.jsonPrimitive?.content
+                    ?: throw IllegalArgumentException("缺少skillId参数")
+                val pythonCode = request.parameters["pythonCode"]?.jsonPrimitive?.content
+                    ?: throw IllegalArgumentException("缺少pythonCode参数")
+                toolManager.skillTool.updateSkill(skillId, pythonCode)
+            }
+            else -> throw IllegalArgumentException("未知的技能操作: ${request.action}")
+        }
+    }
+    
+    private suspend fun handleMemoryTool(request: ToolCallRequest): MemoryResult {
+        return when (request.action) {
+            "search" -> {
+                val query = request.parameters["query"]?.jsonPrimitive?.content
+                    ?: throw IllegalArgumentException("缺少query参数")
+                val limit = request.parameters["limit"]?.jsonPrimitive?.intOrNull ?: 10
+                toolManager.memoryTool.search(query, limit)
+            }
+            "getRecent" -> {
+                val limit = request.parameters["limit"]?.jsonPrimitive?.intOrNull ?: 10
+                toolManager.memoryTool.getRecent(limit)
+            }
+            "getByType" -> {
+                val type = request.parameters["type"]?.jsonPrimitive?.content
+                    ?: throw IllegalArgumentException("缺少type参数")
+                val limit = request.parameters["limit"]?.jsonPrimitive?.intOrNull ?: 10
+                toolManager.memoryTool.getByType(type, limit)
+            }
+            else -> throw IllegalArgumentException("未知的记忆操作: ${request.action}")
+        }
+    }
+    
+    private suspend fun handleSelfAwareTool(request: ToolCallRequest): SelfAwareResult {
+        return when (request.action) {
+            "getProfile" -> toolManager.selfAwareTool.getProfile()
+            "updateProfile" -> {
+                val name = request.parameters["name"]?.jsonPrimitive?.content
+                val description = request.parameters["description"]?.jsonPrimitive?.content
+                val personality = request.parameters["personality"]?.jsonPrimitive?.content
+                toolManager.selfAwareTool.updateProfile(
+                    ProfileUpdates(name, description, personality)
+                )
+            }
+            "getBehaviorRules" -> toolManager.selfAwareTool.getBehaviorRules()
+            "updateBehaviorRules" -> {
+                val newRules = request.parameters["newRules"]?.jsonPrimitive?.content
+                    ?: throw IllegalArgumentException("缺少newRules参数")
+                toolManager.selfAwareTool.updateBehaviorRules(newRules)
+            }
+            "getSystemPrompt" -> toolManager.selfAwareTool.getSystemPrompt()
+            "updateSystemPrompt" -> {
+                val newPrompt = request.parameters["newPrompt"]?.jsonPrimitive?.content
+                    ?: throw IllegalArgumentException("缺少newPrompt参数")
+                toolManager.selfAwareTool.updateSystemPrompt(newPrompt)
+            }
+            else -> throw IllegalArgumentException("未知的自我认知操作: ${request.action}")
+        }
+    }
+}
+```
+
+### 8.12 工作区目录结构（含工具）
+
+```
+workspaces/
+└── {ai_role_id}/
+    ├── config/
+    │   ├── profile.json          # 角色配置（核心属性不可修改）
+    │   ├── system_prompt.md      # 系统提示词（可修改，有版本历史）
+    │   ├── behavior_rules.md     # 行为准则（可修改，有版本历史）
+    │   ├── model_config.json     # 模型配置
+    │   └── versions/             # 配置文件版本历史
+    │       ├── profile/          # profile.json 的历史版本
+    │       ├── behavior_rules/   # behavior_rules.md 的历史版本
+    │       └── system_prompt/    # system_prompt.md 的历史版本
+    ├── skills/
+    │   ├── whitelist.json        # 技能白名单（黑白名单控制）
+    │   ├── blacklist.json        # 技能黑名单（黑白名单控制）
+    │   ├── installed/            # 已安装技能（黑白名单控制）
+    │   │   ├── skill_1/
+    │   │   ├── skill_2/
+    │   │   └── ...
+    │   └── custom/               # 角色自定义技能（不受黑白名单限制）
+    │       ├── custom_skill_1/
+    │       │   ├── manifest.json
+    │       │   ├── main.py
+    │       │   └── versions/     # 技能代码版本历史
+    │       └── ...
+    ├── memory/                   # (mem0 管理的记忆数据)
+    ├── sessions/                 # 会话历史
+    ├── tools/                    # 工具配置和状态
+    │   ├── browser/              # 浏览器数据
+    │   │   └── user_data/        # 独立的浏览器用户数据
+    │   ├── python_venv/          # Python虚拟环境（技能执行用）
+    │   └── tool_state.json       # 工具状态
+    └── fatigue.json              # 疲劳值数据
+
+recycle_bin/                      # 回收站目录
+├── {role_id}-{timestamp}-file1.txt
+├── {role_id}-{timestamp}-folder1/
+└── ...
+```
+
+### 8.13 基础工具与技能黑白名单的关系
+
+**基础工具**：所有AI角色默认拥有，不受黑白名单控制
+- 读取工具 (ReadTool)
+- 查找工具 (FindTool)
+- 修改工具 (EditTool)
+- 删除工具 (DeleteTool)
+- 浏览器工具 (BrowserTool)
+- 技能创建和修改工具 (SkillTool) - 用于创建自定义技能
+- 记忆查找工具 (MemoryTool)
+- 自我认知和行为准则修改工具 (SelfAwareTool)
+
+**扩展技能**：通过黑白名单控制访问权限
+- 位于 `skills/installed/` 目录
+- 受 `whitelist.json` 和 `blacklist.json` 控制
+- 白名单优先：如果在白名单中，允许使用
+- 黑名单过滤：如果不在白名单中，检查是否在黑名单中
+
+**自定义技能**：角色自己创建的技能
+- 位于 `skills/custom/` 目录
+- 不受黑白名单限制（因为是角色自己创建的）
+- 有独立的版本管理机制
+
+## 参考资料
+
+- [Mem0 官方文档](https://docs.mem0.ai/)
+- [LM Studio API 文档](https://lmstudio.ai/docs)
+- [Ktor 官方文档](https://ktor.io/)
+- [Kotlin 协程文档](https://kotlinlang.org/docs/coroutines-overview.html)
+- [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/)
+- [OpenClaw 项目参考](../references/openclaw/)
+- [NanoBot 项目参考](../references/nanobot/)
