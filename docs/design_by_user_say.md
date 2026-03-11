@@ -4838,6 +4838,1053 @@ recycle_bin/                      # 回收站目录
 - 不受黑白名单限制（因为是角色自己创建的）
 - 有独立的版本管理机制
 
+## 9. 客户端界面设计
+
+### 9.1 设计原则
+
+#### 界面风格
+- **Notion卡片式布局**：采用类似Notion的卡片式布局，内容以卡片形式组织，层次分明
+- **Apple Human Interface Guidelines**：遵循Apple的设计语言，注重清晰、尊重、深度三大原则
+- **易用性**：用户操作直观，交互流畅，降低学习成本
+- **跨平台一致性**：在不同平台（Desktop/Android/iOS/Web）上保持一致的视觉体验
+
+#### 设计目标
+- 采用卡片式布局，内容模块化呈现
+- 使用圆角、阴影创造层次感
+- 提供流畅的动画过渡效果
+- 确保可访问性（Accessibility）
+- 多色填充图标，视觉丰富但不过度
+
+### 9.2 主题系统
+
+#### 主题模式
+- **亮色主题（Light）**：适合日间使用，高对比度确保可读性
+- **暗色主题（Dark）**：适合夜间使用，减少眼睛疲劳
+- **自动切换**：根据系统主题自动适配
+- **手动设置**：用户可在设置中手动选择主题模式
+
+#### 主题配置结构
+
+```kotlin
+/**
+ * 主题配置数据类
+ */
+@Serializable
+data class ThemeConfig(
+    val mode: ThemeMode = ThemeMode.AUTO,
+    val lightColors: ColorScheme = LightColorScheme,
+    val darkColors: ColorScheme = DarkColorScheme,
+    val typography: Typography = DefaultTypography,
+    val shapes: Shapes = DefaultShapes
+)
+
+enum class ThemeMode {
+    LIGHT,      // 强制亮色
+    DARK,       // 强制暗色
+    AUTO        // 跟随系统
+}
+
+/**
+ * 颜色方案 - 基于 Apple Human Interface Guidelines
+ * 使用更柔和、自然的色调
+ */
+@Serializable
+data class ColorScheme(
+    val primary: String,           // 主色调
+    val onPrimary: String,         // 主色调上的文字
+    val secondary: String,         // 次色调
+    val onSecondary: String,       // 次色调上的文字
+    val background: String,        // 背景色
+    val onBackground: String,      // 背景上的文字
+    val surface: String,           // 表面色（卡片、对话框等）
+    val onSurface: String,         // 表面上的文字
+    val error: String,             // 错误色
+    val onError: String,           // 错误色上的文字
+    val outline: String,           // 边框色
+    val surfaceVariant: String,    // 表面变体色
+    val onSurfaceVariant: String   // 表面变体上的文字
+)
+
+// 亮色主题默认配色 - Apple风格
+val LightColorScheme = ColorScheme(
+    primary = "#007AFF",           // iOS系统蓝
+    onPrimary = "#FFFFFF",
+    secondary = "#5856D6",         // iOS紫色
+    onSecondary = "#FFFFFF",
+    background = "#F5F5F7",        // Apple背景灰
+    onBackground = "#1D1D1F",      // Apple文字黑
+    surface = "#FFFFFF",           // 纯白卡片
+    onSurface = "#1D1D1F",
+    error = "#FF3B30",             // iOS红
+    onError = "#FFFFFF",
+    outline = "#E5E5EA",           // iOS分隔线色
+    surfaceVariant = "#F2F2F7",    // iOS系统灰
+    onSurfaceVariant = "#8E8E93"   // iOS次级文字
+)
+
+// 暗色主题默认配色 - Apple风格
+val DarkColorScheme = ColorScheme(
+    primary = "#0A84FF",           // iOS系统蓝（暗色）
+    onPrimary = "#FFFFFF",
+    secondary = "#5E5CE6",         // iOS紫色（暗色）
+    onSecondary = "#FFFFFF",
+    background = "#000000",        // 纯黑背景
+    onBackground = "#FFFFFF",
+    surface = "#1C1C1E",           // iOS卡片色（暗色）
+    onSurface = "#FFFFFF",
+    error = "#FF453A",             // iOS红（暗色）
+    onError = "#FFFFFF",
+    outline = "#38383A",           // iOS分隔线色（暗色）
+    surfaceVariant = "#2C2C2E",    // iOS系统灰（暗色）
+    onSurfaceVariant = "#8E8E93"   // iOS次级文字（暗色）
+)
+    background = "#1C1B1F",
+    onBackground = "#E6E1E5",
+    surface = "#1C1B1F",
+    onSurface = "#E6E1E5",
+    error = "#F2B8B5",
+    onError = "#601410",
+    outline = "#938F99",
+    surfaceVariant = "#49454F",
+    onSurfaceVariant = "#CAC4D0"
+)
+```
+
+#### 主题管理器
+
+使用 `multiplatform-settings` 进行跨平台主题持久化：
+
+```kotlin
+// build.gradle.kts 依赖
+dependencies {
+    implementation("com.russhwolf:multiplatform-settings:1.3.0")
+    implementation("com.russhwolf:multiplatform-settings-coroutines:1.3.0")
+    
+    // Desktop平台
+    implementation("com.russhwolf:multiplatform-settings-jvm:1.3.0")
+    // Web平台
+    implementation("com.russhwolf:multiplatform-settings-js:1.3.0")
+}
+```
+
+```kotlin
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.graphics.Color
+import com.russhwolf.settings.ObservableSettings
+import com.russhwolf.settings.Settings
+import com.russhwolf.settings.coroutines.FlowSettings
+import com.russhwolf.settings.coroutines.toFlowSettings
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+
+/**
+ * 主题模式
+ */
+@Serializable
+enum class ThemeMode {
+    LIGHT, DARK, AUTO
+}
+
+/**
+ * 主题配置
+ */
+@Serializable
+data class ThemeConfig(
+    val mode: ThemeMode = ThemeMode.AUTO
+)
+
+/**
+ * Apple风格颜色方案
+ */
+private val LightColors = lightColorScheme(
+    primary = Color(0xFF007AFF),
+    onPrimary = Color(0xFFFFFFFF),
+    secondary = Color(0xFF5856D6),
+    onSecondary = Color(0xFFFFFFFF),
+    background = Color(0xFFF5F5F7),
+    onBackground = Color(0xFF1D1D1F),
+    surface = Color(0xFFFFFFFF),
+    onSurface = Color(0xFF1D1D1F),
+    error = Color(0xFFFF3B30),
+    onError = Color(0xFFFFFFFF),
+    outline = Color(0xFFE5E5EA),
+    surfaceVariant = Color(0xFFF2F2F7),
+    onSurfaceVariant = Color(0xFF8E8E93)
+)
+
+private val DarkColors = darkColorScheme(
+    primary = Color(0xFF0A84FF),
+    onPrimary = Color(0xFFFFFFFF),
+    secondary = Color(0xFF5E5CE6),
+    onSecondary = Color(0xFFFFFFFF),
+    background = Color(0xFF000000),
+    onBackground = Color(0xFFFFFFFF),
+    surface = Color(0xFF1C1C1E),
+    onSurface = Color(0xFFFFFFFF),
+    error = Color(0xFFFF453A),
+    onError = Color(0xFFFFFFFF),
+    outline = Color(0xFF38383A),
+    surfaceVariant = Color(0xFF2C2C2E),
+    onSurfaceVariant = Color(0xFF8E8E93)
+)
+
+/**
+ * 主题管理器
+ * 使用 multiplatform-settings 实现跨平台主题持久化
+ * 
+ * 注意：经过可行性验证，使用基础API而非序列化扩展函数更稳定
+ */
+class ThemeManager(private val settings: Settings) {
+    private val flowSettings: FlowSettings = (settings as ObservableSettings).toFlowSettings()
+    private val json = Json { ignoreUnknownKeys = true }
+    
+    /**
+     * 当前主题配置流
+     * 使用Flow实现实时响应主题变更
+     */
+    val themeConfig: Flow<ThemeConfig> = flowSettings
+        .getStringOrNullFlow(KEY_THEME_CONFIG)
+        .map { jsonString ->
+            jsonString?.let {
+                try {
+                    json.decodeFromString<ThemeConfig>(it)
+                } catch (e: Exception) {
+                    ThemeConfig()
+                }
+            } ?: ThemeConfig()
+        }
+    
+    /**
+     * 获取当前有效的颜色方案
+     * 根据主题模式和系统主题返回对应的颜色方案
+     */
+    @Composable
+    fun getColorScheme(config: ThemeConfig): androidx.compose.material3.ColorScheme {
+        val isSystemDark = isSystemInDarkTheme()
+        return when (config.mode) {
+            ThemeMode.LIGHT -> LightColors
+            ThemeMode.DARK -> DarkColors
+            ThemeMode.AUTO -> if (isSystemDark) DarkColors else LightColors
+        }
+    }
+    
+    /**
+     * 切换主题模式
+     * 保存到Settings并自动通知所有订阅者
+     */
+    suspend fun setThemeMode(mode: ThemeMode) {
+        val currentJson = settings.getStringOrNull(KEY_THEME_CONFIG)
+        val current = currentJson?.let {
+            try {
+                json.decodeFromString<ThemeConfig>(it)
+            } catch (e: Exception) {
+                ThemeConfig()
+            }
+        } ?: ThemeConfig()
+        
+        val newConfig = current.copy(mode = mode)
+        settings.putString(
+            KEY_THEME_CONFIG, 
+            json.encodeToString(ThemeConfig.serializer(), newConfig)
+        )
+    }
+    
+    companion object {
+        private const val KEY_THEME_CONFIG = "theme_config"
+    }
+}
+
+/**
+ * 应用主题
+ * 使用示例：
+ * ```
+ * AppTheme(themeManager) {
+ *     // 应用内容
+ * }
+ * ```
+ */
+@Composable
+fun AppTheme(
+    themeManager: ThemeManager,
+    content: @Composable () -> Unit
+) {
+    val config = themeManager.themeConfig.collectAsState(ThemeConfig()).value
+    val colorScheme = themeManager.getColorScheme(config)
+    
+    MaterialTheme(
+        colorScheme = colorScheme,
+        content = content
+    )
+}
+```
+
+#### 平台特定实现
+
+**Desktop平台** (使用Java Preferences)：
+```kotlin
+// desktopMain/kotlin/main.kt
+import androidx.compose.ui.window.Window
+import androidx.compose.ui.window.application
+import com.russhwolf.settings.PreferencesSettings
+import java.util.prefs.Preferences
+
+fun main() = application {
+    val preferences = Preferences.userRoot().node("com.example.app")
+    val settings = PreferencesSettings(preferences)
+    
+    Window(onCloseRequest = ::exitApplication) {
+        App(settings)
+    }
+}
+```
+
+**Web平台** (使用localStorage)：
+```kotlin
+// wasmJsMain/kotlin/main.kt
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.window.CanvasBasedWindow
+import com.russhwolf.settings.StorageSettings
+import kotlinx.browser.localStorage
+import org.jetbrains.skiko.wasm.onWasmReady
+
+@OptIn(ExperimentalComposeUiApi::class)
+fun main() {
+    onWasmReady {
+        val settings = StorageSettings(localStorage)
+        
+        CanvasBasedWindow(canvasElementId = "ComposeTarget") {
+            App(settings)
+        }
+    }
+}
+```
+```
+
+### 9.3 图标系统
+
+#### 图标设计规范
+
+**风格**：填充多色图标（Filled Multi-color Icons）
+- 使用填充形状而非描边
+- 多色设计增加视觉丰富度
+- 保持Apple HIG的清晰度和易识别性
+- 圆角处理，与整体设计语言一致
+
+**示例图标特征**：
+- 文件夹图标：蓝色填充主体 + 黄色标签
+- 消息图标：蓝色气泡 + 白色文字区域
+- AI机器人：紫色头部 + 蓝色身体 + 橙色细节
+
+#### SVG图标策略
+
+**优势**：
+- 矢量格式，任意缩放不失真
+- 文件体积小，适合网络传输
+- 支持透明通道
+- 跨平台通用，一套图标全平台使用
+- 多色支持，视觉表现更丰富
+
+**技术实现**：
+- 使用Jetpack Compose的`VectorPainter`加载SVG
+- 图标资源统一存放在`resources/icons/`目录
+- 按功能分类组织（navigation, action, content, file等）
+- 每个SVG保留原始多色设计，不使用单一色调
+
+#### 图标资源结构
+
+```
+resources/
+└── icons/
+    ├── svg/                  # SVG源文件
+    │   ├── navigation/
+    │   │   ├── home.svg
+    │   │   ├── settings.svg
+    │   │   ├── back.svg
+    │   │   └── menu.svg
+    │   ├── action/
+    │   │   ├── add.svg
+    │   │   ├── delete.svg
+    │   │   ├── edit.svg
+    │   │   ├── search.svg
+    │   │   └── refresh.svg
+    │   ├── content/
+    │   │   ├── message.svg
+    │   │   ├── image.svg
+    │   │   ├── file.svg
+    │   │   └── folder.svg
+    │   ├── status/
+    │   │   ├── success.svg
+    │   │   ├── error.svg
+    │   │   ├── warning.svg
+    │   │   └── info.svg
+    │   └── ai/
+    │       ├── robot.svg
+    │       ├── brain.svg
+    │       ├── chat.svg
+    │       └── skill.svg
+    └── png/                  # 预转换的PNG（多分辨率）
+        ├── navigation/
+        │   ├── home/
+        │   │   ├── 16x16.png
+        │   │   ├── 24x24.png
+        │   │   ├── 32x32.png
+        │   │   ├── 48x48.png
+        │   │   ├── 64x64.png
+        │   │   ├── 128x128.png
+        │   │   ├── 256x256.png
+        │   │   └── 512x512.png
+        │   └── ...
+        └── ...
+```
+
+#### 图标组件
+
+```kotlin
+/**
+ * 多色SVG图标组件
+ * 保留SVG原始颜色，不使用tint
+ */
+@Composable
+fun MultiColorSvgIcon(
+    name: String,
+    modifier: Modifier = Modifier,
+    size: Dp = 24.dp
+) {
+    val painter = rememberSvgPainter(
+        resourcePath = "icons/svg/$name.svg"
+    )
+    
+    Image(
+        painter = painter,
+        contentDescription = name,
+        modifier = modifier.size(size)
+        // 不使用colorFilter，保留SVG原始颜色
+    )
+}
+
+/**
+ * 预转换PNG图标（用于不支持SVG的平台）
+ */
+@Composable
+fun PngIcon(
+    name: String,
+    modifier: Modifier = Modifier,
+    size: Dp = 24.dp
+) {
+    // 根据尺寸选择最接近的PNG
+    val sizePx = with(LocalDensity.current) { size.roundToPx() }
+    val pngSize = selectOptimalPngSize(sizePx)
+    
+    val painter = rememberAsyncImagePainter(
+        model = "icons/png/$name/${pngSize}x${pngSize}.png"
+    )
+    
+    Image(
+        painter = painter,
+        contentDescription = name,
+        modifier = modifier.size(size)
+    )
+}
+
+/**
+ * 自适应图标组件
+ * 优先使用SVG，在不支持的平台使用PNG
+ */
+@Composable
+fun AdaptiveIcon(
+    name: String,
+    modifier: Modifier = Modifier,
+    size: Dp = 24.dp
+) {
+    if (LocalPlatform.current.supportsSvg) {
+        MultiColorSvgIcon(name, modifier, size)
+    } else {
+        PngIcon(name, modifier, size)
+    }
+}
+
+/**
+ * 选择最优PNG尺寸
+ */
+private fun selectOptimalPngSize(requestedSize: Int): Int {
+    val availableSizes = listOf(16, 24, 32, 48, 64, 128, 256, 512)
+    return availableSizes.find { it >= requestedSize } 
+        ?: availableSizes.last()
+}
+```
+
+### 9.4 SVG转位图格式
+
+#### 预转换策略
+
+**核心原则**：每个SVG图标在资源提交时就预转换为多分辨率PNG，而非运行时转换。
+
+**优势**：
+- 构建时无需转换，加快构建速度
+- 运行时直接读取PNG，无性能损耗
+- 版本控制包含所有格式，确保一致性
+
+**预转换规格**：
+每个SVG图标预转换为以下尺寸的PNG（带透明通道）：
+- 16x16 - 工具栏小图标
+- 24x24 - 标准图标（默认）
+- 32x32 - 工具栏大图标
+- 48x48 - 列表/菜单图标
+- 64x64 - 侧边栏图标
+- 128x128 - 大图标展示
+- 256x256 - 高分辨率显示
+- 512x512 - 应用图标/启动图标
+
+**目录结构**：
+```
+resources/icons/
+├── svg/                    # SVG源文件（版本控制）
+│   └── navigation/
+│       └── home.svg
+└── png/                    # 预转换PNG（版本控制）
+    └── navigation/
+        └── home/
+            ├── 16x16.png
+            ├── 24x24.png
+            ├── 32x32.png
+            ├── 48x48.png
+            ├── 64x64.png
+            ├── 128x128.png
+            ├── 256x256.png
+            └── 512x512.png
+```
+
+#### 转换需求场景
+
+1. **Windows桌面应用图标**：需要ICO格式
+2. **macOS应用图标**：需要ICNS格式
+3. **Android应用图标**：需要PNG格式（不同密度）
+4. **iOS应用图标**：需要PNG格式
+5. **Web Favicon**：需要ICO或PNG格式
+6. **系统托盘图标**：需要PNG格式
+
+#### 转换工具设计
+
+```kotlin
+/**
+ * SVG转换器
+ * 将SVG矢量图转换为各种位图格式
+ */
+class SvgConverter {
+    
+    companion object {
+        /**
+         * SVG转PNG
+         * @param svgPath SVG文件路径
+         * @param outputPath 输出PNG路径
+         * @param width 输出宽度
+         * @param height 输出高度
+         * @param backgroundColor 背景色（null表示透明）
+         */
+        suspend fun convertToPng(
+            svgPath: Path,
+            outputPath: Path,
+            width: Int,
+            height: Int,
+            backgroundColor: Color? = null
+        ): ConversionResult
+        
+        /**
+         * SVG转ICO（Windows图标）
+         * @param svgPath SVG文件路径
+         * @param outputPath 输出ICO路径
+         * @param sizes 包含的尺寸列表，默认 [16, 32, 48, 256]
+         */
+        suspend fun convertToIco(
+            svgPath: Path,
+            outputPath: Path,
+            sizes: List<Int> = listOf(16, 32, 48, 256)
+        ): ConversionResult
+        
+        /**
+         * SVG转ICNS（macOS图标）
+         * @param svgPath SVG文件路径
+         * @param outputPath 输出ICNS路径
+         */
+        suspend fun convertToIcns(
+            svgPath: Path,
+            outputPath: Path
+        ): ConversionResult
+        
+        /**
+         * 批量生成Android图标
+         * 生成不同密度的PNG图标
+         */
+        suspend fun generateAndroidIcons(
+            svgPath: Path,
+            outputDir: Path,
+            baseSize: Int = 48
+        ): ConversionResult
+        
+        /**
+         * 批量生成iOS图标
+         * 生成各种尺寸的PNG图标
+         */
+        suspend fun generateIosIcons(
+            svgPath: Path,
+            outputDir: Path
+        ): ConversionResult
+    }
+}
+
+sealed class ConversionResult {
+    data class Success(val outputPath: Path) : ConversionResult()
+    data class Error(val message: String) : ConversionResult()
+}
+```
+
+#### 技术实现方案
+
+**方案一：使用SVG Salamander（推荐用于JVM）**
+
+```kotlin
+// build.gradle.kts 依赖
+dependencies {
+    implementation("guru.nidi.com.kitfox:svg-salamander:1.1.3")
+}
+```
+
+```kotlin
+import com.kitfox.svg.SVGDiagram
+import com.kitfox.svg.SVGUniverse
+import java.awt.Graphics2D
+import java.awt.RenderingHints
+import java.awt.image.BufferedImage
+import java.io.File
+import javax.imageio.ImageIO
+
+/**
+ * 使用SVG Salamander进行转换
+ */
+class SvgSalamanderConverter {
+    
+    fun convertToPng(
+        svgFile: File,
+        outputFile: File,
+        width: Int,
+        height: Int
+    ) {
+        val universe = SVGUniverse()
+        val uri = universe.loadSVG(svgFile.toURI().toURL())
+        val diagram: SVGDiagram = universe.getDiagram(uri)
+        
+        // 创建BufferedImage
+        val image = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
+        val g2d: Graphics2D = image.createGraphics()
+        
+        // 设置高质量渲染
+        g2d.setRenderingHint(
+            RenderingHints.KEY_ANTIALIASING,
+            RenderingHints.VALUE_ANTIALIAS_ON
+        )
+        g2d.setRenderingHint(
+            RenderingHints.KEY_RENDERING,
+            RenderingHints.VALUE_RENDER_QUALITY
+        )
+        
+        // 计算缩放比例
+        val scaleX = width / diagram.width
+        val scaleY = height / diagram.height
+        g2d.scale(scaleX.toDouble(), scaleY.toDouble())
+        
+        // 渲染SVG
+        diagram.render(g2d)
+        g2d.dispose()
+        
+        // 保存PNG
+        ImageIO.write(image, "PNG", outputFile)
+    }
+}
+```
+
+**方案二：使用Apache Batik**
+
+```kotlin
+// build.gradle.kts 依赖
+dependencies {
+    implementation("org.apache.xmlgraphics:batik-transcoder:1.17")
+    implementation("org.apache.xmlgraphics:batik-codec:1.17")
+}
+```
+
+```kotlin
+import org.apache.batik.transcoder.TranscoderInput
+import org.apache.batik.transcoder.TranscoderOutput
+import org.apache.batik.transcoder.image.PNGTranscoder
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
+
+/**
+ * 使用Apache Batik进行转换
+ */
+class BatikSvgConverter {
+    
+    fun convertToPng(
+        svgFile: File,
+        outputFile: File,
+        width: Int,
+        height: Int
+    ) {
+        val transcoder = PNGTranscoder()
+        
+        // 设置输出尺寸
+        transcoder.addTranscodingHint(
+            PNGTranscoder.KEY_WIDTH,
+            width.toFloat()
+        )
+        transcoder.addTranscodingHint(
+            PNGTranscoder.KEY_HEIGHT,
+            height.toFloat()
+        )
+        
+        // 执行转换
+        val input = TranscoderInput(FileInputStream(svgFile))
+        val output = TranscoderOutput(FileOutputStream(outputFile))
+        
+        transcoder.transcode(input, output)
+    }
+}
+```
+
+**方案三：Kotlin Native方案（使用librsvg）**
+
+对于Kotlin Native目标，可以通过CInterop调用librsvg库：
+
+```kotlin
+// 适用于Native目标的转换
+expect class NativeSvgConverter() {
+    fun convertToPng(
+        svgPath: String,
+        outputPath: String,
+        width: Int,
+        height: Int
+    )
+}
+```
+
+#### Gradle预转换任务
+
+在 `build.gradle.kts` 中添加预转换任务：
+
+```kotlin
+// build.gradle.kts
+import java.io.File
+
+plugins {
+    kotlin("multiplatform")
+    // ... 其他插件
+}
+
+// SVG预转换配置
+val svgSourceDir = file("src/commonMain/resources/icons/svg")
+val pngOutputDir = file("src/commonMain/resources/icons/png")
+val pngSizes = listOf(16, 24, 32, 48, 64, 128, 256, 512)
+
+/**
+ * 预转换所有SVG图标任务
+ */
+tasks.register<JavaExec>("convertSvgIcons") {
+    group = "resource processing"
+    description = "预转换所有SVG图标为多分辨率PNG"
+    
+    classpath = configurations["runtimeClasspath"]
+    mainClass.set("com.example.build.SvgIconConverter")
+    
+    args = listOf(
+        svgSourceDir.absolutePath,
+        pngOutputDir.absolutePath,
+        pngSizes.joinToString(",")
+    )
+    
+    // 增量构建支持
+    inputs.dir(svgSourceDir)
+    outputs.dir(pngOutputDir)
+}
+
+/**
+ * 在资源处理前执行转换
+ */
+tasks.named("processResources") {
+    dependsOn("convertSvgIcons")
+}
+```
+
+#### 图标转换工具类（构建时使用）
+
+```kotlin
+// buildSrc/src/main/kotlin/com/example/build/SvgIconConverter.kt
+package com.example.build
+
+import org.apache.batik.transcoder.TranscoderInput
+import org.apache.batik.transcoder.TranscoderOutput
+import org.apache.batik.transcoder.image.PNGTranscoder
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
+
+/**
+ * SVG图标预转换工具
+ * 在构建时将SVG转换为多分辨率PNG
+ */
+object SvgIconConverter {
+    
+    @JvmStatic
+    fun main(args: Array<String>) {
+        if (args.size < 3) {
+            println("用法: SvgIconConverter <svg目录> <png输出目录> <尺寸列表>")
+            return
+        }
+        
+        val svgDir = File(args[0])
+        val pngDir = File(args[1])
+        val sizes = args[2].split(",").map { it.toInt() }
+        
+        if (!svgDir.exists()) {
+            println("SVG目录不存在: ${svgDir.absolutePath}")
+            return
+        }
+        
+        println("开始转换SVG图标...")
+        println("源目录: ${svgDir.absolutePath}")
+        println("输出目录: ${pngDir.absolutePath}")
+        println("尺寸: $sizes")
+        
+        convertAllSvgs(svgDir, pngDir, sizes)
+        
+        println("转换完成!")
+    }
+    
+    private fun convertAllSvgs(svgDir: File, pngDir: File, sizes: List<Int>) {
+        svgDir.walkTopDown()
+            .filter { it.isFile && it.extension.lowercase() == "svg" }
+            .forEach { svgFile ->
+                val relativePath = svgFile.relativeTo(svgDir).parent ?: ""
+                val iconName = svgFile.nameWithoutExtension
+                
+                sizes.forEach { size ->
+                    val outputDir = File(pngDir, relativePath).resolve(iconName)
+                    outputDir.mkdirs()
+                    
+                    val outputFile = File(outputDir, "${size}x${size}.png")
+                    
+                    // 检查是否需要更新（增量转换）
+                    if (needsConversion(svgFile, outputFile)) {
+                        convertSvgToPng(svgFile, outputFile, size, size)
+                        println("✓ ${svgFile.name} -> ${size}x${size}.png")
+                    }
+                }
+            }
+    }
+    
+    private fun needsConversion(svgFile: File, pngFile: File): Boolean {
+        if (!pngFile.exists()) return true
+        return svgFile.lastModified() > pngFile.lastModified()
+    }
+    
+    private fun convertSvgToPng(
+        svgFile: File,
+        outputFile: File,
+        width: Int,
+        height: Int
+    ) {
+        val transcoder = PNGTranscoder()
+        
+        transcoder.addTranscodingHint(
+            PNGTranscoder.KEY_WIDTH,
+            width.toFloat()
+        )
+        transcoder.addTranscodingHint(
+            PNGTranscoder.KEY_HEIGHT,
+            height.toFloat()
+        )
+        
+        // 启用抗锯齿
+        transcoder.addTranscodingHint(
+            PNGTranscoder.KEY_ANTIALIASING,
+            true
+        )
+        
+        FileInputStream(svgFile).use { inputStream ->
+            FileOutputStream(outputFile).use { outputStream ->
+                val input = TranscoderInput(inputStream)
+                val output = TranscoderOutput(outputStream)
+                transcoder.transcode(input, output)
+            }
+        }
+    }
+}
+```
+
+#### .gitignore配置
+
+```gitignore
+# 不忽略预转换的PNG（纳入版本控制）
+# resources/icons/png/
+
+# 但忽略构建时生成的临时文件
+build/
+*.tmp
+```
+
+### 9.5 界面布局架构
+
+#### 响应式布局
+
+```kotlin
+/**
+ * 窗口尺寸类别
+ */
+enum class WindowSizeClass {
+    COMPACT,    // 手机尺寸
+    MEDIUM,     // 平板尺寸
+    EXPANDED    // 桌面尺寸
+}
+
+/**
+ * 根据窗口尺寸确定布局方式
+ */
+@Composable
+fun AdaptiveLayout(
+    windowSizeClass: WindowSizeClass,
+    compactContent: @Composable () -> Unit,
+    mediumContent: @Composable () -> Unit,
+    expandedContent: @Composable () -> Unit
+) {
+    when (windowSizeClass) {
+        WindowSizeClass.COMPACT -> compactContent()
+        WindowSizeClass.MEDIUM -> mediumContent()
+        WindowSizeClass.EXPANDED -> expandedContent()
+    }
+}
+```
+
+#### 主界面结构
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  [Sidebar]  │              [Main Content]                    │
+│             │                                                │
+│  ┌─────────┐│  ┌──────────────────────────────────────────┐  │
+│  │ AI角色1 ││  │                                          │  │
+│  ├─────────┤│  │           会话区域                        │  │
+│  │ AI角色2 ││  │                                          │  │
+│  ├─────────┤│  │                                          │  │
+│  │ AI角色3 ││  │                                          │  │
+│  └─────────┘│  │                                          │  │
+│             │  └──────────────────────────────────────────┘  │
+│  ┌─────────┐│  ┌──────────────────────────────────────────┐  │
+│  │ 群聊    ││  │  [输入框]                    [发送按钮]   │  │
+│  └─────────┘│  └──────────────────────────────────────────┘  │
+│             │                                                │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 9.6 动画与过渡
+
+```kotlin
+/**
+ * 主题切换动画
+ */
+@Composable
+fun AnimatedThemeSwitch(
+    isDark: Boolean,
+    onToggle: () -> Unit
+) {
+    val rotation by animateFloatAsState(
+        targetValue = if (isDark) 180f else 0f,
+        animationSpec = tween(durationMillis = 500)
+    )
+    
+    IconButton(onClick = onToggle) {
+        SvgIcon(
+            name = if (isDark) "moon" else "sun",
+            modifier = Modifier.rotate(rotation)
+        )
+    }
+}
+
+/**
+ * 页面切换过渡
+ */
+@Composable
+fun PageTransition(
+    targetState: Int,
+    content: @Composable (Int) -> Unit
+) {
+    AnimatedContent(
+        targetState = targetState,
+        transitionSpec = {
+            fadeIn(animationSpec = tween(300)) +
+            slideInHorizontally { it } with
+            fadeOut(animationSpec = tween(300)) +
+            slideOutHorizontally { -it }
+        }
+    ) { page ->
+        content(page)
+    }
+}
+```
+
+### 9.7 可访问性支持
+
+```kotlin
+/**
+ * 可访问性配置
+ */
+@Composable
+fun AccessibleIconButton(
+    onClick: () -> Unit,
+    iconName: String,
+    contentDescription: String
+) {
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier.semantics {
+            this.contentDescription = contentDescription
+        }
+    ) {
+        SvgIcon(name = iconName)
+    }
+}
+
+/**
+ * 高对比度模式支持
+ */
+@Composable
+fun HighContrastAwareContent(
+    content: @Composable () -> Unit
+) {
+    val isHighContrast = LocalAccessibilityHighContrast.current
+    
+    CompositionLocalProvider(
+        LocalColorScheme provides if (isHighContrast) {
+            HighContrastColorScheme
+        } else {
+            LocalColorScheme.current
+        }
+    ) {
+        content()
+    }
+}
+```
+
+### 9.8 相关技能
+
+- **svg-converter**：SVG转PNG/ICO等位图格式的技能，详见 `.trae/skills/svg-converter/SKILL.md`
+
 ## 参考资料
 
 - [Mem0 官方文档](https://docs.mem0.ai/)
@@ -4847,3 +5894,5 @@ recycle_bin/                      # 回收站目录
 - [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/)
 - [OpenClaw 项目参考](../references/openclaw/)
 - [NanoBot 项目参考](../references/nanobot/)
+- [Jetpack Compose 主题指南](https://developer.android.com/jetpack/compose/themes)
+- [Material Design 3 颜色系统](https://m3.material.io/styles/color/overview)
