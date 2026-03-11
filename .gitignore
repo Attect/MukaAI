@@ -32,3 +32,7 @@ logs/
 # Test output
 test-output/
 *.hprof
+
+# Browser control test screenshots
+test-available/05-browser-control/*.png
+test-available/05-browser-control/downloads/
