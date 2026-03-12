@@ -2,7 +2,11 @@
 
 > 基于用户口述需求整理  
 > 创建时间：2026-03-10  
-> 状态：设计完成，待进行可行性测试
+> 最后更新时间：2026-03-12  
+> 状态：会话压缩功能设计完成，待进行可行性测试
+> 
+> ## 更新历史
+> - 2026-03-12: 细化会话压缩功能，区分自动压缩和用户主动压缩两种触发方式，实现不同的压缩提示词和后续处理逻辑
 
 ## 需求来源
 
@@ -1493,28 +1497,68 @@ class MemoryContextInjector(
 }
 ```
 
-#### 6.3 会话压缩触发
+#### 6.3 会话压缩触发机制
 
-**配置化压缩提示词**
+**两种压缩触发方式**
+
+系统支持两种会话压缩触发方式，每种方式对应不同的压缩策略和后续处理逻辑：
+
+1. **自动压缩（AUTO）**: 由系统根据 token 阈值自动触发
+   - 压缩后程序会自动发送"继续"指令，让 AI 平滑继续对话
+   - 使用 AI 口吻结尾，确保对话连续性
+
+2. **用户主动压缩（USER_INITIATED）**: 由用户通过界面或命令触发
+   - 压缩后等待用户主动发起下一句话
+   - 使用等待用户回应的口吻结尾
+
+**特殊情况处理**
+
+- **用户消息触发压缩**: 当用户发送消息时，因用户消息长度导致会话总长度超过阈值
+  - 处理方式：视为用户先主动压缩，再发送此条消息
+  - 执行顺序：
+    1. 先执行会话压缩（使用用户主动压缩指导）
+    2. 压缩完成后，再处理用户发送的这条消息
+  - 原因：避免自动压缩后自动继续，导致用户的新消息被忽略或打断
 
 ```kotlin
+/**
+ * 压缩触发源类型
+ */
+enum class CompressionTriggerType {
+    /**
+     * 自动压缩：由系统根据 token 阈值自动触发
+     * 压缩后程序会自动发送"继续"指令，让 AI 平滑继续对话
+     */
+    AUTO,
+    
+    /**
+     * 用户主动压缩：由用户通过界面或命令触发
+     * 压缩后等待用户主动发起下一句话
+     */
+    USER_INITIATED
+}
+
 /**
  * 会话压缩配置
  */
 data class SessionCompressionConfig(
     val enabled: Boolean = true,
-    val thresholdPercent: Double = 0.7,      // 达到模型最大token的70%时触发
-    val retainPercent: Double = 0.3,          // 保留最近30%的消息
+    val thresholdPercent: Double = 0.7,      // 达到模型最大 token 的 70% 时触发
+    val retainPercent: Double = 0.3,          // 保留最近 30% 的消息
     val promptConfigPath: Path                // 压缩提示词配置文件路径
 )
 
 /**
  * 压缩提示词配置
+ * 针对不同的触发方式，使用不同的提示词模板
  */
 data class CompressionPromptConfig(
-    val systemPrompt: String,                  // 系统提示词
-    val userPromptTemplate: String,            // 用户提示词模板
-    val maxSummaryLength: Int = 2000           // 摘要最大长度
+    val autoSystemPrompt: String,              // 自动压缩的系统提示词
+    val autoUserPromptTemplate: String,        // 自动压缩的用户提示词模板
+    val userSystemPrompt: String,              // 用户主动压缩的系统提示词
+    val userUserPromptTemplate: String,        // 用户主动压缩的用户提示词模板
+    val maxSummaryLength: Int = 2000,          // 摘要最大长度
+    val retainMessageCount: Int = 5            // 保留最近的消息数量（用于细节保留）
 )
 
 /**
@@ -1552,26 +1596,90 @@ class CompressionPromptLoader(
     
     fun getCurrentConfig(): CompressionPromptConfig = currentConfig
     
+    /**
+     * 根据触发类型获取对应的系统提示词
+     */
+    fun getSystemPrompt(triggerType: CompressionTriggerType): String {
+        return when (triggerType) {
+            CompressionTriggerType.AUTO -> currentConfig.autoSystemPrompt
+            CompressionTriggerType.USER_INITIATED -> currentConfig.userSystemPrompt
+        }
+    }
+    
+    /**
+     * 根据触发类型获取对应的用户提示词模板
+     */
+    fun getUserPromptTemplate(triggerType: CompressionTriggerType): String {
+        return when (triggerType) {
+            CompressionTriggerType.AUTO -> currentConfig.autoUserPromptTemplate
+            CompressionTriggerType.USER_INITIATED -> currentConfig.userUserPromptTemplate
+        }
+    }
+    
     private fun loadDefaultConfig(): CompressionPromptConfig {
         return CompressionPromptConfig(
-            systemPrompt = """
-                你是一个会话摘要助手。你的任务是对对话历史进行压缩摘要。
+            // 自动压缩提示词：AI 口吻，强调连续性
+            autoSystemPrompt = """
+                你是一个会话摘要助手。你的任务是对对话历史进行压缩摘要，以便 AI 模型能够平滑继续对话。
+                
                 请保留以下关键信息：
                 1. 重要的决策和结论
                 2. 用户的偏好和要求
                 3. 未完成的任务和行动项
                 4. 关键的时间点和事件
+                5. 最近对话的细节（特别是最后几条消息的具体内容）
                 
-                摘要应该简洁明了，便于后续对话时快速理解上下文。
+                摘要要求：
+                - 使用 AI 的第一人称口吻（例如："我刚刚帮助用户完成了..."）
+                - 结尾应体现对话的连续性（例如："接下来我将继续帮助用户..."）
+                - 确保 AI 模型阅读摘要后能够立即继续之前的任务，不中断思路
+                - 摘要应该简洁明了，便于后续对话时快速理解上下文
             """.trimIndent(),
-            userPromptTemplate = """
-                请对以下对话进行摘要：
+            
+            autoUserPromptTemplate = """
+                请对以下对话进行摘要，以便 AI 能够平滑继续对话：
                 
                 {messages}
                 
                 请生成一个简洁的摘要，长度不超过{maxLength}字。
+                注意：
+                1. 保留最近{retainCount}条消息的完整细节
+                2. 使用 AI 的第一人称口吻
+                3. 结尾应体现"接下来我将继续..."的语义
             """.trimIndent(),
-            maxSummaryLength = 2000
+            
+            // 用户主动压缩提示词：等待用户回应的口吻
+            userSystemPrompt = """
+                你是一个会话摘要助手。你的任务是对对话历史进行压缩摘要，以便用户快速回顾。
+                
+                请保留以下关键信息：
+                1. 重要的决策和结论
+                2. 用户的偏好和要求
+                3. 未完成的任务和行动项
+                4. 关键的时间点和事件
+                5. 最近对话的细节（特别是最后几条消息的具体内容）
+                
+                摘要要求：
+                - 使用第三人称或客观描述（例如："用户和 AI 讨论了..."）
+                - 结尾应体现等待用户回应（例如："我们已经讨论了...请问您还有什么需要补充的吗？"）
+                - 确保用户阅读摘要后能够快速回顾之前的对话内容
+                - 摘要应该简洁明了，便于用户快速理解
+            """.trimIndent(),
+            
+            userUserPromptTemplate = """
+                请对以下对话进行摘要，以便用户快速回顾：
+                
+                {messages}
+                
+                请生成一个简洁的摘要，长度不超过{maxLength}字。
+                注意：
+                1. 保留最近{retainCount}条消息的完整细节
+                2. 使用客观描述的语气
+                3. 结尾应体现"等待用户回应"的语义
+            """.trimIndent(),
+            
+            maxSummaryLength = 2000,
+            retainMessageCount = 5
         )
     }
 }
@@ -1580,7 +1688,8 @@ class SessionCompressionManager(
     private val tokenCounter: TokenCounter,
     private val mem0Integration: Mem0Integration,
     private val promptLoader: CompressionPromptLoader,
-    private val config: SessionCompressionConfig
+    private val config: SessionCompressionConfig,
+    private val aiClient: AIClient
 ) {
     /**
      * 检查是否需要压缩
@@ -1600,18 +1709,19 @@ class SessionCompressionManager(
     }
     
     /**
-     * 执行会话压缩
+     * 执行会话压缩（自动压缩）
+     * 压缩后会返回是否需要自动继续的标记
      */
     suspend fun compressSession(
         roleId: String,
         sessionId: String,
         messages: List<Message>,
-        aiClient: AIClient
+        triggerType: CompressionTriggerType = CompressionTriggerType.AUTO
     ): CompressionResult {
         val promptConfig = promptLoader.getCurrentConfig()
         
         // 1. 使用 AI 对早期对话进行摘要
-        val summary = generateSummary(messages, promptConfig, aiClient)
+        val summary = generateSummary(messages, triggerType, promptConfig, aiClient)
         
         // 2. 存储到 mem0
         mem0Integration.storeCompressionMemory(
@@ -1621,7 +1731,11 @@ class SessionCompressionManager(
         )
         
         // 3. 保留最近的对话，替换早期对话为摘要
-        val retainedCount = (messages.size * config.retainPercent).toInt()
+        // 使用配置中的 retainMessageCount 确保保留足够的最近消息细节
+        val retainedCount = maxOf(
+            (messages.size * config.retainPercent).toInt(),
+            promptConfig.retainMessageCount
+        )
         val recentMessages = messages.takeLast(retainedCount)
         
         val summaryMessage = Message(
@@ -1634,12 +1748,62 @@ class SessionCompressionManager(
             status = MessageStatus.COMPLETE
         )
         
+        // 4. 根据触发类型决定后续行为
+        val shouldAutoContinue = when (triggerType) {
+            CompressionTriggerType.AUTO -> true  // 自动压缩后自动继续
+            CompressionTriggerType.USER_INITIATED -> false  // 用户主动压缩后等待用户
+        }
+        
         return CompressionResult(
             compressedMessages = listOf(summaryMessage) + recentMessages,
             summary = summary,
             originalTokenCount = tokenCounter.countTokens(messages),
-            newTokenCount = tokenCounter.countTokens(listOf(summaryMessage) + recentMessages)
+            newTokenCount = tokenCounter.countTokens(listOf(summaryMessage) + recentMessages),
+            shouldAutoContinue = shouldAutoContinue,
+            triggerType = triggerType
         )
+    }
+    
+    /**
+     * 处理用户消息时的压缩检查
+     * 如果用户消息导致 token 超限，则先执行用户主动压缩，再处理用户消息
+     * @return 返回是否需要先压缩，以及压缩后的结果
+     */
+    suspend fun handleUserMessageWithCompression(
+        roleId: String,
+        sessionId: String,
+        currentMessages: List<Message>,
+        newUserMessage: Message
+    ): CompressionHandlingResult {
+        // 合并用户新消息后检查是否需要压缩
+        val messagesWithNew = currentMessages + newUserMessage
+        
+        if (shouldCompress(roleId, sessionId, messagesWithNew)) {
+            // 用户消息触发的压缩，视为用户主动压缩
+            val compressionResult = compressSession(
+                roleId = roleId,
+                sessionId = sessionId,
+                messages = currentMessages,  // 压缩现有消息
+                triggerType = CompressionTriggerType.USER_INITIATED
+            )
+            
+            // 压缩后，再添加用户的新消息
+            val finalMessages = compressionResult.compressedMessages + newUserMessage
+            
+            return CompressionHandlingResult(
+                shouldCompressFirst = true,
+                compressionResult = compressionResult,
+                finalMessages = finalMessages,
+                shouldAutoContinue = false  // 用户触发的压缩，不自动继续
+            )
+        } else {
+            // 不需要压缩，直接返回
+            return CompressionHandlingResult(
+                shouldCompressFirst = false,
+                finalMessages = messagesWithNew,
+                shouldAutoContinue = false
+            )
+        }
     }
     
     /**
@@ -1647,11 +1811,18 @@ class SessionCompressionManager(
      */
     private suspend fun generateSummary(
         messages: List<Message>,
+        triggerType: CompressionTriggerType,
         promptConfig: CompressionPromptConfig,
         aiClient: AIClient
     ): String {
-        // 只压缩早期的消息
-        val messagesToCompress = messages.take((messages.size * 0.7).toInt())
+        // 计算需要压缩的消息范围
+        // 保留最近的 retainMessageCount 条消息不压缩
+        val messagesToCompress = messages.dropLast(promptConfig.retainMessageCount)
+        
+        if (messagesToCompress.isEmpty()) {
+            // 如果没有需要压缩的消息，返回空摘要
+            return ""
+        }
         
         val formattedMessages = messagesToCompress.joinToString("\n") { msg ->
             val sender = when (msg.senderType) {
@@ -1662,12 +1833,17 @@ class SessionCompressionManager(
             "[$sender]: ${msg.content}"
         }
         
-        val userPrompt = promptConfig.userPromptTemplate
+        // 根据触发类型选择提示词模板
+        val systemPrompt = promptLoader.getSystemPrompt(triggerType)
+        val userPromptTemplate = promptLoader.getUserPromptTemplate(triggerType)
+        
+        val userPrompt = userPromptTemplate
             .replace("{messages}", formattedMessages)
             .replace("{maxLength}", promptConfig.maxSummaryLength.toString())
+            .replace("{retainCount}", promptConfig.retainMessageCount.toString())
         
         val response = aiClient.generate(
-            systemPrompt = promptConfig.systemPrompt,
+            systemPrompt = systemPrompt,
             userPrompt = userPrompt
         )
         
@@ -1675,12 +1851,228 @@ class SessionCompressionManager(
     }
 }
 
+/**
+ * 压缩结果数据类
+ */
 data class CompressionResult(
     val compressedMessages: List<Message>,
     val summary: String,
     val originalTokenCount: Int,
-    val newTokenCount: Int
+    val newTokenCount: Int,
+    val shouldAutoContinue: Boolean = false,  // 是否应该自动继续
+    val triggerType: CompressionTriggerType = CompressionTriggerType.AUTO
 )
+
+/**
+ * 用户消息压缩处理结果
+ */
+data class CompressionHandlingResult(
+    val shouldCompressFirst: Boolean,          // 是否需要先压缩
+    val compressionResult: CompressionResult? = null,  // 压缩结果（如果需要压缩）
+    val finalMessages: List<Message>,          // 最终消息列表
+    val shouldAutoContinue: Boolean = false    // 是否应该自动继续
+)
+```
+
+#### 6.4 压缩后的自动继续逻辑
+
+**自动压缩后的处理流程**
+
+当自动压缩触发时，系统需要自动发送"继续"指令，让 AI 模型能够平滑继续对话：
+
+```kotlin
+/**
+ * 自动继续处理器
+ */
+class AutoContinueHandler(
+    private val aiClient: AIClient,
+    private val sessionManager: SessionManager
+) {
+    /**
+     * 在自动压缩后，自动发送继续指令
+     */
+    suspend fun handleAutoContinue(
+        roleId: String,
+        sessionId: String,
+        compressionResult: CompressionResult
+    ) {
+        if (!compressionResult.shouldAutoContinue) {
+            Logger.debug("压缩类型为${compressionResult.triggerType}，不自动继续")
+            return
+        }
+        
+        Logger.info("自动压缩完成，正在发送继续指令...")
+        
+        // 构建继续提示词
+        val continuePrompt = buildContinuePrompt(compressionResult.summary)
+        
+        // 创建系统消息
+        val continueMessage = Message(
+            id = generateId(),
+            senderId = "system",
+            senderType = SenderType.SYSTEM,
+            sessionId = sessionId,
+            content = MessageContent.Text(continuePrompt),
+            timestamp = Instant.now(),
+            status = MessageStatus.COMPLETE
+        )
+        
+        // 添加到会话
+        sessionManager.addMessage(sessionId, continueMessage)
+        
+        // 请求 AI 继续
+        val aiResponse = aiClient.generate(
+            roleId = roleId,
+            sessionId = sessionId,
+            messages = compressionResult.compressedMessages + continueMessage
+        )
+        
+        Logger.info("AI 已响应继续指令，对话平滑继续")
+    }
+    
+    /**
+     * 构建继续提示词
+     */
+    private fun buildContinuePrompt(summary: String): String {
+        return """
+            [系统提示] 会话已自动压缩以节省 token。
+            
+            摘要内容：
+            $summary
+            
+            请根据上述摘要继续之前的对话或任务。
+        """.trimIndent()
+    }
+}
+```
+
+**用户主动压缩后的处理流程**
+
+用户主动压缩后，系统仅显示压缩摘要，等待用户主动发起下一条消息：
+
+```kotlin
+/**
+ * 用户主动压缩处理器
+ */
+class UserInitiatedCompressionHandler(
+    private val compressionManager: SessionCompressionManager,
+    private val notificationService: NotificationService
+) {
+    /**
+     * 处理用户主动压缩请求
+     */
+    suspend fun handleUserInitiatedCompression(
+        roleId: String,
+        sessionId: String,
+        currentMessages: List<Message>
+    ): CompressionResult {
+        Logger.info("用户主动触发会话压缩")
+        
+        // 执行压缩（使用 USER_INITIATED 类型）
+        val compressionResult = compressionManager.compressSession(
+            roleId = roleId,
+            sessionId = sessionId,
+            messages = currentMessages,
+            triggerType = CompressionTriggerType.USER_INITIATED
+        )
+        
+        // 通知用户压缩完成
+        notificationService.sendNotification(
+            title = "会话压缩完成",
+            message = "会话已压缩，保留了最近的对话细节。请继续您的提问。",
+            type = NotificationType.INFO
+        )
+        
+        // 不自动继续，等待用户主动发起
+        Logger.info("用户主动压缩完成，等待用户继续")
+        
+        return compressionResult
+    }
+}
+```
+
+#### 6.5 用户消息触发压缩的完整流程
+
+当用户发送消息时，如果消息长度导致会话总 token 数超过阈值，系统按以下流程处理：
+
+```kotlin
+/**
+ * 用户消息处理器（带压缩检查）
+ */
+class UserMessageHandler(
+    private val compressionManager: SessionCompressionManager,
+    private val aiService: AIService,
+    private val sessionManager: SessionManager
+) {
+    /**
+     * 处理用户发送的消息
+     */
+    suspend fun handleUserMessage(
+        roleId: String,
+        sessionId: String,
+        userMessage: Message
+    ) {
+        // 获取当前会话消息
+        val currentMessages = sessionManager.getSessionMessages(sessionId)
+        
+        // 检查是否需要先压缩
+        val compressionResult = compressionManager.handleUserMessageWithCompression(
+            roleId = roleId,
+            sessionId = sessionId,
+            currentMessages = currentMessages,
+            newUserMessage = userMessage
+        )
+        
+        if (compressionResult.shouldCompressFirst) {
+            Logger.info("用户消息触发压缩，先执行压缩")
+            
+            // 压缩已完成，使用压缩后的消息列表
+            // 注意：compressionResult.finalMessages 已包含压缩摘要 + 用户新消息
+            
+            // 不自动继续，因为这是用户触发的压缩
+            // 等待 AI 正常响应用户的新消息
+            val aiResponse = aiService.generateResponse(
+                roleId = roleId,
+                sessionId = sessionId,
+                messages = compressionResult.finalMessages
+            )
+            
+            // 发送 AI 响应
+            sessionManager.addMessage(sessionId, aiResponse.toMessage())
+        } else {
+            // 不需要压缩，正常处理
+            Logger.debug("不需要压缩，正常处理用户消息")
+            
+            val aiResponse = aiService.generateResponse(
+                roleId = roleId,
+                sessionId = sessionId,
+                messages = compressionResult.finalMessages
+            )
+            
+            sessionManager.addMessage(sessionId, aiResponse.toMessage())
+        }
+    }
+}
+```
+
+**流程图**
+
+```
+用户发送消息
+    ↓
+检查 (当前消息 + 新消息) 的 token 数
+    ↓
+是否超过阈值？
+    ├─ 否 → 正常处理，AI 响应用户消息
+    └─ 是 → 执行用户主动压缩
+            ↓
+        使用 USER_INITIATED 提示词压缩
+            ↓
+        压缩后添加用户新消息
+            ↓
+        AI 响应（不自动继续）
+            ↓
+        等待用户下一条消息
 ```
 
 ### 7. 日志和监控系统
