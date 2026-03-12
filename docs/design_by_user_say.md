@@ -5883,7 +5883,277 @@ fun HighContrastAwareContent(
 
 ### 9.8 相关技能
 
-- **svg-converter**：SVG转PNG/ICO等位图格式的技能，详见 `.trae/skills/svg-converter/SKILL.md`
+- **svg-converter**：SVG 转 PNG/ICO 等位图格式的技能，详见 `.trae/skills/svg-converter/SKILL.md`
+
+## 10. 类 OAuth2.0 认证系统设计
+
+### 10.1 需求概述
+
+用户希望客户端和服务端使用类似 OAuth2.0 的方式进行认证，采用方案 A（简化版 Token 交换机制）。
+
+**核心需求**:
+1. 服务端预设一个固定 Token，首次启动时生成，每天自动更换
+2. 客户端第一次通过预设 Token 向服务端索取一个独属于自己的 Token（永不过期）
+3. 服务端将客户端 Token 在文件中持久化，启动时加载
+4. 支持管理已授权的客户端（查看、撤销）
+
+### 10.2 认证流程
+
+```
+┌─────────────┐                    ┌─────────────┐                    ┌─────────────┐
+│   服务端    │                    │    客户端    │                    │    用户     │
+└──────┬──────┘                    └──────┬──────┘                    └──────┬──────┘
+       │                                  │                                  │
+       │ 1. 启动时生成预设 Token           │                                  │
+       │    (每天更换)                    │                                  │
+       │                                  │                                  │
+       │                                  │ 2. 用户输入预设 Token ───────────>│
+       │                                  │                                  │
+       │ 3. 使用预设 Token 请求专属 Token ─>│                                  │
+       │                                  │                                  │
+       │ 4. 验证预设 Token                │                                  │
+       │    生成专属 Token                │                                  │
+       │    保存到授权列表                │                                  │
+       │                                  │                                  │
+       │ 5. 返回专属 Token ───────────────>│                                  │
+       │    (永不过期)                    │                                  │
+       │                                  │                                  │
+       │                                  │ 6. 持久化存储专属 Token           │
+       │                                  │                                  │
+       │ 7. 后续请求使用专属 Token ───────>│                                  │
+       │                                  │                                  │
+       │ 8. 验证专属 Token                │                                  │
+       │    响应请求                      │                                  │
+       │                                  │                                  │
+```
+
+### 10.3 技术架构
+
+#### 10.3.1 服务端 Token 管理器
+
+**职责**:
+- 生成和管理预设 Token（每日更换）
+- 管理已授权的客户端 Token 列表
+- 验证预设 Token 和专属 Token
+- 支持 Token 撤销
+
+**数据结构**:
+```kotlin
+data class TokenData(
+    val token: String,           // Token 字符串
+    val clientId: String,        // 客户端 ID
+    val createdAt: String,       // 创建时间戳
+    val expiresAt: String? = null // 过期时间（null 表示永不过期）
+)
+
+class ServerTokenManager {
+    var presetToken: String              // 当前预设 Token
+    var presetTokenDate: LocalDate       // 预设 Token 生成日期
+    
+    fun initialize()                     // 初始化：加载/生成预设 Token
+    fun verifyPresetToken(token: String): Boolean
+    fun verifyClientToken(token: String): Boolean
+    fun exchangePresetToken(presetToken: String, clientId: String?): TokenData?
+    fun revokeToken(token: String): Boolean
+    fun getAuthorizedTokens(): List<Map<String, String>>
+}
+```
+
+#### 10.3.2 客户端 Token 管理器
+
+**职责**:
+- 管理预设 Token（用户输入）
+- 管理专属 Token（从服务端获取）
+- 持久化存储 Token
+- Token 丢失后重新获取
+
+**数据结构**:
+```kotlin
+class ClientTokenManager {
+    var presetToken: String?      // 预设 Token（用户输入）
+    var clientToken: TokenData?   // 专属 Token
+    var clientId: String          // 客户端 ID
+    
+    fun initialize()              // 初始化：加载已保存的 Token
+    fun updatePresetToken(token: String)
+    fun updateClientToken(token: TokenData)
+    fun clearClientToken()        // 清除专属 Token
+}
+```
+
+### 10.4 持久化存储
+
+#### 10.4.1 服务端存储
+
+**预设 Token 文件**: `server-config/preset_token.json`
+```json
+{
+  "token": "4835392f...",
+  "date": "2026-03-12",
+  "createdAt": "1773282753904"
+}
+```
+
+**已授权 Token 文件**: `server-config/authorized_tokens.json`
+```json
+[
+  {
+    "token": "226252a2...",
+    "clientId": "client_3c90accb...",
+    "addedAt": "1773282753904"
+  }
+]
+```
+
+#### 10.4.2 客户端存储
+
+**Token 文件**: `client-token.json`
+```json
+{
+  "presetToken": "4835392f...",
+  "clientToken": "{\"token\":\"226252a2...\",\"clientId\":\"client_3c90accb...\",\"createdAt\":\"1773282753904\"}",
+  "clientId": "client_3c90accb...",
+  "lastUpdated": "1773282753904"
+}
+```
+
+**客户端 ID 文件**: `client_id.txt`
+```
+client_3c90accb71ccc1ee95aa7e8e3bd3bc13
+```
+
+### 10.5 Token 生成算法
+
+**预设 Token**:
+- 长度：32 字节（64 字符十六进制）
+- 生成器：`SecureRandom`
+- 更换策略：每天自动更换
+
+**专属 Token**:
+- 长度：32 字节（64 字符十六进制）
+- 生成器：`SecureRandom`
+- 过期策略：永不过期
+
+**客户端 ID**:
+- 格式：`client_` + 16 字节随机数（32 字符十六进制）
+- 生成器：`SecureRandom`
+- 持久化：每个设备独立保存
+
+### 10.6 认证中间件（Ktor 集成）
+
+```kotlin
+fun Application.configureAuthentication() {
+    install(Authentication) {
+        bearer("auth") {
+            realm = "Access"
+            authenticate { token ->
+                val tokenManager = application.tokenManager
+                if (tokenManager.verifyClientToken(token)) {
+                    UserIdPrincipal(token)
+                } else {
+                    null
+                }
+            }
+        }
+    }
+}
+
+// 使用示例
+authenticate("auth") {
+    get("/api/protected") {
+        call.respondText("受保护的资源")
+    }
+}
+```
+
+### 10.7 管理 API
+
+```kotlin
+// 获取所有已授权的客户端
+get("/api/admin/authorized-clients") {
+    val tokens = tokenManager.getAuthorizedTokens()
+    call.respond(tokens)
+}
+
+// 撤销某个客户端的 Token
+post("/api/admin/revoke-token") {
+    val request = call.receive<TokenRevokeRequest>()
+    val success = tokenManager.revokeToken(request.token)
+    call.respond(mapOf("success" to success))
+}
+
+// 获取当前预设 Token（用于管理界面）
+get("/api/admin/preset-token") {
+    call.respond(mapOf("token" to tokenManager.presetToken))
+}
+```
+
+### 10.8 安全特性
+
+1. **Token 安全性**: 使用 `SecureRandom` 生成，不可预测
+2. **Token 隔离**: 每个客户端有独立的专属 Token
+3. **Token 管理**: 支持查看和撤销已授权的 Token
+4. **每日更换**: 预设 Token 每天自动更换，降低泄露风险
+5. **持久化存储**: JSON 格式，易于管理和审计
+
+### 10.9 安全建议（生产环境）
+
+1. **传输加密**: 必须使用 HTTPS 传输 Token
+2. **存储加密**: 客户端 Token 存储应加密
+3. **访问日志**: 记录所有认证请求，便于审计
+4. **速率限制**: 防止暴力破解预设 Token
+5. **IP 白名单**: 可选，限制特定 IP 访问
+
+### 10.10 可行性测试
+
+**测试位置**: `test-available/auth-system/`
+
+**测试结果**: ✅ 全部通过 (13/13, 100%)
+
+**测试覆盖**:
+- ✅ 预设 Token 生成和每日更换
+- ✅ 专属 Token 生成和验证
+- ✅ Token 持久化和加载
+- ✅ 预设 Token 验证
+- ✅ 专属 Token 换取
+- ✅ 多客户端支持
+- ✅ Token 撤销
+- ✅ Token 丢失后重新获取
+
+**详细报告**: [`test-available/auth-system/verification-report.md`](../test-available/auth-system/verification-report.md)
+
+### 10.11 实施计划
+
+1. **Phase 1: 核心实现**
+   - [ ] 实现 `ServerTokenManager`
+   - [ ] 实现 `ClientTokenManager`
+   - [ ] 实现 Token 持久化
+
+2. **Phase 2: Ktor 集成**
+   - [ ] 实现认证中间件
+   - [ ] 实现管理 API
+   - [ ] 添加错误处理
+
+3. **Phase 3: 客户端集成**
+   - [ ] 为各平台客户端提供 Token 管理
+   - [ ] 实现认证 UI 流程
+   - [ ] 添加 Token 自动刷新
+
+4. **Phase 4: 安全增强**
+   - [ ] Token 加密存储
+   - [ ] HTTPS 强制
+   - [ ] 访问日志
+   - [ ] 速率限制
+
+### 10.12 验收标准
+
+- [ ] 预设 Token 每日自动更换
+- [ ] 专属 Token 永不过期
+- [ ] Token 持久化可靠
+- [ ] 多客户端支持正常
+- [ ] Token 撤销功能正常
+- [ ] 认证流程安全可靠
+- [ ] 所有测试通过
 
 ## 参考资料
 
@@ -5896,3 +6166,5 @@ fun HighContrastAwareContent(
 - [NanoBot 项目参考](../references/nanobot/)
 - [Jetpack Compose 主题指南](https://developer.android.com/jetpack/compose/themes)
 - [Material Design 3 颜色系统](https://m3.material.io/styles/color/overview)
+- [OAuth2.0 规范](https://oauth.net/2/)
+- [Ktor 认证文档](https://ktor.io/docs/authentication.html)

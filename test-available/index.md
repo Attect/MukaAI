@@ -32,6 +32,7 @@
 | 12 | JSON 序列化可行性测试 | ✅ 全部通过 | ✅ 16/16 通过 | ~8 秒 | 基础类型、可空类型、集合、嵌套对象、枚举、密封类、默认值、自定义序列化器、业务对象、性能测试（100% 通过率） |
 | 13 | Mem0 隔离/共享测试 | ✅ 全部通过 | ✅ 7/7 通过 | ~1 分钟 | 私有记忆隔离、群聊共享记忆、混合模式、群组隔离、多角色群聊、记忆管理、性能测试（100% 通过率） |
 | 14 | Compose Material 3 主题切换 | ✅ 完成 | ✅ **已验证通过** | ~23 秒 | Desktop平台主题切换、multiplatform-settings持久化验证成功 |
+| 15 | 类 OAuth2.0 认证系统 | ✅ 完成 | ✅ **已验证通过** | ~4 秒 | 预设 Token 每日更换、专属 Token 交换、Token 持久化、多客户端支持、Token 撤销验证成功（13/13 测试通过） |
 
 ## 详细测试结果
 
@@ -390,6 +391,40 @@
 - **文档**:
   - [README.md](compose-theme-test/README.md) - 测试说明
   - [verification-report.md](compose-theme-test/verification-report.md) - 详细验证报告
+
+### 15. 类 OAuth2.0 认证系统
+- **技术栈**: Kotlin/JVM 2.3.10, Ktor 3.4.1, Kotlinx Serialization 1.6.2, SecureRandom
+- **验证结果**: ✅ 全部通过 (13/13, 100%)
+- **测试状态**: ✅ **已通过验证** (2026-03-12)
+- **测试范围**:
+  - ✅ 预设 Token 生成和每日更换机制
+  - ✅ 专属 Token 生成和验证（永不过期）
+  - ✅ Token 持久化和加载（服务端 + 客户端）
+  - ✅ 预设 Token 验证（无限次使用）
+  - ✅ 专属 Token 换取（使用预设 Token）
+  - ✅ 多客户端支持（同一预设 Token 换取多个专属 Token）
+  - ✅ Token 撤销（单个客户端 Token 失效，不影响其他客户端）
+  - ✅ Token 丢失后重新获取（使用预设 Token 重新换取）
+- **关键发现**:
+  - 使用 `SecureRandom` 生成安全的随机 Token（32 字节，64 字符十六进制）
+  - 预设 Token 每日自动更换，降低泄露风险
+  - 专属 Token 永不过期，简化客户端管理
+  - Token 持久化使用 JSON 格式，易于管理和审计
+  - 支持 Token 撤销功能，增强安全性
+  - 多客户端支持良好，每个客户端独立 Token
+- **认证流程**:
+  1. 服务端启动 → 生成/加载预设 Token（每天更换）+ 加载已授权 Token
+  2. 客户端首次认证 → 用户输入预设 Token → 换取专属 Token → 持久化保存
+  3. 客户端后续请求 → 使用专属 Token 认证 → 服务端验证
+- **依赖版本**:
+  - Kotlin 2.3.10
+  - Ktor 3.4.1
+  - Kotlinx Serialization 1.6.2
+- **测试代码**:
+  - [AuthTest.kt](auth-system/src/main/kotlin/auth/test/AuthTest.kt) - 完整测试实现（服务端 + 客户端 Token 管理器）
+- **文档**:
+  - [README.md](auth-system/README.md) - 测试说明
+  - [verification-report.md](auth-system/verification-report.md) - 详细验证报告
 
 ## 总体结论
 
