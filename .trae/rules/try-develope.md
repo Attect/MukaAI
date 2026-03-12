@@ -9,10 +9,10 @@ alwaysApply: false
 2、切换到创建的开发分支
 3、根据，生成更详细的分模块、分层、分步的多个开发文档，带一个总的计划索引`docs/develope-progress.md`
 4、生成`AGENTS.md`，为本次开发描述整体项目意图和指导以及规范。
-4、开始实施开发。
-5、将开发过程中碰到的技术难题和开发才发现的可行性问题，记录到`docs/try-develope.md`文件中
+4、开始实施开发：
+    - 调用 @code-framework 智能体，进行框架设计
+    - 根据`docs/develope-progress.md`，分模块、分层、分步多次调用 @code-builder 智能体进行开发，直至所有计划完成。
 
-尝试开发应尽可能完成所有开发流程，极其困难的问题可记录后跳过或使用mock实现，但必须完成`docs/design_by_user_say.md`中的所有内容，以及开发过程中遗留的TODO。
 
 当前可能没有在开发，也可能在开发过程中，请通过是否在`master`分支上判断。
 如果没有在开发，请按步骤开始，如果正在开发，请检查开发总计划索引`docs/develope-progress.md`，并继续

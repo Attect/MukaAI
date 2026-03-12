@@ -6155,6 +6155,848 @@ get("/api/admin/preset-token") {
 - [ ] 认证流程安全可靠
 - [ ] 所有测试通过
 
+## 11. AI 角色 TODO 列表系统
+
+### 11.1 需求来源
+
+详见 [`docs/user_say.md`](../user_say.md#2026-03-12-ai-角色-todo-列表功能需求)
+
+### 11.2 系统概述
+
+TODO 列表系统为 AI 角色提供任务规划和跟踪能力，支持 AI 和用户双向交互，使用 mem0 记忆系统存储，支持多列表并发和优先级管理。
+
+### 11.3 核心特性
+
+1. **存储方式**: 使用 mem0 记忆系统存储（选项 A）
+2. **双向交互**: 用户和 AI 都可以创建、修改、操作 TODO 列表
+3. **多列表并发**: 支持多个 TODO 列表同时存在
+4. **优先级规则**: 按创建时间排列，最后创建的为最高优先级
+5. **状态管理**: 支持待执行、进行中、已完成、已取消、阻塞中五种状态
+6. **语义化 ID**: 使用语义化命名（如 "task-20260312-001"）
+
+### 11.4 数据模型
+
+#### TODO 列表数据类
+
+```kotlin
+/**
+ * TODO 列表数据类
+ */
+data class TodoList(
+    val id: String,                    // TODO 列表 ID（语义化命名，如 "task-20260312-001"）
+    val title: String,                 // 总标题
+    val roleId: String,                // AI 角色 ID
+    val sessionId: String,             // 所属会话 ID
+    val items: List<TodoItem>,         // 事项列表
+    val status: TodoListStatus,        // 列表状态
+    val createdAt: Instant,            // 创建时间
+    val updatedAt: Instant,            // 最后更新时间
+    val parentListId: String? = null   // 父列表 ID（用于恢复上级内容）
+)
+
+/**
+ * TODO 事项数据类
+ */
+data class TodoItem(
+    val id: String,                    // 事项 ID
+    val title: String,                 // 事项标题
+    val description: String? = null,   // 事项描述
+    val status: TodoItemStatus,        // 事项状态
+    val priority: Int = 0,             // 优先级（数字越大优先级越高）
+    val createdAt: Instant,            // 创建时间
+    val updatedAt: Instant,            // 最后更新时间
+    val completedAt: Instant? = null,  // 完成时间
+    val blockedReason: String? = null  // 阻塞原因（当状态为 Blocked 时）
+)
+
+/**
+ * TODO 列表状态
+ */
+enum class TodoListStatus {
+    ACTIVE,         // 活跃中
+    COMPLETED,      // 全部完成
+    CANCELLED       // 已取消
+}
+
+/**
+ * TODO 事项状态
+ */
+enum class TodoItemStatus {
+    PENDING,        // 待执行
+    IN_PROGRESS,    // 进行中
+    COMPLETED,      // 已完成
+    CANCELLED,      // 已取消
+    BLOCKED         // 阻塞中
+}
+```
+
+### 11.5 mem0 存储架构
+
+#### 存储键设计
+
+```kotlin
+/**
+ * TODO 列表存储管理器
+ */
+class TodoListStorageManager(
+    private val mem0Client: Mem0Client
+) {
+    companion object {
+        // mem0 用户 ID 命名空间
+        const val USER_ID_PREFIX = "todo_"
+        
+        // 记忆类型元数据
+        const val MEMORY_TYPE_LIST = "todo_list"
+        const val MEMORY_TYPE_ITEM = "todo_item"
+    }
+    
+    /**
+     * 获取 mem0 用户 ID
+     */
+    fun getMem0UserId(roleId: String): String {
+        return "${USER_ID_PREFIX}${roleId}"
+    }
+    
+    /**
+     * 保存 TODO 列表
+     */
+    suspend fun saveTodoList(todoList: TodoList) {
+        val userId = getMem0UserId(todoList.roleId)
+        
+        mem0Client.addMemory(
+            userId = userId,
+            data = MemoryData(
+                text = Json.encodeToString(todoList),
+                metadata = mapOf(
+                    "type" to MEMORY_TYPE_LIST,
+                    "listId" to todoList.id,
+                    "sessionId" to todoList.sessionId,
+                    "status" to todoList.status.name,
+                    "timestamp" to todoList.updatedAt.toString()
+                )
+            )
+        )
+    }
+    
+    /**
+     * 获取 TODO 列表
+     */
+    suspend fun getTodoList(roleId: String, listId: String): TodoList? {
+        val userId = getMem0UserId(roleId)
+        val memories = mem0Client.searchMemories(
+            userId = userId,
+            query = "listId:$listId",
+            limit = 10
+        )
+        
+        return memories
+            .filter { it.metadata["type"] == MEMORY_TYPE_LIST && it.metadata["listId"] == listId }
+            .sortedByDescending { it.metadata["timestamp"] }
+            .firstOrNull()
+            ?.let { Json.decodeFromString<TodoList>(it.text) }
+    }
+    
+    /**
+     * 获取所有活跃的 TODO 列表（按创建时间倒序排列）
+     */
+    suspend fun getActiveTodoLists(roleId: String, sessionId: String): List<TodoList> {
+        val userId = getMem0UserId(roleId)
+        val memories = mem0Client.getAllMemories(userId = userId, limit = 100)
+        
+        return memories
+            .filter { 
+                it.metadata["type"] == MEMORY_TYPE_LIST && 
+                it.metadata["sessionId"] == sessionId &&
+                it.metadata["status"] == TodoListStatus.ACTIVE.name
+            }
+            .sortedByDescending { it.metadata["timestamp"] }  // 最新的在前
+            .mapNotNull { 
+                try {
+                    Json.decodeFromString<TodoList>(it.text)
+                } catch (e: Exception) {
+                    null
+                }
+            }
+    }
+    
+    /**
+     * 删除 TODO 列表（标记为已取消）
+     */
+    suspend fun cancelTodoList(roleId: String, listId: String) {
+        val todoList = getTodoList(roleId, listId) ?: return
+        
+        val cancelledList = todoList.copy(
+            status = TodoListStatus.CANCELLED,
+            updatedAt = Instant.now(),
+            items = todoList.items.map { item ->
+                if (item.status == TodoItemStatus.PENDING || item.status == TodoItemStatus.IN_PROGRESS) {
+                    item.copy(status = TodoItemStatus.CANCELLED, updatedAt = Instant.now())
+                } else {
+                    item
+                }
+            }
+        )
+        
+        saveTodoList(cancelledList)
+    }
+}
+```
+
+### 11.6 TODO 列表操作工具
+
+#### 工具定义
+
+```kotlin
+/**
+ * TODO 列表工具接口
+ */
+interface TodoListTools {
+    /**
+     * 创建 TODO 列表
+     */
+    suspend fun createTodoList(
+        roleId: String,
+        sessionId: String,
+        title: String,
+        items: List<TodoItemInput>,
+        parentListId: String? = null
+    ): TodoList
+    
+    /**
+     * 修改事项
+     */
+    suspend fun updateTodoItem(
+        roleId: String,
+        listId: String,
+        itemId: String,
+        updates: TodoItemUpdates
+    ): TodoItem
+    
+    /**
+     * 标记事项完成
+     */
+    suspend fun completeTodoItem(
+        roleId: String,
+        listId: String,
+        itemId: String
+    ): TodoItem
+    
+    /**
+     * 取消 TODO 列表
+     */
+    suspend fun cancelTodoList(
+        roleId: String,
+        listId: String
+    ): Boolean
+    
+    /**
+     * 获取当前活跃的 TODO 列表（优先级最高的）
+     */
+    suspend fun getCurrentActiveTodoList(
+        roleId: String,
+        sessionId: String
+    ): TodoList?
+    
+    /**
+     * 获取所有 TODO 列表
+     */
+    suspend fun getAllTodoLists(
+        roleId: String,
+        sessionId: String,
+        status: TodoListStatus? = null
+    ): List<TodoList>
+}
+
+/**
+ * 事项输入数据类
+ */
+data class TodoItemInput(
+    val title: String,
+    val description: String? = null,
+    val priority: Int = 0
+)
+
+/**
+ * 事项更新数据类
+ */
+data class TodoItemUpdates(
+    val title: String? = null,
+    val description: String? = null,
+    val priority: Int? = null,
+    val status: TodoItemStatus? = null,
+    val blockedReason: String? = null
+)
+```
+
+#### 工具实现
+
+```kotlin
+/**
+ * TODO 列表工具实现
+ */
+class TodoListToolsImpl(
+    private val storageManager: TodoListStorageManager,
+    private val idGenerator: TodoListIdGenerator
+) : TodoListTools {
+    
+    override suspend fun createTodoList(
+        roleId: String,
+        sessionId: String,
+        title: String,
+        items: List<TodoItemInput>,
+        parentListId: String?
+    ): TodoList {
+        val now = Instant.now()
+        val listId = idGenerator.generateId()
+        
+        val todoList = TodoList(
+            id = listId,
+            title = title,
+            roleId = roleId,
+            sessionId = sessionId,
+            items = items.map { input ->
+                TodoItem(
+                    id = generateItemId(),
+                    title = input.title,
+                    description = input.description,
+                    status = TodoItemStatus.PENDING,
+                    priority = input.priority,
+                    createdAt = now,
+                    updatedAt = now
+                )
+            },
+            status = TodoListStatus.ACTIVE,
+            createdAt = now,
+            updatedAt = now,
+            parentListId = parentListId
+        )
+        
+        storageManager.saveTodoList(todoList)
+        return todoList
+    }
+    
+    override suspend fun updateTodoItem(
+        roleId: String,
+        listId: String,
+        itemId: String,
+        updates: TodoItemUpdates
+    ): TodoItem {
+        val todoList = storageManager.getTodoList(roleId, listId)
+            ?: throw IllegalArgumentException("TODO 列表不存在：$listId")
+        
+        val updatedItems = todoList.items.map { item ->
+            if (item.id == itemId) {
+                item.copy(
+                    title = updates.title ?: item.title,
+                    description = updates.description ?: item.description,
+                    priority = updates.priority ?: item.priority,
+                    status = updates.status ?: item.status,
+                    blockedReason = updates.blockedReason ?: item.blockedReason,
+                    updatedAt = Instant.now()
+                )
+            } else {
+                item
+            }
+        }
+        
+        val updatedList = todoList.copy(
+            items = updatedItems,
+            updatedAt = Instant.now()
+        )
+        
+        storageManager.saveTodoList(updatedList)
+        
+        return updatedItems.first { it.id == itemId }
+    }
+    
+    override suspend fun completeTodoItem(
+        roleId: String,
+        listId: String,
+        itemId: String
+    ): TodoItem {
+        val now = Instant.now()
+        
+        val updatedItem = updateTodoItem(
+            roleId = roleId,
+            listId = listId,
+            itemId = itemId,
+            updates = TodoItemUpdates(
+                status = TodoItemStatus.COMPLETED,
+                blockedReason = null
+            )
+        ).copy(
+            completedAt = now
+        )
+        
+        // 检查是否所有事项都已完成
+        val todoList = storageManager.getTodoList(roleId, listId)
+        if (todoList != null) {
+            val allCompleted = todoList.items.all { 
+                it.status == TodoItemStatus.COMPLETED || it.status == TodoItemStatus.CANCELLED 
+            }
+            
+            if (allCompleted) {
+                storageManager.saveTodoList(
+                    todoList.copy(
+                        status = TodoListStatus.COMPLETED,
+                        updatedAt = now
+                    )
+                )
+            }
+        }
+        
+        return updatedItem
+    }
+    
+    override suspend fun cancelTodoList(
+        roleId: String,
+        listId: String
+    ): Boolean {
+        val todoList = storageManager.getTodoList(roleId, listId) ?: return false
+        
+        storageManager.cancelTodoList(roleId, listId)
+        return true
+    }
+    
+    override suspend fun getCurrentActiveTodoList(
+        roleId: String,
+        sessionId: String
+    ): TodoList? {
+        val activeLists = storageManager.getActiveTodoLists(roleId, sessionId)
+        return activeLists.firstOrNull()  // 返回最新创建的（优先级最高）
+    }
+    
+    override suspend fun getAllTodoLists(
+        roleId: String,
+        sessionId: String,
+        status: TodoListStatus?
+    ): List<TodoList> {
+        val allLists = storageManager.getActiveTodoLists(roleId, sessionId)
+        return if (status != null) {
+            allLists.filter { it.status == status }
+        } else {
+            allLists
+        }
+    }
+    
+    private fun generateItemId(): String {
+        return "item_${System.currentTimeMillis()}_${(0..9999).random()}"
+    }
+}
+
+/**
+ * TODO 列表 ID 生成器
+ */
+class TodoListIdGenerator {
+    private val counter = AtomicInteger(0)
+    private val dateFormat = DateTimeFormatter.ofPattern("yyyyMMdd")
+    
+    /**
+     * 生成语义化 ID
+     * 格式：task-YYYYMMDD-NNN
+     */
+    fun generateId(): String {
+        val date = LocalDate.now().format(dateFormat)
+        val sequence = counter.incrementAndGet()
+        return "task-${date}-${String.format("%03d", sequence)}"
+    }
+    
+    /**
+     * 重置计数器（每日重置）
+     */
+    fun resetForNewDay() {
+        counter.set(0)
+    }
+}
+```
+
+### 11.7 AI 提示词集成
+
+#### 系统提示词模板
+
+```kotlin
+/**
+ * TODO 列表系统提示词管理器
+ */
+class TodoListSystemPromptManager {
+    
+    /**
+     * 生成包含 TODO 列表功能的系统提示词
+     */
+    fun generateSystemPrompt(basePrompt: String): String {
+        return """
+            $basePrompt
+            
+            === TODO 列表功能 ===
+            
+            你拥有 TODO 列表功能，可以帮助你规划和跟踪任务执行。
+            
+            **使用偏好**：
+            - 当你开始计划做一些事情时，应该主动创建 TODO 列表
+            - 使用提供的工具来管理 TODO 列表：创建、修改事项、标记完成、取消列表
+            - TODO 列表包含总标题和多个事项
+            - 每个事项都有状态：待执行、进行中、已完成、已取消、阻塞中
+            
+            **多列表管理**：
+            - 你可以同时有多个 TODO 列表
+            - 最后创建的列表优先级最高，你应该优先执行
+            - 通过 TODO 列表 ID 来指定操作哪个列表
+            
+            **打断处理**：
+            - 如果你正在处理 TODO 列表时被用户打断，先关注用户交流内容
+            - 在事情结束时，询问用户是否应该继续处理 TODO 列表
+            - 仅当用户主动提示继续时，才继续处理 TODO 列表
+            
+            **取消机制**：
+            - 你可以自主决定取消某个 TODO 列表
+            - 用户也可以下达指令让你取消列表
+            - 取消后，如果有上一级的 TODO 列表，则继续上一级的内容
+            
+            **工具列表**：
+            - createTodoList(title, items, parentListId?): 创建 TODO 列表
+            - updateTodoItem(listId, itemId, updates): 修改事项
+            - completeTodoItem(listId, itemId): 标记事项完成
+            - cancelTodoList(listId): 取消 TODO 列表
+            - getCurrentActiveTodoList(): 获取当前优先级最高的活跃列表
+            - getAllTodoLists(): 获取所有 TODO 列表
+            
+            请负责任地使用这些工具，专注于帮助用户完成任务。
+        """.trimIndent()
+    }
+}
+```
+
+### 11.8 用户交互设计
+
+#### 用户可见的 TODO 列表 UI
+
+```kotlin
+/**
+ * TODO 列表 UI 状态
+ */
+data class TodoListUiState(
+    val lists: List<TodoListDisplay>,
+    val currentListId: String?,
+    val isLoading: Boolean,
+    val error: String?
+)
+
+/**
+ * TODO 列表显示数据类
+ */
+data class TodoListDisplay(
+    val id: String,
+    val title: String,
+    val items: List<TodoItemDisplay>,
+    val status: TodoListStatus,
+    val createdAt: String,
+    val isCurrentPriority: Boolean  // 是否是当前优先级最高的
+)
+
+/**
+ * TODO 事项显示数据类
+ */
+data class TodoItemDisplay(
+    val id: String,
+    val title: String,
+    val description: String?,
+    val status: TodoItemStatus,
+    val priority: Int,
+    val completedAt: String?
+)
+
+/**
+ * TODO 列表 UI 组件（Jetpack Compose）
+ */
+@Composable
+fun TodoListPanel(
+    viewModel: TodoListViewModel,
+    modifier: Modifier = Modifier
+) {
+    val state by viewModel.state.collectAsState()
+    
+    Column(modifier = modifier) {
+        // 标题
+        Text(
+            text = "TODO 列表",
+            style = MaterialTheme.typography.titleLarge
+        )
+        
+        // TODO 列表列表
+        state.lists.forEach { list ->
+            TodoListItem(
+                list = list,
+                isCurrentPriority = list.isCurrentPriority,
+                onItemClick = { itemId -> viewModel.toggleItemStatus(itemId) },
+                onCancelClick = { viewModel.cancelList(list.id) }
+            )
+        }
+        
+        // 创建新列表按钮
+        Button(
+            onClick = { viewModel.showCreateDialog() },
+            enabled = !state.isLoading
+        ) {
+            Text("创建 TODO 列表")
+        }
+    }
+}
+
+@Composable
+fun TodoListItem(
+    list: TodoListDisplay,
+    isCurrentPriority: Boolean,
+    onItemClick: (String) -> Unit,
+    onCancelClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(8.dp),
+        colors = if (isCurrentPriority) {
+            CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer
+            )
+        } else {
+            CardDefaults.cardColors()
+        }
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp)
+        ) {
+            // 列表标题和状态
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = list.title,
+                    style = MaterialTheme.typography.titleMedium
+                )
+                
+                if (isCurrentPriority) {
+                    Badge {
+                        Text("当前优先")
+                    }
+                }
+                
+                IconButton(onClick = onCancelClick) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "取消列表"
+                    )
+                }
+            }
+            
+            // 事项列表
+            list.items.forEach { item ->
+                TodoItemRow(
+                    item = item,
+                    onClick = { onItemClick(item.id) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun TodoItemRow(
+    item: TodoItemDisplay,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .clickable(onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // 状态图标
+        Icon(
+            imageVector = when (item.status) {
+                TodoItemStatus.PENDING -> Icons.Default.RadioButtonUnchecked
+                TodoItemStatus.IN_PROGRESS -> Icons.Default.PlayArrow
+                TodoItemStatus.COMPLETED -> Icons.Default.CheckCircle
+                TodoItemStatus.CANCELLED -> Icons.Default.Close
+                TodoItemStatus.BLOCKED -> Icons.Default.Lock
+            },
+            contentDescription = item.status.name,
+            tint = when (item.status) {
+                TodoItemStatus.COMPLETED -> Color.Green
+                TodoItemStatus.BLOCKED -> Color.Gray
+                else -> Color.Unspecified
+            }
+        )
+        
+        Spacer(modifier = Modifier.width(8.dp))
+        
+        // 事项标题
+        Text(
+            text = item.title,
+            style = MaterialTheme.typography.bodyMedium,
+            textDecoration = if (item.status == TodoItemStatus.COMPLETED) {
+                TextDecoration.LineThrough
+            } else {
+                TextDecoration.None
+            }
+        )
+    }
+}
+```
+
+### 11.9 打断和恢复机制
+
+#### 打断处理流程
+
+```kotlin
+/**
+ * TODO 列表打断管理器
+ */
+class TodoListInterruptionManager {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    
+    // 正在处理的 TODO 事项
+    private val processingItems = ConcurrentHashMap<String, String>()  // roleId -> itemId
+    
+    // 等待恢复的 TODO 列表
+    private val pendingLists = ConcurrentHashMap<String, String>()  // roleId -> listId
+    
+    /**
+     * 开始处理事项
+     */
+    fun startProcessingItem(roleId: String, listId: String, itemId: String) {
+        processingItems[roleId] = itemId
+        pendingLists[roleId] = listId
+    }
+    
+    /**
+     * 用户打断
+     */
+    suspend fun onUserInterruption(
+        roleId: String,
+        sessionId: String,
+        sendMessage: suspend (Message) -> Unit
+    ) {
+        val currentListId = pendingLists[roleId]
+        
+        if (currentListId != null) {
+            // 询问用户是否继续
+            sendMessage(
+                Message(
+                    id = generateId(),
+                    senderId = roleId,
+                    senderType = SenderType.AI_ROLE,
+                    sessionId = sessionId,
+                    content = MessageContent.Text(
+                        "我注意到我正在处理 TODO 列表中的任务。您希望我继续处理之前的 TODO 列表吗？"
+                    ),
+                    timestamp = Instant.now(),
+                    status = MessageStatus.COMPLETE
+                )
+            )
+        }
+    }
+    
+    /**
+     * 用户确认继续
+     */
+    fun userConfirmedContinue(roleId: String): String? {
+        return pendingLists[roleId]
+    }
+    
+    /**
+     * 用户取消或完成交互
+     */
+    fun userCancelledOrFinished(roleId: String) {
+        pendingLists.remove(roleId)
+        processingItems.remove(roleId)
+    }
+    
+    /**
+     * 完成事项
+     */
+    fun completeItem(roleId: String) {
+        processingItems.remove(roleId)
+        // pendingLists 保留，因为可能还有其他事项
+    }
+}
+```
+
+### 11.10 可行性测试要求
+
+#### 测试场景
+
+1. **存储测试**
+   - TODO 列表在 mem0 中的存储和检索
+   - 多列表并发存储
+   - 状态持久化验证
+
+2. **优先级测试**
+   - 多 TODO 列表按创建时间排序
+   - 获取当前优先级最高的列表
+   - 列表取消后的优先级切换
+
+3. **交互测试**
+   - AI 主动创建 TODO 列表
+   - 用户创建 TODO 列表
+   - 双向修改事项
+   - 标记完成流程
+
+4. **打断恢复测试**
+   - AI 处理事项时用户打断
+   - 用户确认继续处理
+   - 用户取消处理
+
+5. **取消机制测试**
+   - AI 主动取消列表
+   - 用户指令取消列表
+   - 取消后恢复上级列表
+
+#### 测试用例示例
+
+```kotlin
+class TodoListFeatureTest {
+    @Test
+    fun testCreateTodoListAndStoreInMem0() = runTest {
+        // 测试创建 TODO 列表并存储到 mem0
+    }
+    
+    @Test
+    fun testMultipleTodoListsPriorityOrder() = runTest {
+        // 测试多列表优先级排序
+    }
+    
+    @Test
+    fun testUserInterruptionAndResume() = runTest {
+        // 测试用户打断和恢复
+    }
+    
+    @Test
+    fun testCancelTodoListAndResumeParent() = runTest {
+        // 测试取消列表后恢复上级
+    }
+}
+```
+
+### 11.11 技术约束
+
+1. **mem0 依赖**: 所有 TODO 列表数据存储在 mem0 中
+2. **双向交互**: 支持用户和 AI 双向操作
+3. **会话隔离**: 不同会话的 TODO 列表完全隔离
+4. **Ktor 集成**: 通过 Ktor 提供 REST API
+5. **协程异步**: 所有操作使用 Kotlin 协程异步处理
+
+### 11.12 验收标准
+
+1. ✅ AI 能够主动创建 TODO 列表
+2. ✅ 支持多个 TODO 列表同时存在
+3. ✅ 优先级按创建时间正确排序
+4. ✅ 用户和 AI 都可以操作 TODO 列表
+5. ✅ 打断机制正常工作
+6. ✅ 取消机制正常工作
+7. ✅ 所有数据正确存储到 mem0
+8. ✅ UI 正确显示 TODO 列表状态
+
 ## 参考资料
 
 - [Mem0 官方文档](https://docs.mem0.ai/)
@@ -6168,3 +7010,5 @@ get("/api/admin/preset-token") {
 - [Material Design 3 颜色系统](https://m3.material.io/styles/color/overview)
 - [OAuth2.0 规范](https://oauth.net/2/)
 - [Ktor 认证文档](https://ktor.io/docs/authentication.html)
+- [GTD 时间管理方法](https://gettingthingsdone.com/)
+- [Kotlinx 序列化文档](https://kotlinlang.org/docs/serialization.html)
