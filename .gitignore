@@ -1,38 +1,19 @@
-# Gradle
-.gradle/
-build/
-!gradle/wrapper/gradle-wrapper.jar
-!gradle/wrapper/gradle-wrapper.properties
-
-# Kotlin
-*.class
-*.jar
-*.war
-*.ear
-*.nar
-
-# IDE
-.idea/
 *.iml
-*.ipr
-*.iws
-.project
-.classpath
-.settings/
-.vscode/
-
-# OS
+.kotlin
+.gradle
+**/build/
+xcuserdata
+!src/**/build/
+local.properties
+.idea
 .DS_Store
-Thumbs.db
-
-# Logs
-*.log
-logs/
-
-# Test output
-test-output/
-*.hprof
-
-# Browser control test screenshots
-test-available/05-browser-control/*.png
-test-available/05-browser-control/downloads/
+captures
+.externalNativeBuild
+.cxx
+*.xcodeproj/*
+!*.xcodeproj/project.pbxproj
+!*.xcodeproj/xcshareddata/
+!*.xcodeproj/project.xcworkspace/
+!*.xcworkspace/contents.xcworkspacedata
+**/xcshareddata/WorkspaceSettings.xcsettings
+node_modules/
