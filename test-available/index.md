@@ -3,12 +3,12 @@
 ## 项目概述
 本报告总结了针对 Kotlin Multiplatform AI 助手项目的各项关键技术可行性测试结果。该项目旨在构建一个原生服务端，并配备 desktop/android/ios/web(wasm) 的交互界面客户端，参考 nanobot 和 openclaw 实现多工作区 AI 助手工具。
 
-## 最终验证状态（2026-03-12）
+## 最终验证状态（2026-03-13）
 
 > **🎉 所有测试已完成并验证通过！**
 > 
 > **验证结果**:
-> - ✅ 真实通过：12 个 (100%)
+> - ✅ 真实通过：13 个 (100%)
 > - ❌ 未验证：0 个 (0%)
 > - ⚠️ 仅文档：0 个 (0%)
 >
@@ -35,6 +35,7 @@
 | 15 | 类 OAuth2.0 认证系统 | ✅ 完成 | ✅ **已验证通过** | ~4 秒 | 预设 Token 每日更换、专属 Token 交换、Token 持久化、多客户端支持、Token 撤销验证成功（13/13 测试通过） |
 | 16 | 会话压缩功能（自动/用户主动触发） | ✅ 完成 | ⏳ 待验证 | - | 两种压缩触发方式、不同提示词模板、压缩后自动继续逻辑 |
 | 17 | Ollama 集成（OpenAI API 格式支持） | ✅ 完成 | ✅ **已验证通过** | ~27 秒 | OpenAI 兼容 API、Embedding、模型详情获取验证成功 |
+| 18 | Unicode-Escaped 路径编码 | ✅ 完成 | ✅ **已验证通过** | ~5 秒 | 解决 AI 模型在中文和数字混合路径中插入空格的问题（15/15 测试通过） |
 
 ## 详细测试结果
 
@@ -462,6 +463,44 @@
 - **文档**:
   - [README.md](ollama-integration/README.md) - 测试说明
   - [VERIFICATION_REPORT.md](ollama-integration/VERIFICATION_REPORT.md) - 详细验证报告
+
+### 18. Unicode-Escaped 路径编码
+- **技术栈**: Kotlin/JVM 2.3.10, Kotlin 标准库
+- **验证结果**: 完全可行 ✅
+- **测试状态**: ✅ **已通过验证** (2026-03-13)
+- **测试范围**:
+  - ✅ 基础 Unicode 编码/解码功能（10 个测试用例）
+  - ✅ 工具调用协议集成（5 个测试用例）
+  - ✅ 中文路径处理
+  - ✅ 中文和数字混合路径（AI 易插入空格场景）
+  - ✅ 纯 ASCII 路径向后兼容
+  - ✅ 特殊字符处理（换行符、括号等）
+- **关键发现**:
+  - Unicode-escaped 格式（`\uXXXX`）能有效防止 AI 插入空格
+  - 编解码操作简单，性能开销可忽略
+  - 人类可读性较好，便于调试
+  - AI 模型容易理解和生成标准 Unicode 格式
+  - 向后兼容，ASCII 字符保持不变
+- **问题背景**:
+  - AI 模型（qwen3.5-plus 等）在中文和数字混合路径中插入错误空格
+  - 导致命令行路径错误、工具调用失败
+  - 参考 qwen-code PR #2300 实现
+- **编码策略**:
+  - 参数值中的非 ASCII 字符转换为 `\uXXXX` 格式
+  - 工具名称和参数名称不编码
+  - 服务端接收后解码，再验证和执行
+- **测试结果**:
+  - 基础编码/解码：10/10 通过
+  - 工具调用协议：5/5 通过
+  - 总体通过率：100%
+- **依赖版本**:
+  - Kotlin 2.3.10
+- **测试代码**:
+  - [UnicodeUtils.kt](unicode-escaped-path/src/UnicodeUtils.kt) - 编码/解码工具函数
+  - [ToolCallProtocolTest.kt](unicode-escaped-path/src/ToolCallProtocolTest.kt) - 协议集成测试
+- **文档**:
+  - [README.md](unicode-escaped-path/README.md) - 测试说明
+  - [verification-report.md](unicode-escaped-path/verification-report.md) - 详细验证报告
 
 ## 总体结论
 

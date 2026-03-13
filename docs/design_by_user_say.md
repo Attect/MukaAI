@@ -2,10 +2,11 @@
 
 > 基于用户口述需求整理  
 > 创建时间：2026-03-10  
-> 最后更新时间：2026-03-12  
-> 状态：会话压缩功能设计完成，待进行可行性测试
+> 最后更新时间：2026-03-13  
+> 状态：会话压缩功能设计完成，Unicode-escaped 路径编码方案可行性验证通过
 > 
 > ## 更新历史
+> - 2026-03-13: 新增 Unicode-escaped 路径编码方案，解决 AI 模型在中文和数字混合路径中插入空格的问题
 > - 2026-03-12: 细化会话压缩功能，区分自动压缩和用户主动压缩两种触发方式，实现不同的压缩提示词和后续处理逻辑
 
 ## 需求来源
@@ -7389,6 +7390,253 @@ class TodoListFeatureTest {
 7. ✅ 所有数据正确存储到 mem0
 8. ✅ UI 正确显示 TODO 列表状态
 
+## 12. Unicode-Escaped 路径编码系统
+
+> **设计时间**: 2026-03-13  
+> **状态**: 可行性验证通过  
+> **参考**: qwen-code PR #2300
+
+### 12.1 问题背景
+
+AI 模型（特别是 qwen3.5-plus 和 Qwen3.5-397B-A17B）在训练时为了 Markdown 语法，在处理中文和数字混合的路径时会插入错误的空格，导致：
+- 命令行路径错误
+- 工具调用失败
+- 技能调用失败
+
+**示例问题**：
+```
+AI 输出：/tmp/ 中文 123 文档.md  # 错误：中文和数字之间有空格
+正确路径：/tmp/中文 123 文档.md
+```
+
+### 12.2 技术方案
+
+采用 **Unicode-escaped** 编码方案，将所有非 ASCII 字符转换为 `\uXXXX` 格式：
+
+**编码示例**：
+```
+原始路径：C:\Users\测试\文档\文件.md
+编码后：C:\Users\\u6d4b\\u8bd5\\u6587\\u6863\\u6587\u4ef6.md
+
+原始命令：cat '/tmp/中文 123 文档.md'
+编码后：cat '/tmp/\\u4e2d\\u6587 123 \\u6587\\u6863.md'
+```
+
+### 12.3 编码范围
+
+- ✅ **参数值**：所有参数值中的非 ASCII 字符必须编码
+  - 文件路径
+  - 命令字符串
+  - 文本内容
+  - 其他包含中文的参数值
+
+- ❌ **工具名称**：不需要编码
+- ❌ **参数名称**：不需要编码
+
+### 12.4 技术实现
+
+#### 编码函数
+
+```kotlin
+/**
+ * 将字符串转换为 Unicode-escaped 格式
+ * 例如："中文" -> "\u4e2d\u6587"
+ */
+fun String.toUnicodeEscaped(): String {
+    return this.map { char ->
+        if (char.code > 127) {
+            "\\u${char.code.toString(16).padStart(4, '0')}"
+        } else {
+            char.toString()
+        }
+    }.joinToString("")
+}
+```
+
+#### 解码函数
+
+```kotlin
+/**
+ * 将 Unicode-escaped 格式解码为原始字符串
+ * 例如："\u4e2d\u6587" -> "中文"
+ */
+fun String.fromUnicodeEscaped(): String {
+    val regex = Regex("\\\\u([0-9a-fA-F]{4})")
+    return regex.replace(this) { matchResult ->
+        val unicode = matchResult.groupValues[1].toIntOrNull(16)
+        if (unicode != null) {
+            unicode.toChar().toString()
+        } else {
+            matchResult.value
+        }
+    }
+}
+```
+
+### 12.5 工具调用协议
+
+#### AI → 服务端（请求）
+
+```json
+{
+    "callId": "call-001",
+    "name": "read_file",
+    "args": {
+        "path": "C:\\Users\\u6d4b\\u8bd5\\u6587\\u6863\\u6587\u4ef6.md"
+    }
+}
+```
+
+#### 服务端处理流程
+
+```kotlin
+class ToolScheduler {
+    fun handleToolCall(request: ToolCallRequest) {
+        // 1. 解码所有参数值
+        val decodedArgs = request.args.mapValues { (_, value) ->
+            value.fromUnicodeEscaped()
+        }
+        
+        // 2. 验证解码后的参数
+        validateToolCall(request.name, decodedArgs)
+        
+        // 3. 执行工具（使用解码后的路径/命令）
+        executeTool(request.name, decodedArgs)
+    }
+}
+```
+
+#### 服务端 → AI（响应）
+
+工具返回结果中如果包含中文路径，也应该编码：
+
+```json
+{
+    "callId": "call-001",
+    "success": true,
+    "result": {
+        "content": "文件内容...",
+        "path": "C:\\Users\\u6d4b\\u8bd5\\u6587\\u6863\\u6587\u4ef6.md"
+    }
+}
+```
+
+### 12.6 AI 提示词设计
+
+在系统提示词中添加：
+
+```markdown
+## 工具调用规范
+
+### 参数编码要求
+
+调用工具时，所有**参数值**中的非 ASCII 字符必须使用 Unicode-escaped 格式编码。
+
+**编码格式**：`\uXXXX`，其中 XXXX 是字符的 Unicode 码点（16 进制，4 位）
+
+**示例**：
+- ✅ 正确：`"path": "C:\\Users\\u6d4b\\u8bd5\\u6587\\u6863.md"`
+- ❌ 错误：`"path": "C:\Users\测试\文档.md"`
+
+**为什么要编码**：
+- 避免在中文和数字之间插入多余空格
+- 确保路径和命令能正确执行
+- 提高工具调用的准确性
+
+**编码范围**：
+- ✅ 参数值：必须编码（路径、命令、内容等）
+- ❌ 工具名：不需要编码
+- ❌ 参数名：不需要编码
+
+**工具函数**（伪代码）：
+```
+function encodePath(path) {
+    return path.replace(/[^\x00-\x7F]/g, c => 
+        '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')
+    )
+}
+```
+```
+
+### 12.7 实施计划
+
+#### 阶段 1: 基础功能实现
+
+1. **添加工具函数**
+   - 在 `utils/` 模块添加 `UnicodeUtils.kt`
+   - 实现 `toUnicodeEscaped()` 和 `fromUnicodeEscaped()` 函数
+   - 编写单元测试
+
+2. **修改工具调度器**
+   - 在 `ToolScheduler` 中增加解码逻辑
+   - 在参数验证前执行解码
+   - 添加错误处理和日志记录
+
+3. **更新工具注册表**
+   - 在工具描述中添加编码要求说明
+   - 为每个工具的参数添加编码标记
+
+#### 阶段 2: AI 提示词更新
+
+1. **更新系统提示词**
+   - 添加参数编码要求
+   - 提供编码示例和工具函数
+   - 说明编码原因和好处
+
+2. **提供编码辅助**
+   - 在开发环境中提供编码测试工具
+   - 允许 AI 请求编码帮助
+
+#### 阶段 3: 工具返回结果处理
+
+1. **修改工具执行器**
+   - 在返回结果前，对包含中文的路径进行编码
+   - 确保 AI 接收到的所有路径都是安全格式
+
+2. **更新文件列表工具**
+   - 文件路径列表中的中文路径需要编码
+   - 目录树展示时也要编码
+
+#### 阶段 4: 容错和迁移
+
+1. **向后兼容**
+   - 服务端同时支持编码和未编码的参数
+   - 检测到未编码的中文参数时，记录警告日志
+   - 尝试直接使用未编码的参数（容错）
+
+2. **渐进式迁移**
+   - 第 1-2 周：兼容模式，记录未编码参数
+   - 第 3-4 周：警告模式，提示 AI 使用编码
+   - 第 5 周起：强制模式，要求所有参数必须编码
+
+### 12.8 测试验证
+
+详见可行性测试报告：`test-available/unicode-escaped-path/verification-report.md`
+
+**测试结果**：
+- ✅ 基础编码/解码功能：10/10 通过
+- ✅ 工具调用协议集成：5/5 通过
+- ✅ 中文路径处理：验证通过
+- ✅ 中文和数字混合场景：验证通过
+- ✅ 向后兼容性：验证通过
+
+### 12.9 风险评估
+
+| 风险 | 可能性 | 影响 | 缓解措施 |
+|------|--------|------|----------|
+| AI 不理解编码要求 | 中 | 高 | 清晰提示词 + 示例 + 容错处理 |
+| 部分参数遗漏编码 | 中 | 中 | 服务端检测 + 警告日志 |
+| 双重编码问题 | 低 | 中 | 检测并防止重复解码 |
+| 性能开销 | 低 | 低 | 简单字符串操作，影响可忽略 |
+
+### 12.10 验收标准
+
+1. ✅ AI 调用的所有工具参数值都使用 Unicode-escaped 编码
+2. ✅ 服务端能正确解码并执行包含中文路径的工具调用
+3. ✅ 中文和数字混合路径不会插入错误空格
+4. ✅ 工具调用成功率提升到 99% 以上
+5. ✅ 向后兼容，未编码的参数也能正常工作（过渡期）
+
 ## 参考资料
 
 - [Mem0 官方文档](https://docs.mem0.ai/)
@@ -7404,3 +7652,5 @@ class TodoListFeatureTest {
 - [Ktor 认证文档](https://ktor.io/docs/authentication.html)
 - [GTD 时间管理方法](https://gettingthingsdone.com/)
 - [Kotlinx 序列化文档](https://kotlinlang.org/docs/serialization.html)
+- **qwen-code PR #2300**: https://github.com/QwenLM/qwen-code/pull/2300
+- [Unicode 标准](https://unicode.org/)
