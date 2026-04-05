@@ -2,6 +2,86 @@
 
 ## 更新日志
 
+### 2026-04-06 Task 5 新增：Agent核心循环模块
+
+#### internal/agent/prompts.go
+- `SystemPromptType` - 系统提示词类型（orchestrator/worker/reviewer）
+- `OrchestratorSystemPrompt` - Orchestrator角色系统提示词（高效执行模式）
+- `WorkerSystemPrompt` - Worker角色系统提示词
+- `ReviewerSystemPrompt` - Reviewer角色系统提示词
+- `YAMLStatePrompt` - YAML状态维护提示
+- `GetSystemPrompt(promptType) string` - 根据类型获取系统提示词
+- `BuildTaskPrompt(taskGoal, stateSummary) string` - 构建任务提示词
+- `BuildToolResultPrompt(toolName, result) string` - 构建工具结果提示词
+- `BuildErrorPrompt(err) string` - 构建错误提示词
+
+#### internal/agent/history.go
+- `HistoryManager` - 消息历史管理器（线程安全）
+  - 使用sync.RWMutex保护并发访问
+  - 支持消息添加、获取、截断等操作
+- `NewHistoryManager() *HistoryManager` - 创建新的消息历史管理器
+- `AddMessage(msg)` - 添加消息到历史
+- `AddMessages(msgs)` - 批量添加消息
+- `GetMessages() []Message` - 获取所有消息的副本
+- `GetMessagesRef() []Message` - 获取消息引用（只读）
+- `GetLastMessage() (Message, bool)` - 获取最后一条消息
+- `GetMessageCount() int` - 获取消息数量
+- `Clear()` - 清空消息历史
+- `Truncate(maxTokens, tokenCounter)` - 截断历史以适应token限制
+- `TruncateSimple(keepCount)` - 简单截断策略
+- `GetTokenCount(tokenCounter) int` - 获取当前历史的token数量
+- `GetMessagesByRole(role) []Message` - 获取指定角色的消息
+- `RemoveLastMessage() bool` - 移除最后一条消息
+- `ReplaceLastMessage(msg) bool` - 替换最后一条消息
+- `GetRecentMessages(n) []Message` - 获取最近N条消息
+- `Clone() *HistoryManager` - 克隆历史管理器
+
+#### internal/agent/executor.go
+- `ToolExecutor` - 工具调用执行器
+- `NewToolExecutor(registry) *ToolExecutor` - 创建新的工具执行器
+- `ExecuteToolCalls(ctx, toolCalls) ([]Message, error)` - 执行工具调用列表（并行）
+- `ExecuteToolCallWithTimeout(ctx, tc, timeout) (Message, error)` - 执行工具调用（带超时）
+- `ExecuteToolCallSequential(ctx, toolCalls) ([]Message, error)` - 顺序执行工具调用
+- `ToolExecutionResult` - 工具执行结果（包含详细信息）
+- `ExecuteToolCallsWithDetails(ctx, toolCalls) ([]ToolExecutionResult, error)` - 执行工具调用并返回详细信息
+- `GetAvailableTools() []Tool` - 获取可用工具列表
+- `GetToolSchemas() []model.Tool` - 获取工具Schema列表
+- `HasTool(name) bool` - 检查工具是否存在
+- `ParseToolCallArguments(tc) (map, error)` - 解析工具调用参数
+- `BuildToolResultMessage(tc, result) Message` - 构建工具结果消息
+- `BuildToolErrorMessage(tc, errMsg) Message` - 构建工具错误消息
+
+#### internal/agent/core.go
+- `Agent` - 核心Agent结构体
+  - modelClient: 模型客户端
+  - toolRegistry: 工具注册中心
+  - stateManager: 状态管理器
+  - executor: 工具执行器
+  - history: 消息历史
+  - maxIterations: 最大迭代次数
+  - systemPrompt: 系统提示词
+- `Config` - Agent配置结构体
+- `NewAgent(config) (*Agent, error)` - 创建新的Agent实例
+- `Run(ctx, taskGoal) (*RunResult, error)` - 执行任务主循环
+- `RunResult` - 运行结果结构体
+  - TaskID: 任务ID
+  - Status: 状态（completed/failed/cancelled/max_iterations）
+  - StartTime/EndTime: 开始/结束时间
+  - Duration: 执行时长
+  - Iterations: 迭代次数
+  - FinalResponse: 最终响应内容
+  - Error: 错误信息
+- `Stop()` - 停止Agent运行
+- `IsRunning() bool` - 检查Agent是否正在运行
+- `SetTaskID(taskID)` - 设置任务ID
+- `GetTaskID() string` - 获取当前任务ID
+- `SetOnStreamChunk(callback)` - 设置流式输出回调
+- `SetOnToolCall(callback)` - 设置工具调用回调
+- `SetOnIteration(callback)` - 设置迭代回调
+- `GetHistory() *HistoryManager` - 获取消息历史管理器
+- `GetState() (*TaskState, error)` - 获取当前任务状态
+- `RunSync(ctx, taskGoal) error` - 同步执行任务（简化接口）
+
 ### 2026-04-06 Task 4 新增：YAML状态管理模块
 
 #### internal/state/task.go
@@ -151,11 +231,16 @@
 - 任务状态结构定义
 - 状态自动更新机制
 
-#### internal/agent - Agent核心模块（待实现）
+#### internal/agent - Agent核心模块
 Agent主循环和核心逻辑：
-- Agent主循环
-- 程序逻辑审查
-- 子代理Fork机制
+- Agent主循环（Run方法）
+- 消息历史管理
+- 工具调用执行
+- 系统提示词管理
+- 状态自动更新机制
+- 流式响应处理
+- 思考标签处理
+- 高效执行模式
 
 #### internal/supervisor - 监督系统（待实现）
 外部监督Agent行为：
@@ -197,3 +282,10 @@ Agent主循环和核心逻辑：
   - 状态管理器功能
   - 并发安全性验证
   - 时间字段序列化
+- internal/agent: 100% 核心功能覆盖
+  - Agent创建和配置
+  - 消息历史管理
+  - 工具执行器
+  - Agent主循环
+  - 取消和并发控制
+  - 回调机制
