@@ -2,6 +2,233 @@
 
 ## 更新日志
 
+### 2026-04-06 Task 6 新增：程序逻辑审查模块
+
+#### internal/agent/reviewer.go
+- `ReviewStatus` - 审查结果状态类型（pass/warning/block）
+- `IssueType` - 问题类型枚举
+  - direction: 方向偏离
+  - infinite_loop: 无限循环
+  - invalid_tool_call: 无效工具调用
+  - repeated_failure: 重复失败
+  - fabrication: 编造内容
+  - no_progress: 无进度
+- `ReviewIssue` - 审查发现的问题结构体
+  - Type: 问题类型
+  - Severity: 严重程度（low/medium/high/critical）
+  - Description: 问题描述
+  - Evidence: 证据/示例
+  - Suggestion: 修正建议
+  - ToolName: 相关工具名称
+  - Timestamp: 发现时间
+- `ReviewResult` - 审查结果结构体
+  - Status: 审查状态
+  - Issues: 发现的问题列表
+  - Timestamp: 审查时间
+  - Summary: 审查摘要
+- `ReviewConfig` - 审查器配置结构体
+  - EnableDirectionCheck: 是否启用方向偏离检测
+  - MaxRepeatedActions: 相同操作最大重复次数
+  - LoopWindowSize: 循环检测窗口大小
+  - MaxConsecutiveFailures: 最大连续失败次数
+  - FailureResetInterval: 失败计数重置间隔
+  - EnableFabricationCheck: 是否启用编造检测
+  - MaxIterationsWithoutProgress: 无进度最大迭代次数
+  - MaxFileChecksPerReview: 每次审查最大文件检查数
+- `Reviewer` - 程序逻辑审查器（线程安全）
+  - 管理审查规则和状态跟踪
+  - 维护操作历史记录
+  - 跟踪失败计数和进度
+- `ActionRecord` - 操作记录结构体
+- `NewReviewer(config) *Reviewer` - 创建新的审查器
+- `ReviewOutput(output, toolCalls, state) *ReviewResult` - 审查模型输出
+- `ReviewToolResult(toolName, arguments, result, success) *ReviewResult` - 审查工具执行结果
+- `GetActionHistory() []ActionRecord` - 获取操作历史
+- `Reset()` - 重置审查器状态
+- `GetFailureCount() int` - 获取当前失败计数
+
+#### 审查规则实现
+- **方向偏离检测**：验证输出是否与YAML中的任务目标一致
+  - 提取任务目标关键词
+  - 检查输出内容与目标的相关性
+  - 关键词匹配率过低时发出警告
+- **错误模式识别**：
+  - 无限循环检测：检测重复相同操作（默认3次触发）
+  - 无效工具调用：检查工具名称和参数格式
+  - 重复失败检测：检测连续失败次数（默认3次触发）
+- **编造内容检测**：
+  - 验证声称存在的文件是否真实存在
+  - 检查工具调用中的文件路径有效性
+  - 支持Windows和Unix路径格式
+- **进度验证**：检查是否真正推进任务进度
+  - 跟踪已完成步骤
+  - 检测迭代无进度情况
+
+#### internal/agent/feedback.go
+- `FeedbackLevel` - 反馈级别类型（info/warning/error/critical）
+- `FeedbackMessage` - 反馈消息结构体
+  - Level: 反馈级别
+  - Title: 反馈标题
+  - Content: 反馈内容
+  - Suggestions: 修正建议列表
+  - Timestamp: 时间戳
+- `FeedbackInjector` - 审查反馈注入器
+  - 将审查结果转换为用户消息
+  - 支持多种反馈格式
+- `FeedbackInjectorConfig` - 反馈注入器配置
+  - MaxFeedbackLength: 最大反馈长度
+  - IncludeEvidence: 是否包含证据
+  - IncludeTimestamp: 是否包含时间戳
+- `NewFeedbackInjector(config) *FeedbackInjector` - 创建新的反馈注入器
+- `InjectFeedback(result) Message` - 根据审查结果生成反馈消息
+- `InjectFeedbackForIssue(issue) Message` - 为单个问题生成反馈
+- `InjectBlockingFeedback(result) Message` - 生成阻断级别反馈
+- `InjectWarningFeedback(result) Message` - 生成警告级别反馈
+- `InjectProgressFeedback(iteration, max) Message` - 生成进度反馈
+- `InjectLoopDetectedFeedback(toolName, args, count) Message` - 生成循环检测反馈
+- `InjectFailureFeedback(toolName, count, error) Message` - 生成失败反馈
+- `InjectDirectionFeedback(goal, output) Message` - 生成方向偏离反馈
+- `BatchInjectFeedback(results) []Message` - 批量生成反馈消息
+- `FormatFeedbackForLog(result) string` - 格式化反馈用于日志
+
+#### 审查触发时机（设计）
+- 每次工具调用前
+- 每次任务状态更新前
+- 检测到异常输出时
+
+#### 审查结果处理
+- **通过（pass）**：继续执行
+- **警告（warning）**：记录但继续执行
+- **阻断（block）**：注入反馈，要求模型修正
+
+#### internal/agent/reviewer_test.go
+- 完整的单元测试覆盖
+- 测试审查器创建和配置
+- 测试各类审查规则
+- 测试并发安全性
+- 所有测试通过（20+测试用例）
+
+#### internal/agent/feedback_test.go
+- 完整的单元测试覆盖
+- 测试反馈消息生成
+- 测试各级别反馈
+- 测试批量反馈
+- 所有测试通过（15+测试用例）
+
+### 2026-04-06 Task 8 新增：团队定义与角色管理模块
+
+#### internal/team/definition.go
+- `AgentRole` - Agent角色定义结构体
+  - Name: 角色名称（唯一标识）
+  - Description: 角色描述
+  - SystemPrompt: 系统提示词
+  - Tools: 可用工具列表
+  - CanFork: 是否可以创建子代理
+  - MaxIterations: 最大迭代次数
+  - Priority: 角色优先级
+  - Tags: 角色标签
+- `Team` - 团队结构定义
+  - Name: 团队名称
+  - Description: 团队描述
+  - Roles: 角色定义映射
+  - DefaultRole: 默认角色
+  - Workflow: 工作流定义
+- `WorkflowStep` - 工作流步骤定义
+  - StepName: 步骤名称
+  - Role: 执行角色
+  - Description: 步骤描述
+  - NextSteps: 下一步骤条件分支
+- `NewTeam(name, description) *Team` - 创建新的团队实例
+- `AddRole(role) error` - 添加角色到团队
+- `GetRole(name) (*AgentRole, bool)` - 获取角色定义
+- `RemoveRole(name) error` - 从团队中移除角色
+- `SetDefaultRole(name) error` - 设置默认角色
+- `ListRoles() []string` - 列出所有角色名称
+- `AddWorkflowStep(step) error` - 添加工作流步骤
+- `GetWorkflow() []WorkflowStep` - 获取工作流定义
+- `DefaultTeam() *Team` - 创建默认团队配置
+- `Validate() error` - 验证团队配置有效性
+- `Clone() *Team` - 克隆团队配置
+
+#### internal/team/roles.go
+- `RoleOrchestrator` - Orchestrator角色常量
+- `RoleArchitect` - Architect角色常量
+- `RoleDeveloper` - Developer角色常量
+- `RoleTester` - Tester角色常量
+- `RoleReviewer` - Reviewer角色常量
+- `RoleSupervisor` - Supervisor角色常量
+- `GetPredefinedRoles() []*AgentRole` - 返回所有预定义角色
+- `NewOrchestratorRole() *AgentRole` - 创建Orchestrator角色
+  - 职责：协调任务流程，维护YAML状态
+  - 可用工具：所有工具（文件操作、命令执行、状态管理）
+  - 可Fork：是
+  - 最大迭代次数：50
+- `NewArchitectRole() *AgentRole` - 创建Architect角色
+  - 职责：架构设计，技术选型，模块划分
+  - 可用工具：文件读写、命令执行
+  - 可Fork：是
+  - 最大迭代次数：30
+- `NewDeveloperRole() *AgentRole` - 创建Developer角色
+  - 职责：代码实现，功能开发
+  - 可用工具：文件读写、命令执行
+  - 可Fork：否
+  - 最大迭代次数：40
+- `NewTesterRole() *AgentRole` - 创建Tester角色
+  - 职责：测试编写，验证功能
+  - 可用工具：文件读写、命令执行
+  - 可Fork：否
+  - 最大迭代次数：30
+- `NewReviewerRole() *AgentRole` - 创建Reviewer角色
+  - 职责：代码审查，质量把控
+  - 可用工具：文件读取（只读）
+  - 可Fork：否
+  - 最大迭代次数：20
+- `NewSupervisorRole() *AgentRole` - 创建Supervisor角色
+  - 职责：监督Agent，检查输出质量，纠偏
+  - 可用工具：文件读取（只读）
+  - 可Fork：否
+  - 最大迭代次数：15
+
+#### internal/team/manager.go
+- `RoleManager` - 角色管理器（线程安全）
+  - 管理团队角色配置
+  - 提供角色查询和切换功能
+  - 管理角色切换历史
+- `RoleSwitchRecord` - 角色切换记录
+  - FromRole: 切换前角色
+  - ToRole: 切换后角色
+  - Reason: 切换原因
+  - Timestamp: 切换时间戳
+- `NewRoleManager(team) (*RoleManager, error)` - 创建新的角色管理器
+- `GetRole(name) (*AgentRole, error)` - 获取角色定义
+- `GetCurrentRole() *AgentRole` - 获取当前活动角色
+- `GetCurrentRoleName() string` - 获取当前角色名称
+- `GetSystemPrompt(roleName) (string, error)` - 获取指定角色的系统提示词
+- `GetCurrentSystemPrompt() string` - 获取当前角色的系统提示词
+- `GetAvailableTools(roleName) ([]string, error)` - 获取指定角色可用的工具列表
+- `GetCurrentAvailableTools() []string` - 获取当前角色可用的工具列表
+- `HasToolPermission(roleName, toolName) (bool, error)` - 检查指定角色是否有权限使用某个工具
+- `CanFork(roleName) (bool, error)` - 检查指定角色是否可以创建子代理
+- `CanCurrentFork() bool` - 检查当前角色是否可以创建子代理
+- `GetMaxIterations(roleName) (int, error)` - 获取指定角色的最大迭代次数
+- `GetCurrentMaxIterations() int` - 获取当前角色的最大迭代次数
+- `SwitchRole(newRole, reason) (*AgentRole, error)` - 切换角色
+- `SwitchRoleWithValidation(newRole, reason) (*AgentRole, error)` - 切换角色并进行权限验证
+- `GetRoleHistory() []RoleSwitchRecord` - 获取角色切换历史
+- `ListAllRoles() []string` - 列出所有角色名称
+- `GetTeam() *Team` - 获取团队配置
+- `ResetToDefault() error` - 重置到默认角色
+- `GetRolePriority(roleName) (int, error)` - 获取指定角色的优先级
+- `GetRoleTags(roleName) ([]string, error)` - 获取指定角色的标签
+- `FindRolesByTag(tag) []string` - 根据标签查找角色
+- `GetWorkflow() []WorkflowStep` - 获取工作流定义
+
+#### internal/team/team_test.go
+- 完整的单元测试覆盖
+- 测试团队创建、角色管理、角色切换等功能
+- 测试默认团队配置和工作流定义
+- 所有测试通过（18个测试用例）
+
 ### 2026-04-06 Task 7 新增：子代理Fork机制
 
 #### internal/agent/fork.go
@@ -304,6 +531,12 @@ Agent主循环和核心逻辑：
 - 流式响应处理
 - 思考标签处理
 - 高效执行模式
+- **程序逻辑审查**（Task 6）
+  - 方向偏离检测
+  - 错误模式识别（无限循环、无效调用、重复失败）
+  - 编造内容检测
+  - 进度验证
+  - 审查反馈注入
 - **子代理Fork机制**（Task 7）
   - 创建和管理子代理
   - 身份切换和上下文隔离
@@ -315,10 +548,21 @@ Agent主循环和核心逻辑：
 - 实时监督
 - 监督干预
 
-#### internal/team - 团队定义（待实现）
+#### internal/team - 团队定义与角色管理模块
 定义Agent团队和角色：
 - 团队结构定义
 - 角色职责管理
+- 工作流定义
+- 角色切换机制
+- 工具权限管理
+
+**预定义角色**：
+- **Orchestrator（主控Agent）**：协调任务流程，维护YAML状态，可使用所有工具，可Fork
+- **Architect（架构师）**：架构设计，技术选型，模块划分，可Fork
+- **Developer（开发者）**：代码实现，功能开发，不可Fork
+- **Tester（测试者）**：测试编写，验证功能，不可Fork
+- **Reviewer（审查者）**：代码审查，质量把控，只读权限，不可Fork
+- **Supervisor（监督者）**：监督Agent，检查输出质量，纠偏，只读权限，不可Fork
 
 ## 数据流
 
@@ -379,6 +623,12 @@ Agent主循环和核心逻辑：
   - Agent主循环
   - 取消和并发控制
   - 回调机制
+  - **程序逻辑审查**（Task 6）
+    - Reviewer创建和配置
+    - 各类审查规则检测
+    - 审查结果生成
+    - 反馈消息注入
+    - 并发安全性
   - **子代理Fork机制**（Task 7）
     - ForkManager创建和配置
     - Fork和Join操作
@@ -386,3 +636,10 @@ Agent主循环和核心逻辑：
     - 工具定义和执行
     - 回调机制
     - 并发安全性
+- internal/team: 100% 核心功能覆盖
+  - 团队创建和配置
+  - 角色管理
+  - 角色切换
+  - 工具权限检查
+  - 默认团队配置
+  - 工作流定义
