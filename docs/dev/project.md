@@ -2,6 +2,69 @@
 
 ## 更新日志
 
+### 2026-04-06 Task 7 新增：子代理Fork机制
+
+#### internal/agent/fork.go
+- `ForkManager` - 子代理Fork管理器（线程安全）
+  - 管理子代理的创建、执行和合并
+  - 提供身份切换和上下文隔离机制
+  - 支持嵌套Fork（子代理可以再Fork）
+- `ForkedAgent` - 被Fork出来的子代理结构
+  - ID: 子代理唯一标识
+  - Role: 子代理角色
+  - Task: 子代理任务描述
+  - ParentTaskID: 父任务ID
+  - Agent: 子代理实例
+  - StartTime/EndTime: 开始/结束时间
+  - Summary: 执行总结
+  - Status: 状态（running/completed/failed）
+- `ForkResult` - 子代理执行结果结构
+  - ForkID: 子代理ID
+  - Role: 角色
+  - Task: 任务描述
+  - Summary: 执行总结
+  - Status: 状态
+  - Duration: 执行时长
+  - Iterations: 迭代次数
+- `ForkConfig` - Fork配置结构体
+- `NewForkManager(config) (*ForkManager, error)` - 创建新的Fork管理器
+- `Fork(ctx, parentAgent, role, task) (*ForkResult, error)` - 创建并执行子代理
+- `Join(parentAgent, forkResult) (string, error)` - 合并子代理结果到父Agent
+- `GetActiveForks() []*ForkedAgent` - 获取当前活动的子代理列表
+- `SetOnForkStart(callback)` - 设置子代理开始回调
+- `SetOnForkEnd(callback)` - 设置子代理结束回调
+- `SetOnStreamChunk(callback)` - 设置流式输出回调
+- `buildForkedAgentPrompt(role, task) string` - 构建子代理系统提示词
+- `buildForkMessages(parentAgent, role, task) []Message` - 构建子代理初始消息（上下文隔离）
+- `executeForkedAgent(ctx, agent, messages) (*ForkResult, error)` - 执行子代理
+- `extractSummaryFromHistory(agent) string` - 从历史中提取总结
+
+#### 身份切换提示模板
+- `BuildForkTaskPrompt(role, task, stateSummary) string` - 构建子代理任务提示
+  - 身份切换提示："接下来我转变身份为【{role}】，需要执行以下任务"
+  - 包含任务内容和当前状态摘要
+  - 包含完成指令："完成后使用 complete_as_agent 工具提交执行总结"
+- `BuildJoinPrompt(role, task, summary) string` - 构建合并提示
+  - 完成提示："我以【{role}】身份完成了以下任务"
+  - 包含任务和执行总结
+  - 返回主任务指令："现在继续主任务，请检查YAML状态并继续执行"
+
+#### 子代理工具定义
+- `SpawnAgentTool` - 创建子代理工具
+  - Name: "spawn_agent"
+  - 参数：role（角色）、task（任务描述）
+  - 功能：创建子代理并同步执行，返回执行总结
+- `CompleteAsAgentTool` - 子代理完成任务工具
+  - Name: "complete_as_agent"
+  - 参数：summary（执行总结）
+  - 功能：子代理提交执行总结并结束
+- `NewSpawnAgentTool(forkManager, parentAgent) *SpawnAgentTool` - 创建spawn_agent工具
+- `NewCompleteAsAgentTool() *CompleteAsAgentTool` - 创建complete_as_agent工具
+- `RegisterForkTools(registry, forkManager, parentAgent) error` - 注册Fork相关工具
+
+#### 辅助函数
+- `getPromptTypeByRole(role) SystemPromptType` - 根据角色获取提示词类型
+
 ### 2026-04-06 Task 5 新增：Agent核心循环模块
 
 #### internal/agent/prompts.go
@@ -241,6 +304,11 @@ Agent主循环和核心逻辑：
 - 流式响应处理
 - 思考标签处理
 - 高效执行模式
+- **子代理Fork机制**（Task 7）
+  - 创建和管理子代理
+  - 身份切换和上下文隔离
+  - 结果合并和总结提取
+  - 支持嵌套Fork
 
 #### internal/supervisor - 监督系统（待实现）
 外部监督Agent行为：
@@ -254,11 +322,33 @@ Agent主循环和核心逻辑：
 
 ## 数据流
 
+### 主流程
 1. **用户输入** -> Agent核心
 2. Agent核心 -> **模型服务** (ChatCompletion/StreamChatCompletion)
 3. 模型服务 -> **工具调用** (Tool Calling)
 4. 工具执行 -> **状态更新** (YAML State)
 5. 状态更新 -> Agent核心 -> **循环或完成**
+
+### 子代理Fork流程（Task 7）
+```
+主Agent -> spawn_agent(role, task) -> ForkManager创建子代理
+        -> 子代理执行任务 -> complete_as_agent(summary)
+        -> ForkManager返回总结 -> 主Agent继续
+```
+
+**详细步骤**：
+1. 主Agent调用 `spawn_agent` 工具，指定角色和任务
+2. ForkManager创建子代理实例，构建独立上下文
+3. 子代理以指定角色身份执行任务
+4. 子代理调用 `complete_as_agent` 提交执行总结
+5. ForkManager提取总结并合并到主Agent
+6. 主Agent接收总结，继续主任务
+
+**上下文隔离策略**：
+- 子代理继承父任务ID（共享状态）
+- 子代理不复制完整消息历史（避免上下文过长）
+- 子代理获取当前状态摘要作为上下文
+- 子代理有独立的消息历史管理器
 
 ## 配置说明
 
@@ -289,3 +379,10 @@ Agent主循环和核心逻辑：
   - Agent主循环
   - 取消和并发控制
   - 回调机制
+  - **子代理Fork机制**（Task 7）
+    - ForkManager创建和配置
+    - Fork和Join操作
+    - 身份切换提示构建
+    - 工具定义和执行
+    - 回调机制
+    - 并发安全性
