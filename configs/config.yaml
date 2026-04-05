@@ -1,0 +1,23 @@
+model:
+  endpoint: "http://127.0.0.1:11453/v1/"
+  api_key: "no-key"
+  model_name: "Huihui-Qwen3.5-27B-abliterated.Q4_K_M"
+  context_size: 200000
+
+agent:
+  max_iterations: 100
+  temperature: 0.7
+
+state:
+  dir: "./state"
+  auto_save: true
+
+tools:
+  work_dir: "."
+  allow_commands:
+    - "go"
+    - "git"
+    - "ls"
+    - "cat"
+    - "mkdir"
+    - "rm"
