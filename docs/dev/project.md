@@ -2,6 +2,67 @@
 
 ## 更新日志
 
+### 2026-04-06 Task 11 新增：命令行入口
+
+#### internal/config/loader.go
+- `Config` - 完整的应用配置结构体
+  - Model: 模型服务配置
+  - Agent: Agent行为配置
+  - State: 状态管理配置
+  - Tools: 工具配置
+- `ModelConfig` - 模型服务配置
+  - Endpoint: API端点地址
+  - APIKey: API密钥
+  - ModelName: 模型名称
+  - ContextSize: 上下文大小
+- `AgentConfig` - Agent行为配置
+  - MaxIterations: 最大迭代次数
+  - Temperature: 温度参数
+- `StateConfig` - 状态管理配置
+  - Dir: 状态文件存储目录
+  - AutoSave: 是否自动保存
+- `ToolsConfig` - 工具配置
+  - WorkDir: 工作目录
+  - AllowCommands: 允许执行的命令列表
+- `DefaultConfig() *Config` - 返回默认配置
+- `LoadConfig(path) (*Config, error)` - 从文件加载配置
+- `Validate() error` - 验证配置有效性
+- `GetAbsoluteWorkDir() (string, error)` - 获取绝对工作目录
+- `GetAbsoluteStateDir() (string, error)` - 获取绝对状态目录
+
+#### 环境变量支持
+- `AGENTPLUS_MODEL_ENDPOINT` - 覆盖模型端点
+- `AGENTPLUS_MODEL_API_KEY` - 覆盖API密钥
+- `AGENTPLUS_MODEL_NAME` - 覆盖模型名称
+- `AGENTPLUS_MODEL_CONTEXT_SIZE` - 覆盖上下文大小
+- `AGENTPLUS_AGENT_MAX_ITERATIONS` - 覆盖最大迭代次数
+- `AGENTPLUS_AGENT_TEMPERATURE` - 覆盖温度参数
+- `AGENTPLUS_STATE_DIR` - 覆盖状态目录
+- `AGENTPLUS_STATE_AUTO_SAVE` - 覆盖自动保存设置
+- `AGENTPLUS_TOOLS_WORK_DIR` - 覆盖工作目录
+
+#### cmd/agentplus/main.go
+- 命令行入口程序
+- 支持命令行参数解析
+- 支持交互式任务输入
+- 支持流式输出显示
+- 支持优雅退出（Ctrl+C）
+- 命令行参数：
+  - `-c, --config <file>`: 配置文件路径（默认: ./configs/config.yaml）
+  - `-t, --task <id>`: 继续已有任务
+  - `-w, --workdir <dir>`: 工作目录
+  - `-v, --verbose`: 详细输出
+  - `--no-supervisor`: 禁用监督
+  - `--max-iterations <n>`: 最大迭代次数
+- 交互式命令：
+  - `/help`: 显示帮助信息
+  - `/quit`: 退出程序
+  - `/status`: 显示当前任务状态
+  - `/clear`: 清除当前输入
+
+#### internal/model/message.go 新增
+- `NewAssistantMessageWithToolCalls(content, toolCalls) Message` - 创建带工具调用的助手消息
+
 ### 2026-04-06 Task 10 新增：上下文压缩模块
 
 #### internal/agent/compressor.go

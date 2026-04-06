@@ -1,7 +1,7 @@
 package agent
 
 import (
-	"strings"
+	"fmt"
 	"testing"
 
 	"agentplus/internal/model"
@@ -571,11 +571,10 @@ func TestCompressionWithToolCalls(t *testing.T) {
 		model.NewToolResultMessage("call-2", "read_file", "Hello"),
 	}
 
-	// 添加更多消息以触发压缩
+	// 添加更多消息以触发压缩（增加消息长度）
 	for i := 0; i < 30; i++ {
-		content := strings.Repeat("这是一段测试内容，用于增加消息的长度和token数量。", 10)
-		messages = append(messages, model.NewUserMessage(content))
-		messages = append(messages, model.NewAssistantMessage(content))
+		messages = append(messages, model.NewUserMessage(fmt.Sprintf("这是一条较长的测试消息编号%d，用于触发压缩机制", i)))
+		messages = append(messages, model.NewAssistantMessage(fmt.Sprintf("这是对测试消息%d的回复内容，同样较长以增加token数量", i)))
 	}
 
 	taskState := state.NewTaskState("test-task", "测试任务")

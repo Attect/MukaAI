@@ -144,6 +144,15 @@ func NewAssistantMessage(content string) Message {
 	}
 }
 
+// NewAssistantMessageWithToolCalls 创建带工具调用的助手消息
+func NewAssistantMessageWithToolCalls(content string, toolCalls []ToolCall) Message {
+	return Message{
+		Role:      RoleAssistant,
+		Content:   content,
+		ToolCalls: toolCalls,
+	}
+}
+
 // NewToolResultMessage 创建工具结果消息
 func NewToolResultMessage(toolCallID, name, content string) Message {
 	return Message{

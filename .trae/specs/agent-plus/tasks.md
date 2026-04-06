@@ -2,57 +2,57 @@
 
 ## Phase 1: 项目初始化与基础架构
 
-- [ ] Task 1: 初始化Go项目结构
-  - [ ] SubTask 1.1: 创建go.mod文件，定义模块路径
-  - [ ] SubTask 1.2: 创建项目目录结构（cmd/, internal/, project/, configs/）
-  - [ ] SubTask 1.3: 创建配置文件configs/config.yaml
+- [x] Task 1: 初始化Go项目结构
+  - [x] SubTask 1.1: 创建go.mod文件，定义模块路径
+  - [x] SubTask 1.2: 创建项目目录结构（cmd/, internal/, project/, configs/）
+  - [x] SubTask 1.3: 创建配置文件configs/config.yaml
 
-- [ ] Task 2: 实现模型服务连接模块
-  - [ ] SubTask 2.1: 创建internal/model/client.go，实现OpenAI API兼容客户端
-  - [ ] SubTask 2.2: 创建internal/model/message.go，定义消息结构
-  - [ ] SubTask 2.3: 实现流式响应处理
-  - [ ] SubTask 2.4: 实现工具调用（Function Calling）支持
-  - [ ] SubTask 2.5: 编写模型连接测试验证
+- [x] Task 2: 实现模型服务连接模块
+  - [x] SubTask 2.1: 创建internal/model/client.go，实现OpenAI API兼容客户端
+  - [x] SubTask 2.2: 创建internal/model/message.go，定义消息结构
+  - [x] SubTask 2.3: 实现流式响应处理
+  - [x] SubTask 2.4: 实现工具调用（Function Calling）支持
+  - [x] SubTask 2.5: 编写模型连接测试验证
 
-- [ ] Task 3: 实现基础工具集
-  - [ ] SubTask 3.1: 创建internal/tools/registry.go，定义工具注册机制
-  - [ ] SubTask 3.2: 创建internal/tools/filesystem.go，实现文件读写工具
-  - [ ] SubTask 3.3: 创建internal/tools/command.go，实现命令执行工具
-  - [ ] SubTask 3.4: 定义工具JSON Schema供模型调用
+- [x] Task 3: 实现基础工具集
+  - [x] SubTask 3.1: 创建internal/tools/registry.go，定义工具注册机制
+  - [x] SubTask 3.2: 创建internal/tools/filesystem.go，实现文件读写工具
+  - [x] SubTask 3.3: 创建internal/tools/command.go，实现命令执行工具
+  - [x] SubTask 3.4: 定义工具JSON Schema供模型调用
 
 ## Phase 2: 核心Agent逻辑
 
-- [ ] Task 4: 实现YAML状态管理
-  - [ ] SubTask 4.1: 创建internal/state/yaml.go，实现YAML解析与序列化
-  - [ ] SubTask 4.2: 创建internal/state/task.go，定义任务状态结构
-  - [ ] SubTask 4.3: 实现状态自动更新机制
-  - [ ] SubTask 4.4: 实现状态恢复功能
+- [x] Task 4: 实现YAML状态管理
+  - [x] SubTask 4.1: 创建internal/state/yaml.go，实现YAML解析与序列化
+  - [x] SubTask 4.2: 创建internal/state/task.go，定义任务状态结构
+  - [x] SubTask 4.3: 实现状态自动更新机制
+  - [x] SubTask 4.4: 实现状态恢复功能
 
-- [ ] Task 5: 实现Agent核心循环
-  - [ ] SubTask 5.1: 创建internal/agent/core.go，实现Agent主循环
-  - [ ] SubTask 5.2: 实现消息历史管理
-  - [ ] SubTask 5.3: 实现工具调用执行与结果处理
-  - [ ] SubTask 5.4: 实现高效执行模式（无冗余输出）
+- [x] Task 5: 实现Agent核心循环
+  - [x] SubTask 5.1: 创建internal/agent/core.go，实现Agent主循环
+  - [x] SubTask 5.2: 实现消息历史管理
+  - [x] SubTask 5.3: 实现工具调用执行与结果处理
+  - [x] SubTask 5.4: 实现高效执行模式（无冗余输出）
 
-- [ ] Task 6: 实现程序逻辑审查
-  - [ ] SubTask 6.1: 创建internal/agent/reviewer.go
-  - [ ] SubTask 6.2: 实现方向偏离检测
-  - [ ] SubTask 6.3: 实现错误模式识别
-  - [ ] SubTask 6.4: 实现编造内容检测
-  - [ ] SubTask 6.5: 实现审查反馈注入机制
+- [x] Task 6: 实现程序逻辑审查
+  - [x] SubTask 6.1: 创建internal/agent/reviewer.go
+  - [x] SubTask 6.2: 实现方向偏离检测
+  - [x] SubTask 6.3: 实现错误模式识别
+  - [x] SubTask 6.4: 实现编造内容检测
+  - [x] SubTask 6.5: 实现审查反馈注入机制
 
 ## Phase 3: 子代理与团队系统
 
-- [ ] Task 7: 实现子代理Fork机制
-  - [ ] SubTask 7.1: 创建internal/agent/fork.go
-  - [ ] SubTask 7.2: 实现会话Fork与身份切换
-  - [ ] SubTask 7.3: 实现子代理结果总结与返回
-  - [ ] SubTask 7.4: 实现上下文隔离
+- [x] Task 7: 实现子代理Fork机制
+  - [x] SubTask 7.1: 创建internal/agent/fork.go
+  - [x] SubTask 7.2: 实现会话Fork与身份切换
+  - [x] SubTask 7.3: 实现子代理结果总结与返回
+  - [x] SubTask 7.4: 实现上下文隔离
 
-- [ ] Task 8: 实现团队定义与角色管理
-  - [ ] SubTask 8.1: 创建internal/team/definition.go，定义团队结构
-  - [ ] SubTask 8.2: 创建internal/team/roles.go，定义各角色职责与提示词
-  - [ ] SubTask 8.3: 实现角色切换机制
+- [x] Task 8: 实现团队定义与角色管理
+  - [x] SubTask 8.1: 创建internal/team/definition.go，定义团队结构
+  - [x] SubTask 8.2: 创建internal/team/roles.go，定义各角色职责与提示词
+  - [x] SubTask 8.3: 实现角色切换机制
 
 - [ ] Task 9: 实现监督系统
   - [ ] SubTask 9.1: 创建internal/supervisor/monitor.go
