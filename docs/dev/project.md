@@ -2,6 +2,163 @@
 
 ## 更新日志
 
+### 2026-04-06 Task 9 新增：监督系统模块
+
+#### internal/supervisor/monitor.go
+- `InterventionType` - 干预类型枚举
+  - warning: 警告（记录问题但不中断）
+  - pause: 暂停（暂停当前Agent，等待人工确认）
+  - interrupt: 中断（中断当前操作，注入修正指令）
+  - rollback: 回滚（回滚到上一个稳定状态）
+- `IssueType` - 监督问题类型枚举
+  - quality: 输出质量问题
+  - progress: 任务进度问题
+  - error: 错误检测
+  - security: 安全问题
+  - behavior: 行为异常
+  - resource: 资源使用问题
+- `SupervisionIssue` - 监督发现的问题结构体
+  - Type: 问题类型
+  - Severity: 严重程度（low/medium/high/critical）
+  - Description: 问题描述
+  - Evidence: 证据/示例
+  - Suggestion: 修正建议
+  - Timestamp: 发现时间
+  - Context: 上下文信息
+- `InterventionRecord` - 干预记录结构体
+  - ID: 干预记录ID
+  - Type: 干预类型
+  - Issue: 相关问题
+  - Timestamp: 干预时间
+  - Action: 采取的行动
+  - Result: 干预结果
+  - TaskID: 相关任务ID
+  - AgentRole: 相关Agent角色
+- `SupervisionResult` - 监督结果结构体
+  - Status: 监督状态（pass/warning/intervention）
+  - Issues: 发现的问题列表
+  - Timestamp: 监督时间
+  - Summary: 监督摘要
+  - Intervention: 需要的干预（如果有）
+- `SupervisionStats` - 监督统计结构体
+  - TotalChecks: 总检查次数
+  - IssuesFound: 发现的问题总数
+  - Interventions: 干预次数
+  - WarningsIssued: 发出的警告次数
+  - PausesTriggered: 触发的暂停次数
+  - InterruptsTriggered: 触发的中断次数
+  - RollbacksTriggered: 触发的回滚次数
+  - LastCheckTime: 最后检查时间
+  - StartTime: 监督开始时间
+- `SupervisorConfig` - 监督器配置结构体
+  - EnableQualityCheck: 启用输出质量检查
+  - EnableProgressCheck: 启用任务进度检查
+  - EnableErrorDetection: 启用错误检测
+  - EnableSecurityCheck: 启用安全检查
+  - EnableBehaviorCheck: 启用行为检查
+  - EnableResourceCheck: 启用资源检查
+  - MonitorInterval: 监督频率（秒）
+  - MaxWarnings: 最大警告次数
+  - AutoIntervene: 自动干预
+  - MaxConsecutiveErrors: 最大连续错误次数
+  - QualityThreshold: 质量阈值
+  - ProgressTimeout: 进度超时时间
+  - EnableParallelMonitor: 启用并行监督
+  - MaxParallelChecks: 最大并行检查数
+- `AgentOutput` - Agent输出结构体
+  - Content: 输出内容
+  - ToolCalls: 工具调用列表
+  - Timestamp: 输出时间
+  - TaskID: 任务ID
+  - AgentRole: Agent角色
+  - Iteration: 迭代次数
+  - Success: 是否成功
+  - Error: 错误信息
+- `Supervisor` - 监督器（线程安全）
+  - 管理监督检查和干预机制
+  - 维护干预历史和统计信息
+  - 支持并行监督
+  - 提供回调机制
+- `NewSupervisor(modelClient, toolRegistry, stateManager, reviewer, config) (*Supervisor, error)` - 创建新的监督器
+- `Monitor(ctx, agentOutput, taskState) *SupervisionResult` - 监督Agent输出
+- `ParallelMonitor(ctx, outputs) <-chan *SupervisionResult` - 并行监督多个Agent输出
+- `Intervene(ctx, issue) *InterventionRecord` - 执行干预
+- `SetOnIntervention(callback)` - 设置干预回调
+- `SetOnWarning(callback)` - 设置警告回调
+- `SetOnIssueFound(callback)` - 设置问题发现回调
+- `GetInterventionLog() []InterventionRecord` - 获取干预历史
+- `GetStatistics() SupervisionStats` - 获取监督统计
+- `Reset()` - 重置监督器状态
+- `SaveStableState(taskState)` - 保存稳定状态（用于回滚）
+- `Resume()` - 恢复执行（用于暂停后）
+- `Stop()` - 停止监督
+
+#### 监督检查项实现
+- **输出质量检查**：验证Agent输出的质量和完整性
+  - 检查输出是否为空
+  - 检查输出长度是否合理
+  - 集成审查器进行深度检查
+- **任务进度检查**：监控任务执行进度
+  - 检查任务是否超时
+  - 检查进度是否停滞
+  - 跟踪完成步骤
+- **错误检测**：识别和处理错误
+  - 检查输出中的错误标记
+  - 跟踪连续错误次数
+  - 检查工具调用失败
+- **安全检查**：识别潜在安全风险
+  - 检查危险命令（rm -rf /, mkfs等）
+  - 检查敏感文件访问（/etc/passwd, .env等）
+- **行为检查**：监控Agent行为
+  - 检查迭代次数是否过高
+  - 检查工具调用频率
+- **资源检查**：监控资源使用
+  - 检查输出大小
+  - 防止资源过度消耗
+
+#### 干预机制实现
+- **警告（warning）**：记录问题但不中断执行
+  - 适用于低严重度问题
+  - 触发警告回调
+  - 累计警告次数
+- **暂停（pause）**：暂停当前Agent，等待人工确认
+  - 适用于高严重度问题
+  - 发送暂停信号
+  - 等待恢复信号
+- **中断（interrupt）**：中断当前操作，注入修正指令
+  - 适用于严重安全问题
+  - 发送停止信号
+  - 立即停止执行
+- **回滚（rollback）**：回滚到上一个稳定状态
+  - 适用于严重错误
+  - 恢复保存的稳定状态
+  - 需要预先保存状态
+
+#### 监督流程
+```
+Agent执行 -> 监督器并行检查 -> 发现问题 -> 干预决策 -> 执行干预
+```
+
+**详细步骤**：
+1. Agent产生输出
+2. 监督器接收输出并执行各项检查
+3. 汇总发现的问题
+4. 确定监督状态（pass/warning/intervention）
+5. 根据配置决定是否干预
+6. 执行干预动作（如果需要）
+7. 触发相应回调
+8. 记录干预历史和统计信息
+
+#### internal/supervisor/monitor_test.go
+- 完整的单元测试覆盖
+- 测试监督器创建和配置
+- 测试各类监督检查
+- 测试干预机制
+- 测试并行监督
+- 测试回调机制
+- 测试统计和日志
+- 所有测试通过（20+测试用例）
+
 ### 2026-04-06 Task 6 新增：程序逻辑审查模块
 
 #### internal/agent/reviewer.go
@@ -543,10 +700,28 @@ Agent主循环和核心逻辑：
   - 结果合并和总结提取
   - 支持嵌套Fork
 
-#### internal/supervisor - 监督系统（待实现）
-外部监督Agent行为：
-- 实时监督
-- 监督干预
+#### internal/supervisor - 监督系统模块
+外部监督Agent行为，提供实时监督和干预机制：
+- **监督检查**（Task 9）
+  - 输出质量检查
+  - 任务进度检查
+  - 错误检测
+  - 安全检查（可选）
+  - 行为检查
+  - 资源检查
+- **干预机制**
+  - 警告：记录问题但不中断
+  - 暂停：暂停当前Agent，等待人工确认
+  - 中断：中断当前操作，注入修正指令
+  - 回滚：回滚到上一个稳定状态
+- **监督报告**
+  - 生成监督日志
+  - 记录干预历史
+  - 统计监督指标
+- **并行监督**
+  - 支持goroutine并行监督
+  - 工作池模式
+  - 线程安全
 
 #### internal/team - 团队定义与角色管理模块
 定义Agent团队和角色：
@@ -593,6 +768,30 @@ Agent主循环和核心逻辑：
 - 子代理不复制完整消息历史（避免上下文过长）
 - 子代理获取当前状态摘要作为上下文
 - 子代理有独立的消息历史管理器
+
+### 监督流程（Task 9）
+```
+Agent执行 -> 监督器并行检查 -> 发现问题 -> 干预决策 -> 执行干预
+```
+
+**详细步骤**：
+1. Agent产生输出
+2. 监督器接收输出并执行各项检查（质量、进度、错误、安全、行为、资源）
+3. 汇总发现的问题
+4. 确定监督状态（pass/warning/intervention）
+5. 根据配置决定是否干预
+6. 执行干预动作（如果需要）
+   - 警告：记录问题但不中断
+   - 暂停：暂停Agent，等待人工确认
+   - 中断：中断当前操作
+   - 回滚：回滚到上一个稳定状态
+7. 触发相应回调
+8. 记录干预历史和统计信息
+
+**并行监督**：
+- 使用工作池模式并行处理多个Agent输出
+- 支持配置最大并行检查数
+- 线程安全的状态管理
 
 ## 配置说明
 
@@ -643,3 +842,11 @@ Agent主循环和核心逻辑：
   - 工具权限检查
   - 默认团队配置
   - 工作流定义
+- internal/supervisor: 100% 核心功能覆盖
+  - 监督器创建和配置
+  - 各类监督检查（质量、进度、错误、安全、行为、资源）
+  - 干预机制（警告、暂停、中断、回滚）
+  - 并行监督
+  - 回调机制
+  - 统计和日志
+  - 并发安全性
