@@ -2,6 +2,83 @@
 
 ## 更新日志
 
+### 2026-04-06 Task 10 新增：上下文压缩模块
+
+#### internal/agent/compressor.go
+- `CompressorConfig` - 压缩器配置结构体
+  - TriggerThreshold: 触发压缩的上下文使用阈值（默认0.8）
+  - MinMessagesToKeep: 压缩后保留的最小消息数量（默认10）
+  - MaxMessagesToKeep: 压缩后保留的最大消息数量（默认20）
+  - KeepSystemMessages: 是否保留所有系统消息（默认true）
+  - KeepRecentToolCalls: 保留最近N次工具调用及其结果（默认3）
+  - EnableProgressiveCompression: 是否启用渐进式压缩（默认true）
+  - SummaryMaxLength: 摘要的最大长度（默认2000）
+- `CompressionResult` - 压缩结果结构体
+  - CompressedMessages: 压缩后的消息列表
+  - OriginalCount: 原始消息数量
+  - CompressedCount: 压缩后消息数量
+  - OriginalTokens: 原始token数量
+  - CompressedTokens: 压缩后token数量
+  - CompressionRatio: 压缩比率（0-1）
+  - Summary: 生成的上下文摘要
+  - WasCompressed: 是否进行了压缩
+- `Compressor` - 上下文压缩器（线程安全）
+  - 管理上下文压缩策略
+  - 支持渐进式压缩和深度压缩
+  - 基于YAML状态摘要生成压缩摘要
+- `KeyInfo` - 关键信息结构体
+  - Decisions: 关键决策
+  - RecentActions: 最近操作
+  - ToolHistory: 工具调用历史
+- `CompressionStats` - 压缩统计信息结构体
+  - MessageCount: 消息数量
+  - TokenCount: Token数量
+  - ContextSize: 上下文大小
+  - UsageRatio: 使用率
+  - ShouldCompress: 是否应该压缩
+  - TriggerThreshold: 触发阈值
+- `NewCompressor(modelClient, config) (*Compressor, error)` - 创建新的上下文压缩器
+- `ShouldCompress(messages) (bool, float64)` - 判断是否需要压缩
+- `Compress(messages, taskState) (*CompressionResult, error)` - 压缩消息历史
+- `ExtractKeyInfo(messages) *KeyInfo` - 提取关键信息
+- `GetConfig() *CompressorConfig` - 获取压缩器配置
+- `UpdateConfig(config) error` - 更新压缩器配置
+- `GetCompressionStats(messages) *CompressionStats` - 获取压缩统计信息
+
+#### 压缩策略实现
+- **渐进式压缩**：
+  - 第一阶段：轻度压缩（保留更多消息）
+  - 第二阶段：深度压缩（如果轻度压缩后仍然超限）
+- **压缩保留策略**：
+  - 保留所有系统消息
+  - 保留最近的工具调用和结果
+  - 保留最近的对话消息
+  - 生成上下文摘要替代被压缩的内容
+- **关键信息提取**：
+  - 从消息中提取关键决策
+  - 提取最近的操作记录
+  - 提取工具调用历史
+- **上下文摘要生成**：
+  - 基于YAML状态摘要
+  - 包含任务目标、当前状态、已完成步骤
+  - 包含关键决策和最近操作
+  - 支持长度限制
+
+#### 压缩触发机制
+- 当上下文使用超过阈值（默认80%）时触发
+- 可配置触发阈值
+- 压缩后保持最小上下文
+- 支持渐进式压缩策略
+
+#### internal/agent/compressor_test.go
+- 完整的单元测试覆盖
+- 测试压缩器创建和配置
+- 测试压缩判断逻辑
+- 测试压缩功能
+- 测试关键信息提取
+- 测试并发安全性
+- 所有测试通过（9个测试用例）
+
 ### 2026-04-06 Task 9 新增：监督系统模块
 
 #### internal/supervisor/monitor.go
