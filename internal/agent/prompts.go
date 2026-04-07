@@ -2,6 +2,8 @@
 // 包含消息历史管理、工具执行、状态维护等功能
 package agent
 
+import "fmt"
+
 // SystemPromptType 系统提示词类型
 type SystemPromptType string
 
@@ -159,4 +161,83 @@ func BuildToolResultPrompt(toolName string, result string) string {
 // BuildErrorPrompt 构建错误提示词
 func BuildErrorPrompt(err string) string {
 	return "执行出错：" + err + "\n请分析错误原因并尝试修复。"
+}
+
+// VerificationPrompt 校验相关提示词
+const VerificationPrompt = `
+## 成果校验机制
+
+在标记任务完成前，系统会自动校验你的工作成果。校验包括：
+1. 文件存在性检查：确认你声称创建的文件确实存在
+2. 内容完整性检查：确认文件内容不为空且符合基本要求
+3. 需求匹配检查：确认实现的功能符合任务要求
+
+如果校验失败，你需要：
+1. 仔细阅读失败原因
+2. 修复指出的问题
+3. 重新尝试完成任务
+
+## 重要提示
+- 不要假设文件已存在，确保实际创建了文件
+- 不要输出虚假的完成报告，系统会验证
+- 如果遇到困难，如实报告问题，不要编造结果
+`
+
+// BuildVerificationFailurePrompt 构建校验失败提示词
+func BuildVerificationFailurePrompt(issues []VerifyIssue) string {
+	prompt := "## ⚠️ 任务完成校验失败\n\n"
+	prompt += "你的工作成果未能通过校验，请修复以下问题后重新尝试：\n\n"
+
+	for i, issue := range issues {
+		prompt += fmt.Sprintf("%d. **%s** (严重程度: %s)\n", i+1, issue.Description, issue.Severity)
+		if issue.Evidence != "" {
+			prompt += "   - 证据: " + issue.Evidence + "\n"
+		}
+		if issue.Suggestion != "" {
+			prompt += "   - 建议: " + issue.Suggestion + "\n"
+		}
+		prompt += "\n"
+	}
+
+	prompt += "请修复上述问题后，重新调用complete_task工具。"
+	return prompt
+}
+
+// BuildReviewBlockPrompt 构建审查阻断提示词
+func BuildReviewBlockPrompt(issues []ReviewIssue) string {
+	prompt := "## ⚠️ 操作被审查系统阻断\n\n"
+	prompt += "你的操作被程序逻辑审查器阻断，原因如下：\n\n"
+
+	for i, issue := range issues {
+		prompt += fmt.Sprintf("%d. **%s** (类型: %s, 严重程度: %s)\n", i+1, issue.Description, issue.Type, issue.Severity)
+		if issue.Evidence != "" {
+			prompt += "   - 证据: " + issue.Evidence + "\n"
+		}
+		if issue.Suggestion != "" {
+			prompt += "   - 建议: " + issue.Suggestion + "\n"
+		}
+		prompt += "\n"
+	}
+
+	prompt += "请根据上述建议调整你的操作后继续。"
+	return prompt
+}
+
+// BuildCorrectionPrompt 构建修正指令提示词
+func BuildCorrectionPrompt(correction *CorrectionResult) string {
+	if correction == nil || !correction.NeedsCorrection {
+		return ""
+	}
+
+	prompt := "## 📋 修正指令\n\n"
+	prompt += "系统检测到问题并生成了修正建议：\n\n"
+	prompt += "**失败原因摘要**: " + correction.FailureSummary + "\n\n"
+	prompt += "**修正指令**:\n" + correction.Instruction + "\n\n"
+	prompt += fmt.Sprintf("**剩余重试次数**: %d\n", correction.RemainingRetries)
+
+	if correction.RemainingRetries <= 1 {
+		prompt += "\n⚠️ 警告：这是你最后的机会，请务必仔细修正所有问题。"
+	}
+
+	return prompt
 }

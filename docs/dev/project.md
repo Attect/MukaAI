@@ -2,6 +2,77 @@
 
 ## 更新日志
 
+### 2026-04-07 Task 15 改进：校验机制优化
+
+#### internal/agent/selfcorrector.go
+- `SelfCorrectorConfig` 结构体新增字段：
+  - `MaxReviewRetries int` - 审查最大重试次数（默认3）
+  - `MaxVerifyRetries int` - 校验最大重试次数（默认5）
+- `SelfCorrector` 结构体新增字段：
+  - `reviewRetryCount int` - 审查重试计数
+  - `verifyRetryCount int` - 校验重试计数
+- `CorrectionStatistics` 结构体新增字段：
+  - `ReviewRetryCount int` - 审查重试次数
+  - `VerifyRetryCount int` - 校验重试次数
+  - `MaxReviewRetries int` - 审查最大重试次数
+  - `MaxVerifyRetries int` - 校验最大重试次数
+  - `RemainingReviewRetries int` - 剩余审查重试次数
+  - `RemainingVerifyRetries int` - 剩余校验重试次数
+- `DefaultSelfCorrectorConfig()` - 新增默认值：MaxReviewRetries=3, MaxVerifyRetries=5
+- `NewSelfCorrector(config)` - 初始化分离的重试计数
+- `ShouldRetryReview() bool` - 检查是否还有审查重试机会（新增）
+- `ShouldRetryVerify() bool` - 检查是否还有校验重试机会（新增）
+- `RecordReviewFailure(summary, details, issues)` - 记录审查失败（新增）
+- `RecordVerifyFailure(summary, details, issues)` - 记录校验失败（新增）
+- `GetReviewRetryCount() int` - 获取审查重试计数（新增）
+- `GetVerifyRetryCount() int` - 获取校验重试计数（新增）
+- `GetRemainingReviewRetries() int` - 获取剩余审查重试次数（新增）
+- `GetRemainingVerifyRetries() int` - 获取剩余校验重试次数（新增）
+- `GetStatistics()` - 更新以包含分离的重试统计
+- `Reset()` - 更新以重置分离的重试计数
+- `MarkSuccess()` - 更新以重置分离的重试计数
+
+#### internal/agent/core.go
+- `Agent` 结构体新增字段：
+  - `verificationPassed bool` - 是否通过强制校验
+- `Run(ctx, taskGoal)` - 重构主循环以支持强制校验：
+  - 使用外层循环支持强制校验后的重试
+  - 任务完成时不立即返回，而是跳出内层循环
+  - 在外层循环中执行强制校验
+  - 强制校验失败时重置状态为in_progress，注入修正指令，继续循环
+  - 添加最大外层迭代保护（maxIterations + 10）
+  - 使用分离的重试计数：审查使用 `ShouldRetryReview()`，校验使用 `ShouldRetryVerify()`
+
+#### 改进说明
+**分离重试计数**：
+- 审查和校验使用独立的重试计数器
+- 审查默认最大重试次数：3次
+- 校验默认最大重试次数：5次
+- 避免审查失败耗尽所有重试机会，影响校验重试
+
+**强制校验机制**：
+- 任务标记为completed后，不立即返回
+- 在外层循环中执行强制校验
+- 强制校验失败时，重置状态，注入修正指令，继续执行
+- 提供额外的迭代保护，防止无限循环
+
+#### 改进流程
+```
+内层循环 -> 任务完成 -> 跳出内层循环 -> 外层循环 -> 强制校验
+                                                        |
+                                                        v
+                                                    [失败?]
+                                                        |
+                                                        v
+                                        重置状态 -> 注入修正指令 -> 继续内层循环
+                                                        |
+                                                        v
+                                                    [通过?]
+                                                        |
+                                                        v
+                                                真正完成任务 -> 返回结果
+```
+
 ### 2026-04-07 Task 14 修改：集成校验和自我修正机制到Agent核心
 
 #### internal/agent/core.go

@@ -33,10 +33,10 @@ func NewClient(config *Config) (*Client, error) {
 	return &Client{
 		config: config,
 		httpClient: &http.Client{
-			Timeout: 5 * time.Minute, // 长时间推理的超时设置
+			Timeout: 300 * time.Minute, // 长时间推理的超时设置，适配慢速本地模型
 		},
 	}, nil
-}
+} 
 
 // ChatCompletion 发送聊天补全请求
 // ctx: 上下文，用于取消请求

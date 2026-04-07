@@ -38,6 +38,9 @@ type Agent struct {
 	running    bool
 	cancelFunc context.CancelFunc
 
+	// 校验状态
+	verificationPassed bool // 是否通过强制校验
+
 	// 回调
 	onStreamChunk func(chunk string)      // 流式输出回调
 	onToolCall    func(name, args string) // 工具调用回调
@@ -190,178 +193,247 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 		Iterations: 0,
 	}
 
-	for iteration := 1; iteration <= a.maxIterations; iteration++ {
-		// 检查上下文是否已取消
-		select {
-		case <-runCtx.Done():
-			result.Status = "cancelled"
-			result.EndTime = time.Now()
-			return result, runCtx.Err()
-		default:
-		}
+	// 使用外层循环支持强制校验后的重试
+	outerIteration := 0
+	maxOuterIterations := a.maxIterations + 10 // 额外的迭代用于强制校验重试
 
-		// 迭代回调
-		if a.onIteration != nil {
-			a.onIteration(iteration)
-		}
+	for outerIteration < maxOuterIterations {
+		outerIteration++
 
-		// 检查上下文是否超出限制
-		if a.modelClient.IsContextOverflow(a.history.GetMessagesRef()) {
-			// 截断历史
-			config := a.modelClient.GetConfig()
-			a.history.Truncate(int(float64(config.ContextSize)*0.8), a.modelClient.CountTokens)
-		}
-
-		// 发送消息给模型（使用流式响应）
-		response, err := a.callModel(runCtx)
-		if err != nil {
-			result.Status = "failed"
-			result.Error = err.Error()
-			result.EndTime = time.Now()
-			a.stateManager.UpdateTaskStatus(a.taskID, "failed")
-			return result, fmt.Errorf("model call failed: %w", err)
-		}
-
-		// 添加助手消息到历史
-		assistantMsg := model.Message{
-			Role:      model.RoleAssistant,
-			Content:   response.Content,
-			ToolCalls: response.ToolCalls,
-		}
-		a.history.AddMessage(assistantMsg)
-
-		// 审查模型输出（在工具调用前）
-		taskState, _ := a.stateManager.GetState(a.taskID)
-		reviewResult := a.reviewer.ReviewOutput(response.Content, response.ToolCalls, taskState)
-
-		// 如果审查结果被阻断，生成修正指令并注入历史
-		if reviewResult.IsBlocked() {
-			// 分析失败并生成修正指令
-			correctionResult := a.corrector.AnalyzeFailure(nil, reviewResult)
-			correctionInstruction := a.corrector.GenerateCorrectionInstruction(correctionResult)
-
-			// 检查是否还有重试机会
-			if !a.corrector.ShouldRetry() {
-				// 重试次数耗尽，任务失败
-				result.Status = "failed"
-				result.Error = fmt.Sprintf("审查阻断且重试次数耗尽: %s", reviewResult.Summary)
+		// 内层主循环
+		for iteration := 1; iteration <= a.maxIterations; iteration++ {
+			// 检查上下文是否已取消
+			select {
+			case <-runCtx.Done():
+				result.Status = "cancelled"
 				result.EndTime = time.Now()
-				a.stateManager.UpdateTaskStatus(a.taskID, "failed")
-				return result, fmt.Errorf("review blocked and retries exhausted: %s", reviewResult.Summary)
+				return result, runCtx.Err()
+			default:
 			}
 
-			// 注入修正指令到历史
-			a.history.AddMessage(model.NewUserMessage(correctionInstruction))
-			result.Iterations = iteration
-			continue
-		}
+			// 迭代回调
+			if a.onIteration != nil {
+				a.onIteration(iteration)
+			}
 
-		// 检查是否有工具调用
-		if len(response.ToolCalls) > 0 {
-			// 执行工具调用
-			toolResults, err := a.executeTools(runCtx, response.ToolCalls)
+			// 检查上下文是否超出限制
+			if a.modelClient.IsContextOverflow(a.history.GetMessagesRef()) {
+				// 截断历史
+				config := a.modelClient.GetConfig()
+				a.history.Truncate(int(float64(config.ContextSize)*0.8), a.modelClient.CountTokens)
+			}
+
+			// 发送消息给模型（使用流式响应）
+			response, err := a.callModel(runCtx)
 			if err != nil {
 				result.Status = "failed"
 				result.Error = err.Error()
 				result.EndTime = time.Now()
 				a.stateManager.UpdateTaskStatus(a.taskID, "failed")
-				return result, fmt.Errorf("tool execution failed: %w", err)
+				return result, fmt.Errorf("model call failed: %w", err)
 			}
 
-			// 添加工具结果到历史
-			a.history.AddMessages(toolResults)
-
-			// 检查是否有任务完成/失败的工具调用
-			for _, tc := range response.ToolCalls {
-				if tc.Function.Name == "complete_task" {
-					// 在完成任务前进行校验
-					verifyResult := a.verifyTaskCompletion(runCtx, taskGoal)
-
-					if verifyResult != nil && verifyResult.IsFailed() {
-						// 校验失败，记录失败并生成修正指令
-						correctionResult := a.corrector.AnalyzeFailure(verifyResult, nil)
-						correctionInstruction := a.corrector.GenerateCorrectionInstruction(correctionResult)
-
-						// 检查是否还有重试机会
-						if !a.corrector.ShouldRetry() {
-							// 重试次数耗尽，任务失败
-							result.Status = "failed"
-							result.Error = fmt.Sprintf("任务完成校验失败且重试次数耗尽: %s", verifyResult.Summary)
-							result.EndTime = time.Now()
-							a.stateManager.UpdateTaskStatus(a.taskID, "failed")
-							return result, fmt.Errorf("verification failed and retries exhausted: %s", verifyResult.Summary)
-						}
-
-						// 注入修正指令到历史，继续执行
-						a.history.AddMessage(model.NewUserMessage(correctionInstruction))
-						result.Iterations = iteration
-						continue
-					}
-
-					// 校验通过，标记任务完成
-					result.Status = "completed"
-					result.EndTime = time.Now()
-					a.stateManager.UpdateTaskStatus(a.taskID, "completed")
-					return result, nil
-				}
-				if tc.Function.Name == "fail_task" {
-					result.Status = "failed"
-					result.EndTime = time.Now()
-					a.stateManager.UpdateTaskStatus(a.taskID, "failed")
-					return result, nil
-				}
+			// 添加助手消息到历史
+			assistantMsg := model.Message{
+				Role:      model.RoleAssistant,
+				Content:   response.Content,
+				ToolCalls: response.ToolCalls,
 			}
+			a.history.AddMessage(assistantMsg)
 
-			result.Iterations = iteration
-			continue
-		}
+			// 审查模型输出（在工具调用前）
+			taskState, _ := a.stateManager.GetState(a.taskID)
+			reviewResult := a.reviewer.ReviewOutput(response.Content, response.ToolCalls, taskState)
 
-		// 没有工具调用，检查是否完成
-		// 如果响应中包含完成标志，则结束
-		if a.isTaskComplete(response.Content) {
-			// 在完成任务前进行校验
-			verifyResult := a.verifyTaskCompletion(runCtx, taskGoal)
-
-			if verifyResult != nil && verifyResult.IsFailed() {
-				// 校验失败，记录失败并生成修正指令
-				correctionResult := a.corrector.AnalyzeFailure(verifyResult, nil)
+			// 如果审查结果被阻断，生成修正指令并注入历史
+			if reviewResult.IsBlocked() {
+				// 分析失败并生成修正指令
+				correctionResult := a.corrector.AnalyzeFailure(nil, reviewResult)
 				correctionInstruction := a.corrector.GenerateCorrectionInstruction(correctionResult)
 
-				// 检查是否还有重试机会
-				if !a.corrector.ShouldRetry() {
+				// 检查是否还有审查重试机会
+				if !a.corrector.ShouldRetryReview() {
 					// 重试次数耗尽，任务失败
 					result.Status = "failed"
-					result.Error = fmt.Sprintf("任务完成校验失败且重试次数耗尽: %s", verifyResult.Summary)
+					result.Error = fmt.Sprintf("审查阻断且重试次数耗尽: %s", reviewResult.Summary)
 					result.EndTime = time.Now()
 					a.stateManager.UpdateTaskStatus(a.taskID, "failed")
-					return result, fmt.Errorf("verification failed and retries exhausted: %s", verifyResult.Summary)
+					return result, fmt.Errorf("review blocked and retries exhausted: %s", reviewResult.Summary)
 				}
 
-				// 注入修正指令到历史，继续执行
+				// 注入修正指令到历史
 				a.history.AddMessage(model.NewUserMessage(correctionInstruction))
 				result.Iterations = iteration
 				continue
 			}
 
-			result.Status = "completed"
-			result.EndTime = time.Now()
-			result.FinalResponse = response.Content
+			// 检查是否有工具调用
+			if len(response.ToolCalls) > 0 {
+				// 执行工具调用
+				toolResults, err := a.executeTools(runCtx, response.ToolCalls)
+				if err != nil {
+					result.Status = "failed"
+					result.Error = err.Error()
+					result.EndTime = time.Now()
+					a.stateManager.UpdateTaskStatus(a.taskID, "failed")
+					return result, fmt.Errorf("tool execution failed: %w", err)
+				}
+
+				// 添加工具结果到历史
+				a.history.AddMessages(toolResults)
+
+				// 检查是否有任务完成/失败的工具调用
+				for _, tc := range response.ToolCalls {
+					if tc.Function.Name == "complete_task" {
+						// 在完成任务前进行校验
+						verifyResult := a.verifyTaskCompletion(runCtx, taskGoal)
+
+						if verifyResult != nil && verifyResult.IsFailed() {
+							// 校验失败，记录失败并生成修正指令
+							correctionResult := a.corrector.AnalyzeFailure(verifyResult, nil)
+							correctionInstruction := a.corrector.GenerateCorrectionInstruction(correctionResult)
+
+							// 检查是否还有校验重试机会
+							if !a.corrector.ShouldRetryVerify() {
+								// 重试次数耗尽，任务失败
+								result.Status = "failed"
+								result.Error = fmt.Sprintf("任务完成校验失败且重试次数耗尽: %s", verifyResult.Summary)
+								result.EndTime = time.Now()
+								a.stateManager.UpdateTaskStatus(a.taskID, "failed")
+								return result, fmt.Errorf("verification failed and retries exhausted: %s", verifyResult.Summary)
+							}
+
+							// 注入修正指令到历史，继续执行
+							a.history.AddMessage(model.NewUserMessage(correctionInstruction))
+							result.Iterations = iteration
+							continue
+						}
+
+						// 校验通过，标记任务完成（但不立即返回）
+						result.Status = "completed"
+						result.EndTime = time.Now()
+						result.Iterations = iteration
+						a.verificationPassed = true
+						// 跳出内层循环，进入外层循环的强制校验阶段
+						break
+					}
+					if tc.Function.Name == "fail_task" {
+						result.Status = "failed"
+						result.EndTime = time.Now()
+						result.Iterations = iteration
+						a.stateManager.UpdateTaskStatus(a.taskID, "failed")
+						return result, nil
+					}
+				}
+
+				// 如果任务已完成，跳出内层循环
+				if result.Status == "completed" {
+					break
+				}
+
+				result.Iterations = iteration
+				continue
+			}
+
+			// 没有工具调用，检查是否完成
+			// 如果响应中包含完成标志，则结束
+			if a.isTaskComplete(response.Content) {
+				// 在完成任务前进行校验
+				verifyResult := a.verifyTaskCompletion(runCtx, taskGoal)
+
+				if verifyResult != nil && verifyResult.IsFailed() {
+					// 校验失败，记录失败并生成修正指令
+					correctionResult := a.corrector.AnalyzeFailure(verifyResult, nil)
+					correctionInstruction := a.corrector.GenerateCorrectionInstruction(correctionResult)
+
+					// 检查是否还有校验重试机会
+					if !a.corrector.ShouldRetryVerify() {
+						// 重试次数耗尽，任务失败
+						result.Status = "failed"
+						result.Error = fmt.Sprintf("任务完成校验失败且重试次数耗尽: %s", verifyResult.Summary)
+						result.EndTime = time.Now()
+						a.stateManager.UpdateTaskStatus(a.taskID, "failed")
+						return result, fmt.Errorf("verification failed and retries exhausted: %s", verifyResult.Summary)
+					}
+
+					// 注入修正指令到历史，继续执行
+					a.history.AddMessage(model.NewUserMessage(correctionInstruction))
+					result.Iterations = iteration
+					continue
+				}
+
+				// 校验通过，标记任务完成（但不立即返回）
+				result.Status = "completed"
+				result.EndTime = time.Now()
+				result.FinalResponse = response.Content
+				result.Iterations = iteration
+				a.verificationPassed = true
+				// 跳出内层循环，进入外层循环的强制校验阶段
+				break
+			}
+
+			// 如果没有工具调用且没有完成标志，可能是模型在等待更多输入
+			// 添加一个提示让模型继续
+			a.history.AddMessage(model.NewUserMessage("请继续执行任务。如果任务已完成，请使用complete_task工具标记完成。"))
+
+			result.Iterations = iteration
+		}
+
+		// 检查任务状态
+		if result.Status == "completed" {
+			// 强制校验：即使之前通过了校验，也要再次确认
+			if !a.verificationPassed {
+				// 执行强制校验
+				verifyResult := a.verifyTaskCompletion(runCtx, taskGoal)
+
+				if verifyResult != nil && verifyResult.IsFailed() {
+					// 强制校验失败，注入修正指令，继续循环
+					correctionResult := a.corrector.AnalyzeFailure(verifyResult, nil)
+					correctionInstruction := a.corrector.GenerateCorrectionInstruction(correctionResult)
+
+					// 检查是否还有校验重试机会
+					if !a.corrector.ShouldRetryVerify() {
+						// 重试次数耗尽，任务失败
+						result.Status = "failed"
+						result.Error = fmt.Sprintf("强制校验失败且重试次数耗尽: %s", verifyResult.Summary)
+						result.EndTime = time.Now()
+						a.stateManager.UpdateTaskStatus(a.taskID, "failed")
+						return result, fmt.Errorf("forced verification failed and retries exhausted: %s", verifyResult.Summary)
+					}
+
+					// 重置状态为进行中，注入修正指令，继续外层循环
+					result.Status = "in_progress"
+					a.stateManager.UpdateTaskStatus(a.taskID, "in_progress")
+					a.history.AddMessage(model.NewUserMessage(correctionInstruction))
+					continue
+				}
+			}
+
+			// 强制校验通过，真正完成任务
 			a.stateManager.UpdateTaskStatus(a.taskID, "completed")
 			return result, nil
 		}
 
-		// 如果没有工具调用且没有完成标志，可能是模型在等待更多输入
-		// 添加一个提示让模型继续
-		a.history.AddMessage(model.NewUserMessage("请继续执行任务。如果任务已完成，请使用complete_task工具标记完成。"))
+		// 如果任务失败或达到最大迭代次数，直接返回
+		if result.Status == "failed" || result.Status == "cancelled" {
+			return result, nil
+		}
 
-		result.Iterations = iteration
+		// 如果内层循环结束但任务未完成，继续外层循环
+		if result.Status == "" || result.Status == "in_progress" {
+			// 达到最大迭代次数
+			result.Status = "max_iterations"
+			result.EndTime = time.Now()
+			a.stateManager.UpdateTaskStatus(a.taskID, "failed")
+			return result, fmt.Errorf("reached maximum iterations (%d)", a.maxIterations)
+		}
 	}
 
-	// 达到最大迭代次数
+	// 达到最大外层迭代次数
 	result.Status = "max_iterations"
 	result.EndTime = time.Now()
 	a.stateManager.UpdateTaskStatus(a.taskID, "failed")
-	return result, fmt.Errorf("reached maximum iterations (%d)", a.maxIterations)
+	return result, fmt.Errorf("reached maximum outer iterations (%d)", maxOuterIterations)
 }
 
 // RunResult 运行结果

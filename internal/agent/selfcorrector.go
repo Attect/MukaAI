@@ -62,9 +62,13 @@ type CorrectionResult struct {
 // SelfCorrectorConfig 自我修正器配置
 type SelfCorrectorConfig struct {
 	// 重试配置
-	MaxRetries          int `json:"max_retries"`           // 最大重试次数
+	MaxRetries          int `json:"max_retries"`           // 最大重试次数（通用，已废弃，建议使用MaxReviewRetries和MaxVerifyRetries）
 	RetryDelayMs       int `json:"retry_delay_ms"`        // 重试延迟（毫秒）
 	ExponentialBackoff bool `json:"exponential_backoff"`   // 是否启用指数退避
+
+	// 分离的重试配置
+	MaxReviewRetries int `json:"max_review_retries"` // 审查最大重试次数（默认3）
+	MaxVerifyRetries int `json:"max_verify_retries"` // 校验最大重试次数（默认5）
 
 	// 失败分析配置
 	MaxFailureHistory  int `json:"max_failure_history"`   // 最大失败历史记录数
@@ -82,6 +86,8 @@ func DefaultSelfCorrectorConfig() *SelfCorrectorConfig {
 		MaxRetries:           3,
 		RetryDelayMs:        1000,
 		ExponentialBackoff:  true,
+		MaxReviewRetries:    3,
+		MaxVerifyRetries:    5,
 		MaxFailureHistory:   50,
 		FailurePatternWindow: 5,
 		MaxInstructionLength: 2000,
@@ -98,8 +104,12 @@ type SelfCorrector struct {
 	// 状态跟踪
 	mu sync.RWMutex
 
-	// 重试计数
+	// 重试计数（通用，已废弃）
 	currentRetryCount int
+
+	// 分离的重试计数
+	reviewRetryCount int // 审查重试计数
+	verifyRetryCount int // 校验重试计数
 
 	// 失败历史记录
 	failureHistory []FailureRecord
@@ -117,6 +127,8 @@ func NewSelfCorrector(config *SelfCorrectorConfig) *SelfCorrector {
 	return &SelfCorrector{
 		config:            config,
 		currentRetryCount: 0,
+		reviewRetryCount:  0,
+		verifyRetryCount:  0,
 		failureHistory:    make([]FailureRecord, 0),
 		correctionHistory: make([]CorrectionResult, 0),
 	}
@@ -334,6 +346,8 @@ func (sc *SelfCorrector) Reset() {
 	defer sc.mu.Unlock()
 
 	sc.currentRetryCount = 0
+	sc.reviewRetryCount = 0
+	sc.verifyRetryCount = 0
 	sc.failureHistory = make([]FailureRecord, 0)
 	sc.correctionHistory = make([]CorrectionResult, 0)
 }
@@ -563,6 +577,8 @@ func (sc *SelfCorrector) MarkSuccess() {
 	defer sc.mu.Unlock()
 
 	sc.currentRetryCount = 0
+	sc.reviewRetryCount = 0
+	sc.verifyRetryCount = 0
 
 	// 标记最近的失败记录为已修正
 	if len(sc.failureHistory) > 0 {
@@ -581,6 +597,14 @@ func (sc *SelfCorrector) GetStatistics() *CorrectionStatistics {
 		RemainingRetries:   sc.config.MaxRetries - sc.currentRetryCount,
 		TotalFailures:      len(sc.failureHistory),
 		TotalCorrections:   len(sc.correctionHistory),
+
+		// 分离的重试统计
+		ReviewRetryCount:        sc.reviewRetryCount,
+		VerifyRetryCount:        sc.verifyRetryCount,
+		MaxReviewRetries:        sc.config.MaxReviewRetries,
+		MaxVerifyRetries:        sc.config.MaxVerifyRetries,
+		RemainingReviewRetries:  sc.config.MaxReviewRetries - sc.reviewRetryCount,
+		RemainingVerifyRetries:  sc.config.MaxVerifyRetries - sc.verifyRetryCount,
 	}
 
 	// 统计已修正的失败数
@@ -600,11 +624,93 @@ func (sc *SelfCorrector) GetStatistics() *CorrectionStatistics {
 
 // CorrectionStatistics 修正统计信息
 type CorrectionStatistics struct {
-	CurrentRetryCount    int     `json:"current_retry_count"`    // 当前重试次数
-	MaxRetries           int     `json:"max_retries"`            // 最大重试次数
-	RemainingRetries     int     `json:"remaining_retries"`      // 剩余重试次数
+	CurrentRetryCount    int     `json:"current_retry_count"`    // 当前重试次数（通用）
+	MaxRetries           int     `json:"max_retries"`            // 最大重试次数（通用）
+	RemainingRetries     int     `json:"remaining_retries"`      // 剩余重试次数（通用）
 	TotalFailures        int     `json:"total_failures"`         // 总失败次数
 	CorrectedFailures    int     `json:"corrected_failures"`     // 已修正的失败次数
 	TotalCorrections     int     `json:"total_corrections"`      // 总修正次数
 	CorrectionSuccessRate float64 `json:"correction_success_rate"` // 修正成功率
+
+	// 分离的重试统计
+	ReviewRetryCount  int `json:"review_retry_count"`  // 审查重试次数
+	VerifyRetryCount  int `json:"verify_retry_count"`  // 校验重试次数
+	MaxReviewRetries  int `json:"max_review_retries"`  // 审查最大重试次数
+	MaxVerifyRetries  int `json:"max_verify_retries"`  // 校验最大重试次数
+	RemainingReviewRetries int `json:"remaining_review_retries"` // 剩余审查重试次数
+	RemainingVerifyRetries int `json:"remaining_verify_retries"` // 剩余校验重试次数
+}
+
+// ShouldRetryReview 检查是否还有审查重试机会
+// 更新审查重试计数
+func (sc *SelfCorrector) ShouldRetryReview() bool {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
+	// 检查是否还有审查重试机会
+	if sc.reviewRetryCount >= sc.config.MaxReviewRetries {
+		return false
+	}
+
+	// 增加审查重试计数
+	sc.reviewRetryCount++
+
+	return true
+}
+
+// ShouldRetryVerify 检查是否还有校验重试机会
+// 更新校验重试计数
+func (sc *SelfCorrector) ShouldRetryVerify() bool {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
+	// 检查是否还有校验重试机会
+	if sc.verifyRetryCount >= sc.config.MaxVerifyRetries {
+		return false
+	}
+
+	// 增加校验重试计数
+	sc.verifyRetryCount++
+
+	return true
+}
+
+// RecordReviewFailure 记录审查失败
+// 用于分析失败模式
+func (sc *SelfCorrector) RecordReviewFailure(summary string, details string, issues []string) {
+	sc.RecordFailure(FailureTypeReview, summary, details, issues)
+}
+
+// RecordVerifyFailure 记录校验失败
+// 用于分析失败模式
+func (sc *SelfCorrector) RecordVerifyFailure(summary string, details string, issues []string) {
+	sc.RecordFailure(FailureTypeVerify, summary, details, issues)
+}
+
+// GetReviewRetryCount 获取审查重试计数
+func (sc *SelfCorrector) GetReviewRetryCount() int {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+	return sc.reviewRetryCount
+}
+
+// GetVerifyRetryCount 获取校验重试计数
+func (sc *SelfCorrector) GetVerifyRetryCount() int {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+	return sc.verifyRetryCount
+}
+
+// GetRemainingReviewRetries 获取剩余审查重试次数
+func (sc *SelfCorrector) GetRemainingReviewRetries() int {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+	return sc.config.MaxReviewRetries - sc.reviewRetryCount
+}
+
+// GetRemainingVerifyRetries 获取剩余校验重试次数
+func (sc *SelfCorrector) GetRemainingVerifyRetries() int {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+	return sc.config.MaxVerifyRetries - sc.verifyRetryCount
 }
