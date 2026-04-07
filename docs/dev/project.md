@@ -2,6 +2,63 @@
 
 ## 更新日志
 
+### 2026-04-07 Task 14 修改：集成校验和自我修正机制到Agent核心
+
+#### internal/agent/core.go
+- `Agent` 结构体新增字段：
+  - `reviewer *Reviewer` - 程序逻辑审查器
+  - `verifier *Verifier` - 成果校验器
+  - `corrector *SelfCorrector` - 自我修正器
+- `Config` 结构体新增配置：
+  - `Reviewer *Reviewer` - 审查器（可选，会自动创建）
+  - `Verifier *Verifier` - 校验器（可选，会自动创建）
+  - `VerifierConfig *VerifyConfig` - 校验器配置（可选）
+  - `CorrectorConfig *SelfCorrectorConfig` - 修正器配置（可选）
+- `NewAgent()` - 初始化审查器、校验器和自我修正器
+- `Run()` 主循环集成审查、校验和修正逻辑：
+  - 在工具调用前审查模型输出
+  - 审查被阻断时生成修正指令并注入历史
+  - 任务完成前进行校验
+  - 校验失败时记录失败并生成修正指令
+  - 支持重试机制（最大重试次数可配置）
+- `verifyTaskCompletion()` - 验证任务完成情况
+- `SetReviewer(r *Reviewer)` - 设置审查器
+- `SetVerifier(v *Verifier)` - 设置校验器
+- `SetCorrector(c *SelfCorrector)` - 设置自我修正器
+- `GetReviewer() *Reviewer` - 获取审查器
+- `GetVerifier() *Verifier` - 获取校验器
+- `GetCorrector() *SelfCorrector` - 获取自我修正器
+
+#### internal/tools/state_tools.go
+- `VerifyResult` - 校验结果结构体（简化版，用于工具层）
+- `VerifyIssue` - 校验问题结构体
+- `completeTaskTool` 新增字段：
+  - `verifier` - 校验回调函数
+- `NewCompleteTaskTool()` - 创建完成任务工具
+- `NewCompleteTaskToolWithVerifier()` - 创建带校验器的完成任务工具
+- `Execute()` - 支持校验回调，校验失败时返回失败结果
+- `RegisterStateToolsWithVerifier()` - 注册状态工具（带校验器）
+
+#### 集成流程
+```
+模型输出 -> 审查器审查 -> [阻断?] -> 生成修正指令 -> 注入历史 -> 继续循环
+                                    |
+                                    v
+                              [通过] -> 执行工具调用
+                                    |
+                                    v
+                              [complete_task?] -> 校验器校验 -> [失败?] -> 记录失败 -> 生成修正指令 -> 注入历史
+                                                                              |
+                                                                              v
+                                                                        [通过] -> 标记任务完成
+```
+
+#### 重试机制
+- 最大重试次数可配置（默认3次）
+- 支持指数退避策略
+- 重试次数耗尽时任务失败
+- 修正成功后重置重试计数
+
 ### 2026-04-07 Task 13 新增：自我修正器模块
 
 #### internal/agent/selfcorrector.go
