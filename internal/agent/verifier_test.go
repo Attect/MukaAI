@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -835,7 +836,7 @@ func TestSummary(t *testing.T) {
 		if result.Summary == "" {
 			t.Error("摘要不应为空")
 		}
-		if !containsString(result.Summary, "通过") {
+		if !strings.Contains(result.Summary, "通过") {
 			t.Errorf("摘要应包含'通过'，实际: %s", result.Summary)
 		}
 	})
@@ -847,22 +848,8 @@ func TestSummary(t *testing.T) {
 		if result.Summary == "" {
 			t.Error("摘要不应为空")
 		}
-		if !containsString(result.Summary, "问题") {
+		if !strings.Contains(result.Summary, "问题") {
 			t.Errorf("摘要应包含'问题'，实际: %s", result.Summary)
 		}
 	})
-}
-
-// 辅助函数
-func containsString(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstring(s, substr))
-}
-
-func containsSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

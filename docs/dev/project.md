@@ -2,6 +2,107 @@
 
 ## 更新日志
 
+### 2026-04-07 Task 13 新增：自我修正器模块
+
+#### internal/agent/selfcorrector.go
+- `CorrectionStatus` - 修正状态类型（needed/retryable/exhausted/success）
+- `FailureType` - 失败类型枚举
+  - verify: 校验失败
+  - review: 审查失败
+  - tool: 工具执行失败
+  - system: 系统错误
+- `FailureRecord` - 失败记录结构体
+  - Type: 失败类型
+  - Timestamp: 失败时间
+  - Summary: 失败摘要
+  - Details: 详细信息
+  - Issues: 问题列表
+  - RetryCount: 重试次数
+  - Corrected: 是否已修正
+- `CorrectionResult` - 修正结果结构体
+  - Status: 修正状态
+  - NeedsCorrection: 是否需要修正
+  - Instruction: 修正指令内容
+  - RemainingRetries: 剩余重试次数
+  - FailureSummary: 失败原因摘要
+  - Suggestions: 修正建议列表
+  - Priority: 优先级（low/medium/high/critical）
+  - Timestamp: 时间戳
+- `SelfCorrectorConfig` - 自我修正器配置结构体
+  - MaxRetries: 最大重试次数
+  - RetryDelayMs: 重试延迟（毫秒）
+  - ExponentialBackoff: 是否启用指数退避
+  - MaxFailureHistory: 最大失败历史记录数
+  - FailurePatternWindow: 失败模式检测窗口大小
+  - MaxInstructionLength: 修正指令最大长度
+  - IncludeEvidence: 是否包含证据
+  - IncludeSuggestions: 是否包含建议
+- `FailurePattern` - 失败模式结构体
+  - DetectedAt: 检测时间
+  - FailureTypes: 失败类型统计
+  - RecurringIssues: 重复出现的问题
+  - Severity: 严重程度
+  - Description: 模式描述
+- `CorrectionStatistics` - 修正统计信息结构体
+  - CurrentRetryCount: 当前重试次数
+  - MaxRetries: 最大重试次数
+  - RemainingRetries: 剩余重试次数
+  - TotalFailures: 总失败次数
+  - CorrectedFailures: 已修正的失败次数
+  - TotalCorrections: 总修正次数
+  - CorrectionSuccessRate: 修正成功率
+- `SelfCorrector` - 自我修正器（线程安全）
+  - 管理重试逻辑和失败历史
+  - 分析失败原因并生成修正指令
+  - 检测失败模式
+  - 支持指数退避重试策略
+- `DefaultSelfCorrectorConfig() *SelfCorrectorConfig` - 返回默认自我修正器配置
+- `NewSelfCorrector(config) *SelfCorrector` - 创建新的自我修正器
+- `AnalyzeFailure(verifyResult, reviewResult) *CorrectionResult` - 分析校验失败结果
+- `GenerateCorrectionInstruction(correctionResult) string` - 根据失败原因生成修正指令
+- `ShouldRetry() bool` - 检查是否还有重试机会
+- `RecordFailure(failureType, summary, details, issues)` - 记录失败历史
+- `RecordCorrection(result)` - 记录修正结果
+- `Reset()` - 重置修正器状态
+- `GetRetryCount() int` - 获取当前重试次数
+- `GetRemainingRetries() int` - 获取剩余重试次数
+- `GetFailureHistory() []FailureRecord` - 获取失败历史记录
+- `GetCorrectionHistory() []CorrectionResult` - 获取修正历史记录
+- `GetConfig() *SelfCorrectorConfig` - 获取修正器配置
+- `UpdateConfig(config) error` - 更新修正器配置
+- `DetectFailurePattern() *FailurePattern` - 检测失败模式
+- `GetRetryDelay() time.Duration` - 获取重试延迟（支持指数退避）
+- `MarkSuccess()` - 标记修正成功
+- `GetStatistics() *CorrectionStatistics` - 获取统计信息
+
+#### 自我修正功能实现
+- **失败分析**：分析校验和审查失败结果
+  - 提取关键问题
+  - 生成问题摘要
+  - 确定失败类型和优先级
+- **修正指令生成**：根据失败原因生成清晰的修正指令
+  - 包含失败原因、优先级、剩余重试次数
+  - 提供具体的修正建议
+  - 根据优先级给出不同的行动指导
+- **重试管理**：管理重试逻辑
+  - 支持最大重试次数配置
+  - 支持指数退避策略
+  - 自动更新重试计数
+- **失败模式检测**：识别重复出现的失败模式
+  - 统计失败类型
+  - 检测重复问题
+  - 生成模式描述
+
+#### internal/agent/selfcorrector_test.go
+- 完整的单元测试覆盖
+- 测试修正器创建和配置
+- 测试失败分析
+- 测试修正指令生成
+- 测试重试逻辑
+- 测试失败模式检测
+- 测试并发安全性
+- 所有测试通过（13个测试用例）
+
 ### 2026-04-07 Task 12 新增：成果校验器模块
 
 #### internal/agent/verifier.go
