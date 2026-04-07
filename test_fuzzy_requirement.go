@@ -68,11 +68,23 @@ func main() {
 	}
 
 	correctorConfig := &agent.SelfCorrectorConfig{
-		MaxRetries:           5,
+		MaxRetries:           10,
 		ExponentialBackoff:   true,
 		MaxFailureHistory:    50,
 		FailurePatternWindow: 5,
+		MaxReviewRetries:     10,
+		MaxVerifyRetries:     10,
 	}
+
+	// 创建日志目录
+	logDir := "logs"
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		fmt.Printf("创建日志目录失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 生成日志文件路径（使用时间戳）
+	logPath := filepath.Join(logDir, fmt.Sprintf("agent_%s.log", time.Now().Format("20060102_150405")))
 
 	ag, err := agent.NewAgent(&agent.Config{
 		ModelClient:     modelClient,
@@ -82,11 +94,13 @@ func main() {
 		SystemPrompt:    agent.GetSystemPrompt(agent.PromptTypeOrchestrator) + agent.VerificationPrompt,
 		VerifierConfig:  verifierConfig,
 		CorrectorConfig: correctorConfig,
+		LogPath:         logPath,
 	})
 	if err != nil {
 		fmt.Printf("创建Agent失败: %v\n", err)
 		os.Exit(1)
 	}
+	defer ag.Close() // 确保关闭Agent，释放资源
 
 	verifier := ag.GetVerifier()
 	if verifier != nil {
@@ -106,6 +120,7 @@ func main() {
 	fmt.Println("校验配置:")
 	fmt.Printf("  - 必需关键词: %v\n", verifierConfig.RequiredKeywords)
 	fmt.Printf("  - 最大重试次数: %d\n", correctorConfig.MaxRetries)
+	fmt.Printf("  - 日志文件: %s\n", logPath)
 	fmt.Println()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Hour)
@@ -133,6 +148,12 @@ func main() {
 		fmt.Printf("总修正次数: %d\n", stats.TotalCorrections)
 		fmt.Printf("修正成功率: %.1f%%\n", stats.CorrectionSuccessRate*100)
 		fmt.Printf("剩余重试次数: %d\n", stats.RemainingRetries)
+	}
+
+	logger := ag.GetLogger()
+	if logger != nil {
+		fmt.Println()
+		fmt.Printf("日志文件: %s\n", logger.GetLogPath())
 	}
 
 	if result.Status == "completed" {

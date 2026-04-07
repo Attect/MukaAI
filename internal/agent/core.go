@@ -27,6 +27,9 @@ type Agent struct {
 	verifier  *Verifier      // 成果校验器
 	corrector *SelfCorrector // 自我修正器
 
+	// 日志记录器
+	logger *AgentLogger // 运行日志记录器
+
 	// 配置
 	maxIterations int              // 最大迭代次数
 	systemPrompt  string           // 系统提示词
@@ -61,6 +64,9 @@ type Config struct {
 	Verifier        *Verifier            // 校验器（可选，会自动创建）
 	VerifierConfig  *VerifyConfig        // 校验器配置（可选）
 	CorrectorConfig *SelfCorrectorConfig // 修正器配置（可选）
+
+	// 日志配置
+	LogPath string // 日志文件路径（可选，为空则不记录日志）
 }
 
 // NewAgent 创建新的Agent实例
@@ -113,6 +119,12 @@ func NewAgent(config *Config) (*Agent, error) {
 	// 初始化自我修正器
 	corrector := NewSelfCorrector(config.CorrectorConfig)
 
+	// 初始化日志记录器
+	logger, err := NewAgentLogger(config.LogPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create logger: %w", err)
+	}
+
 	return &Agent{
 		modelClient:   config.ModelClient,
 		toolRegistry:  config.ToolRegistry,
@@ -122,6 +134,7 @@ func NewAgent(config *Config) (*Agent, error) {
 		reviewer:      reviewer,
 		verifier:      verifier,
 		corrector:     corrector,
+		logger:        logger,
 		maxIterations: maxIterations,
 		systemPrompt:  systemPrompt,
 		promptType:    promptType,
@@ -160,6 +173,12 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 	// 生成任务ID
 	if a.taskID == "" {
 		a.taskID = fmt.Sprintf("task-%d", time.Now().UnixNano())
+	}
+
+	// 设置日志记录器的任务ID
+	if a.logger != nil {
+		a.logger.SetTaskID(a.taskID)
+		a.logger.LogTaskStart(taskGoal)
 	}
 
 	// 创建任务状态
@@ -207,6 +226,9 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 			case <-runCtx.Done():
 				result.Status = "cancelled"
 				result.EndTime = time.Now()
+				if a.logger != nil {
+					a.logger.LogTaskEnd("cancelled", iteration, result.EndTime.Sub(result.StartTime))
+				}
 				return result, runCtx.Err()
 			default:
 			}
@@ -214,6 +236,11 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 			// 迭代回调
 			if a.onIteration != nil {
 				a.onIteration(iteration)
+			}
+
+			// 记录迭代日志
+			if a.logger != nil {
+				a.logger.LogIteration(iteration, "processing")
 			}
 
 			// 检查上下文是否超出限制
@@ -230,6 +257,10 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 				result.Error = err.Error()
 				result.EndTime = time.Now()
 				a.stateManager.UpdateTaskStatus(a.taskID, "failed")
+				if a.logger != nil {
+					a.logger.LogError(fmt.Sprintf("模型调用失败: %s", err.Error()))
+					a.logger.LogTaskEnd("failed", iteration, result.EndTime.Sub(result.StartTime))
+				}
 				return result, fmt.Errorf("model call failed: %w", err)
 			}
 
@@ -241,15 +272,30 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 			}
 			a.history.AddMessage(assistantMsg)
 
+			// 记录助手消息
+			if a.logger != nil {
+				a.logger.LogMessage("assistant", response.Content)
+			}
+
 			// 审查模型输出（在工具调用前）
 			taskState, _ := a.stateManager.GetState(a.taskID)
 			reviewResult := a.reviewer.ReviewOutput(response.Content, response.ToolCalls, taskState)
+
+			// 记录审查结果
+			if a.logger != nil {
+				a.logger.LogReview(reviewResult)
+			}
 
 			// 如果审查结果被阻断，生成修正指令并注入历史
 			if reviewResult.IsBlocked() {
 				// 分析失败并生成修正指令
 				correctionResult := a.corrector.AnalyzeFailure(nil, reviewResult)
 				correctionInstruction := a.corrector.GenerateCorrectionInstruction(correctionResult)
+
+				// 记录修正指令
+				if a.logger != nil {
+					a.logger.LogCorrection(correctionInstruction, reviewResult.Summary)
+				}
 
 				// 检查是否还有审查重试机会
 				if !a.corrector.ShouldRetryReview() {
@@ -258,6 +304,10 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 					result.Error = fmt.Sprintf("审查阻断且重试次数耗尽: %s", reviewResult.Summary)
 					result.EndTime = time.Now()
 					a.stateManager.UpdateTaskStatus(a.taskID, "failed")
+					if a.logger != nil {
+						a.logger.LogError(result.Error)
+						a.logger.LogTaskEnd("failed", iteration, result.EndTime.Sub(result.StartTime))
+					}
 					return result, fmt.Errorf("review blocked and retries exhausted: %s", reviewResult.Summary)
 				}
 
@@ -276,6 +326,10 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 					result.Error = err.Error()
 					result.EndTime = time.Now()
 					a.stateManager.UpdateTaskStatus(a.taskID, "failed")
+					if a.logger != nil {
+						a.logger.LogError(fmt.Sprintf("工具执行失败: %s", err.Error()))
+						a.logger.LogTaskEnd("failed", iteration, result.EndTime.Sub(result.StartTime))
+					}
 					return result, fmt.Errorf("tool execution failed: %w", err)
 				}
 
@@ -288,10 +342,20 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 						// 在完成任务前进行校验
 						verifyResult := a.verifyTaskCompletion(runCtx, taskGoal)
 
+						// 记录校验结果
+						if a.logger != nil {
+							a.logger.LogVerification(verifyResult)
+						}
+
 						if verifyResult != nil && verifyResult.IsFailed() {
 							// 校验失败，记录失败并生成修正指令
 							correctionResult := a.corrector.AnalyzeFailure(verifyResult, nil)
 							correctionInstruction := a.corrector.GenerateCorrectionInstruction(correctionResult)
+
+							// 记录修正指令
+							if a.logger != nil {
+								a.logger.LogCorrection(correctionInstruction, verifyResult.Summary)
+							}
 
 							// 检查是否还有校验重试机会
 							if !a.corrector.ShouldRetryVerify() {
@@ -300,6 +364,10 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 								result.Error = fmt.Sprintf("任务完成校验失败且重试次数耗尽: %s", verifyResult.Summary)
 								result.EndTime = time.Now()
 								a.stateManager.UpdateTaskStatus(a.taskID, "failed")
+								if a.logger != nil {
+									a.logger.LogError(result.Error)
+									a.logger.LogTaskEnd("failed", iteration, result.EndTime.Sub(result.StartTime))
+								}
 								return result, fmt.Errorf("verification failed and retries exhausted: %s", verifyResult.Summary)
 							}
 
@@ -313,7 +381,7 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 						result.Status = "completed"
 						result.EndTime = time.Now()
 						result.Iterations = iteration
-						a.verificationPassed = true
+						// 不设置verificationPassed，让外层循环执行强制校验
 						// 跳出内层循环，进入外层循环的强制校验阶段
 						break
 					}
@@ -322,6 +390,9 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 						result.EndTime = time.Now()
 						result.Iterations = iteration
 						a.stateManager.UpdateTaskStatus(a.taskID, "failed")
+						if a.logger != nil {
+							a.logger.LogTaskEnd("failed", iteration, result.EndTime.Sub(result.StartTime))
+						}
 						return result, nil
 					}
 				}
@@ -341,10 +412,20 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 				// 在完成任务前进行校验
 				verifyResult := a.verifyTaskCompletion(runCtx, taskGoal)
 
+				// 记录校验结果
+				if a.logger != nil {
+					a.logger.LogVerification(verifyResult)
+				}
+
 				if verifyResult != nil && verifyResult.IsFailed() {
 					// 校验失败，记录失败并生成修正指令
 					correctionResult := a.corrector.AnalyzeFailure(verifyResult, nil)
 					correctionInstruction := a.corrector.GenerateCorrectionInstruction(correctionResult)
+
+					// 记录修正指令
+					if a.logger != nil {
+						a.logger.LogCorrection(correctionInstruction, verifyResult.Summary)
+					}
 
 					// 检查是否还有校验重试机会
 					if !a.corrector.ShouldRetryVerify() {
@@ -353,6 +434,10 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 						result.Error = fmt.Sprintf("任务完成校验失败且重试次数耗尽: %s", verifyResult.Summary)
 						result.EndTime = time.Now()
 						a.stateManager.UpdateTaskStatus(a.taskID, "failed")
+						if a.logger != nil {
+							a.logger.LogError(result.Error)
+							a.logger.LogTaskEnd("failed", iteration, result.EndTime.Sub(result.StartTime))
+						}
 						return result, fmt.Errorf("verification failed and retries exhausted: %s", verifyResult.Summary)
 					}
 
@@ -367,7 +452,7 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 				result.EndTime = time.Now()
 				result.FinalResponse = response.Content
 				result.Iterations = iteration
-				a.verificationPassed = true
+				// 不设置verificationPassed，让外层循环执行强制校验
 				// 跳出内层循环，进入外层循环的强制校验阶段
 				break
 			}
@@ -386,10 +471,20 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 				// 执行强制校验
 				verifyResult := a.verifyTaskCompletion(runCtx, taskGoal)
 
+				// 记录强制校验结果
+				if a.logger != nil {
+					a.logger.LogVerification(verifyResult)
+				}
+
 				if verifyResult != nil && verifyResult.IsFailed() {
 					// 强制校验失败，注入修正指令，继续循环
 					correctionResult := a.corrector.AnalyzeFailure(verifyResult, nil)
 					correctionInstruction := a.corrector.GenerateCorrectionInstruction(correctionResult)
+
+					// 记录修正指令
+					if a.logger != nil {
+						a.logger.LogCorrection(correctionInstruction, "强制校验失败: "+verifyResult.Summary)
+					}
 
 					// 检查是否还有校验重试机会
 					if !a.corrector.ShouldRetryVerify() {
@@ -398,6 +493,10 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 						result.Error = fmt.Sprintf("强制校验失败且重试次数耗尽: %s", verifyResult.Summary)
 						result.EndTime = time.Now()
 						a.stateManager.UpdateTaskStatus(a.taskID, "failed")
+						if a.logger != nil {
+							a.logger.LogError(result.Error)
+							a.logger.LogTaskEnd("failed", result.Iterations, result.EndTime.Sub(result.StartTime))
+						}
 						return result, fmt.Errorf("forced verification failed and retries exhausted: %s", verifyResult.Summary)
 					}
 
@@ -407,10 +506,16 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 					a.history.AddMessage(model.NewUserMessage(correctionInstruction))
 					continue
 				}
+
+				// 强制校验通过
+				a.verificationPassed = true
 			}
 
 			// 强制校验通过，真正完成任务
 			a.stateManager.UpdateTaskStatus(a.taskID, "completed")
+			if a.logger != nil {
+				a.logger.LogTaskEnd("completed", result.Iterations, result.EndTime.Sub(result.StartTime))
+			}
 			return result, nil
 		}
 
@@ -425,6 +530,10 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 			result.Status = "max_iterations"
 			result.EndTime = time.Now()
 			a.stateManager.UpdateTaskStatus(a.taskID, "failed")
+			if a.logger != nil {
+				a.logger.LogError(fmt.Sprintf("达到最大迭代次数 (%d)", a.maxIterations))
+				a.logger.LogTaskEnd("max_iterations", result.Iterations, result.EndTime.Sub(result.StartTime))
+			}
 			return result, fmt.Errorf("reached maximum iterations (%d)", a.maxIterations)
 		}
 	}
@@ -433,6 +542,10 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 	result.Status = "max_iterations"
 	result.EndTime = time.Now()
 	a.stateManager.UpdateTaskStatus(a.taskID, "failed")
+	if a.logger != nil {
+		a.logger.LogError(fmt.Sprintf("达到最大外层迭代次数 (%d)", maxOuterIterations))
+		a.logger.LogTaskEnd("max_iterations", result.Iterations, result.EndTime.Sub(result.StartTime))
+	}
 	return result, fmt.Errorf("reached maximum outer iterations (%d)", maxOuterIterations)
 }
 
@@ -541,6 +654,11 @@ func (a *Agent) executeTools(ctx context.Context, toolCalls []model.ToolCall) ([
 	results := make([]model.Message, 0, len(toolCalls))
 
 	for _, tc := range toolCalls {
+		// 记录工具调用
+		if a.logger != nil {
+			a.logger.LogToolCall(tc.Function.Name, tc.Function.Arguments)
+		}
+
 		// 工具调用回调
 		if a.onToolCall != nil {
 			a.onToolCall(tc.Function.Name, tc.Function.Arguments)
@@ -549,7 +667,23 @@ func (a *Agent) executeTools(ctx context.Context, toolCalls []model.ToolCall) ([
 		// 执行工具
 		result, err := a.executor.ExecuteToolCalls(ctx, []model.ToolCall{tc})
 		if err != nil {
+			// 记录工具执行失败
+			if a.logger != nil {
+				a.logger.LogToolResult(tc.Function.Name, err.Error(), false)
+			}
 			return nil, err
+		}
+
+		// 记录工具执行成功
+		if a.logger != nil && len(result) > 0 {
+			resultContent := ""
+			if len(result) > 0 {
+				resultContent = result[0].Content
+				if len(resultContent) > 500 {
+					resultContent = resultContent[:500] + "..."
+				}
+			}
+			a.logger.LogToolResult(tc.Function.Name, resultContent, true)
 		}
 
 		results = append(results, result...)
@@ -775,4 +909,24 @@ func (a *Agent) GetCorrector() *SelfCorrector {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.corrector
+}
+
+// GetLogger 获取日志记录器
+func (a *Agent) GetLogger() *AgentLogger {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.logger
+}
+
+// Close 关闭Agent，释放资源
+func (a *Agent) Close() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// 关闭日志记录器
+	if a.logger != nil {
+		return a.logger.Close()
+	}
+
+	return nil
 }
