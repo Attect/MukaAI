@@ -2,6 +2,116 @@
 
 ## 更新日志
 
+### 2026-04-07 Task 12 新增：成果校验器模块
+
+#### internal/agent/verifier.go
+- `VerifyStatus` - 校验结果状态类型（pass/warning/fail）
+- `VerifyIssueType` - 校验问题类型枚举
+  - file_not_found: 文件不存在
+  - file_empty: 文件内容为空
+  - content_missing: 内容缺失关键部分
+  - keyword_not_found: 关键词未找到
+  - custom_rule_failed: 自定义规则校验失败
+  - invalid_path: 无效路径
+  - permission_denied: 权限拒绝
+- `VerifyIssue` - 校验发现的问题结构体
+  - Type: 问题类型
+  - Severity: 严重程度（low/medium/high/critical）
+  - Description: 问题描述
+  - Evidence: 证据/示例
+  - Suggestion: 修正建议
+  - FilePath: 相关文件路径
+  - RuleName: 相关规则名称
+  - Timestamp: 发现时间
+- `VerifyResult` - 校验结果结构体
+  - Status: 校验状态
+  - Issues: 发现的问题列表
+  - Timestamp: 校验时间
+  - Summary: 校验摘要
+  - Passed: 通过的检查项数量
+  - Failed: 失败的检查项数量
+- `VerifyConfig` - 校验器配置结构体
+  - CheckFileExists: 是否检查文件存在
+  - CheckFileNonEmpty: 是否检查文件非空
+  - MaxFileSizeToCheck: 最大检查文件大小
+  - CheckKeywords: 是否检查关键词
+  - RequiredKeywords: 必需的关键词列表
+  - KeywordMatchMode: 关键词匹配模式（any/all）
+  - EnableCustomRules: 是否启用自定义规则
+  - StopOnFirstFailure: 遇到第一个失败是否停止
+  - MaxIssuesToReport: 最大报告问题数量（0表示不限制）
+- `VerifyRule` - 自定义校验规则接口
+  - Name(): 规则名称
+  - Description(): 规则描述
+  - Execute(ctx *VerifyContext): 执行校验规则
+- `VerifyContext` - 校验上下文结构体
+  - TaskState: 任务状态
+  - Files: 待校验的文件列表
+  - Content: 待校验的内容
+  - ExtraData: 额外数据
+- `Verifier` - 成果校验器（线程安全）
+  - 管理校验规则和状态跟踪
+  - 维护校验历史记录
+  - 支持自定义校验规则
+- `DefaultVerifierConfig() *VerifyConfig` - 返回默认校验器配置
+- `NewVerifier(config) *Verifier` - 创建新的校验器
+- `Verify(files, taskState) *VerifyResult` - 执行成果校验
+- `VerifyTaskCompletion(files, taskState) *VerifyResult` - 任务完成前校验（更严格）
+- `VerifyFiles(files) *VerifyResult` - 批量校验文件
+- `VerifyContent(content, taskState) *VerifyResult` - 校验内容（不涉及文件）
+- `AddRule(rule)` - 添加自定义校验规则
+- `RemoveRule(name) bool` - 移除自定义校验规则
+- `ClearRules()` - 清除所有自定义校验规则
+- `GetVerifyHistory() []VerifyResult` - 获取校验历史
+- `GetLastResult() *VerifyResult` - 获取最后一次校验结果
+- `Reset()` - 重置校验器状态
+- `GetConfig() *VerifyConfig` - 获取校验器配置
+- `UpdateConfig(config) error` - 更新校验器配置
+- `SetRequiredKeywords(keywords)` - 设置必需的关键词
+- `GetCustomRules() []VerifyRule` - 获取所有自定义规则
+
+#### 校验功能实现
+- **文件存在检查**：验证文件是否存在
+  - 支持绝对路径和相对路径
+  - 检查路径是否为目录
+  - 检查文件访问权限
+- **文件非空检查**：验证文件内容是否非空
+  - 检查文件大小
+  - 检查内容是否只有空白字符
+  - 支持文件大小限制
+- **关键词匹配检查**：验证文件内容是否包含必需的关键词
+  - 支持all模式（所有关键词都必须存在）
+  - 支持any模式（至少一个关键词存在）
+  - 大小写不敏感匹配
+- **自定义规则检查**：支持自定义校验规则
+  - 通过VerifyRule接口定义规则
+  - 支持规则的添加、移除和清除
+  - 规则可以访问校验上下文
+
+#### 校验流程
+```
+文件列表 -> 文件存在检查 -> 文件非空检查 -> 关键词匹配检查 -> 自定义规则检查 -> 返回结果
+```
+
+**详细步骤**：
+1. 检查所有文件是否存在
+2. 检查存在的文件是否非空
+3. 检查存在的文件是否包含必需的关键词
+4. 执行自定义校验规则
+5. 汇总所有问题
+6. 确定最终状态（pass/warning/fail）
+7. 生成校验摘要
+8. 记录校验历史
+
+#### internal/agent/verifier_test.go
+- 完整的单元测试覆盖
+- 测试校验器创建和配置
+- 测试各类校验规则
+- 测试关键词匹配
+- 测试自定义规则
+- 测试并发安全性
+- 所有测试通过（30+测试用例）
+
 ### 2026-04-06 Task 11 新增：命令行入口
 
 #### internal/config/loader.go

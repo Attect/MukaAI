@@ -54,22 +54,22 @@
   - [x] SubTask 8.2: 创建internal/team/roles.go，定义各角色职责与提示词
   - [x] SubTask 8.3: 实现角色切换机制
 
-- [ ] Task 9: 实现监督系统
-  - [ ] SubTask 9.1: 创建internal/supervisor/monitor.go
-  - [ ] SubTask 9.2: 实现并行监督执行
-  - [ ] SubTask 9.3: 实现监督干预机制
+- [x] Task 9: 实现监督系统
+  - [x] SubTask 9.1: 创建internal/supervisor/monitor.go
+  - [x] SubTask 9.2: 实现并行监督执行
+  - [x] SubTask 9.3: 实现监督干预机制
 
 ## Phase 4: 高级功能
 
-- [ ] Task 10: 实现上下文压缩
-  - [ ] SubTask 10.1: 实现基于YAML状态的摘要生成
-  - [ ] SubTask 10.2: 实现关键信息提取与保留
-  - [ ] SubTask 10.3: 实现自动压缩触发机制
+- [x] Task 10: 实现上下文压缩
+  - [x] SubTask 10.1: 实现基于YAML状态的摘要生成
+  - [x] SubTask 10.2: 实现关键信息提取与保留
+  - [x] SubTask 10.3: 实现自动压缩触发机制
 
-- [ ] Task 11: 实现命令行入口
-  - [ ] SubTask 11.1: 创建cmd/agentplus/main.go
-  - [ ] SubTask 11.2: 实现命令行参数解析
-  - [ ] SubTask 11.3: 实现交互式任务输入
+- [x] Task 11: 实现命令行入口
+  - [x] SubTask 11.1: 创建cmd/agentplus/main.go
+  - [x] SubTask 11.2: 实现命令行参数解析
+  - [x] SubTask 11.3: 实现交互式任务输入
 
 ## Phase 5: 测试验证系统
 
