@@ -2,6 +2,92 @@
 
 ## 更新日志
 
+### 2026-04-08 Task 8 新增：对话列表弹窗组件
+
+#### internal/tui/components/dialog.go
+- `ConvStatus` - 对话状态类型（active / waiting / finished）
+- `Conversation` - 对话信息结构体（简化版，用于列表显示）
+  - ID: 对话唯一标识
+  - CreatedAt: 创建时间
+  - Status: 对话状态
+  - Title: 对话标题
+  - IsSubConversation: 是否为子对话
+  - AgentRole: Agent 角色（如果是子对话）
+  - MessageCount: 消息数量
+  - TokenUsage: token 用量
+- `DialogList` - 对话列表弹窗组件
+  - 对话列表显示：支持显示所有对话（主对话和子对话）
+  - 时间排序：按创建时间降序排序（最新的在前）
+  - 状态标注：
+    - 活动（正在推理）：🔄 绿色
+    - 等待（等待子代理完成）：⏳ 黄色
+    - 结束（对话内容结束）：✓ 灰色
+  - 对话选择和切换：支持键盘导航（↑/k 上移、↓/j 下移、Enter 选择、Esc 关闭）
+  - 过滤功能：支持按状态过滤、过滤子对话
+  - 统计功能：获取各状态的对话数量统计
+- `NewDialogList() *DialogList` - 创建新的对话列表组件
+- `SetConversations(conversations []*Conversation)` - 设置对话列表（自动排序）
+- `GetConversations() []*Conversation` - 获取对话列表
+- `SetSize(width, height int)` - 设置组件大小
+- `Show()` - 显示对话列表
+- `Hide()` - 隐藏对话列表
+- `Toggle()` - 切换显示状态
+- `IsVisible() bool` - 是否可见
+- `GetSelected() *Conversation` - 获取当前选中的对话
+- `GetSelectedIndex() int` - 获取当前选中的索引
+- `SetSelectedIndex(index int)` - 设置选中的索引
+- `Update(msg tea.Msg) (*Conversation, bool)` - 处理消息更新
+- `View() string` - 渲染对话列表
+- `RenderOverlay(parentWidth, parentHeight int) string` - 渲染为覆盖层（居中显示）
+- `GetConversationCount() int` - 获取对话数量
+- `FindConversationByID(id string) *Conversation` - 根据ID查找对话
+- `SelectConversationByID(id string) bool` - 根据ID选择对话
+- `FilterByStatus(status ConvStatus) []*Conversation` - 按状态过滤对话
+- `FilterSubConversations(onlySub bool) []*Conversation` - 过滤子对话
+- `GetStatistics() map[ConvStatus]int` - 获取统计信息
+
+#### internal/tui/components/dialog_test.go
+- 完整的单元测试覆盖
+- 测试对话列表创建和配置
+- 测试对话列表排序
+- 测试显示和隐藏
+- 测试导航功能
+- 测试选择功能
+- 测试过滤功能
+- 测试统计功能
+- 测试视图渲染
+- 所有测试通过（17个测试用例）
+
+#### 功能实现说明
+**对话列表显示**：
+- 支持显示所有对话（主对话和子对话）
+- 自动按创建时间降序排序（最新的在前）
+- 显示对话标题、状态、时间等信息
+- 支持空列表提示
+
+**状态标注**：
+- 活动（正在推理）：🔄 绿色图标
+- 等待（等待子代理完成）：⏳ 黄色图标
+- 结束（对话内容结束）：✓ 灰色图标
+- 状态颜色应用于图标，增强视觉识别
+
+**时间排序**：
+- 使用 Go 的 sort.Slice 按创建时间降序排序
+- 确保最新的对话始终显示在列表顶部
+- 支持时间格式化显示（刚刚、X分钟前、X小时前、X天前、具体日期）
+
+**对话选择和切换**：
+- 支持键盘导航：↑/k 上移、↓/j 下移
+- 支持循环导航（从顶部向上循环到底部，从底部向下循环到顶部）
+- 支持 Enter 键选择对话
+- 支持 Esc 键关闭列表
+- 选中项高亮显示
+
+**覆盖层显示**：
+- 支持居中显示对话列表
+- 自动计算合适的宽度和高度
+- 使用 lipgloss.Place 实现居中布局
+
 ### 2026-04-08 Task 2 新增：TUI 模块目录结构
 
 #### internal/tui/app.go
