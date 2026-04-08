@@ -2,6 +2,93 @@
 
 ## 更新日志
 
+### 2026-04-08 Task 15 新增：子对话管理
+
+#### internal/tui/conversation_manager.go
+- `ConversationManager` - 对话管理器（线程安全）
+  - 管理对话的创建、状态更新、切换和父子关系
+  - 支持并发访问，使用读写锁保护
+  - 提供回调机制，支持事件通知
+- `ConversationTreeNode` - 对话树节点结构体
+  - Conversation: 对话对象
+  - Children: 子对话节点列表
+- `NewConversationManager()` - 创建新的对话管理器
+- `CreateConversation(title string)` - 创建新对话
+- `CreateSubConversation(parentID, agentRole, task string)` - 创建子对话
+- `UpdateConversationStatus(convID string, status ConvStatus)` - 更新对话状态
+- `SwitchConversation(convID string)` - 切换到指定对话
+- `GetConversation(convID string)` - 获取指定对话
+- `GetActiveConversation()` - 获取当前活动对话
+- `GetAllConversations()` - 获取所有对话列表（按时间降序排序）
+- `GetRootConversations()` - 获取根对话列表（非子对话）
+- `GetSubConversations(parentID string)` - 获取指定对话的所有子对话
+- `GetConversationTree()` - 获取对话树（包含父子关系）
+- `DeleteConversation(convID string)` - 删除对话（递归删除子对话）
+- `AddMessageToConversation(convID string, msg Message)` - 向对话添加消息
+- `UpdateTokenUsage(convID string, usage int)` - 更新对话的 token 用量
+- `SetConversationTitle(convID, title string)` - 设置对话标题
+- `GetStatistics()` - 获取统计信息（各状态的对话数量）
+- `GetTotalTokenUsage()` - 获取总 token 用量
+- `CompleteConversation(convID string)` - 完成对话
+- `ActivateConversation(convID string)` - 激活对话
+- `WaitConversation(convID string)` - 设置对话为等待状态
+- `CreateCurrentMessage(convID string)` - 创建当前消息（用于流式输出）
+- `FinalizeCurrentMessage(convID string)` - 完成当前消息并添加到消息列表
+- `SetOnConversationCreated(callback)` - 设置对话创建回调
+- `SetOnConversationStatusChanged(callback)` - 设置对话状态变更回调
+- `SetOnConversationSwitched(callback)` - 设置对话切换回调
+
+#### internal/tui/conversation_manager_test.go
+- 完整的单元测试覆盖
+- 测试对话管理器创建和配置
+- 测试对话创建和状态更新
+- 测试子对话创建和父子关系
+- 测试对话切换功能
+- 测试对话列表获取和排序
+- 测试对话删除功能
+- 测试消息添加和 token 用量更新
+- 测试统计信息获取
+- 测试回调机制
+- 测试并发安全性
+- 测试流式消息处理
+- 测试对话树结构
+- 所有测试通过（20+测试用例）
+
+#### 功能实现说明
+**对话状态类型**：
+- ConvStatusActive：活动（正在推理）- 🔄 绿色
+- ConvStatusWaiting：等待（等待子代理完成）- ⏳ 黄色
+- ConvStatusFinished：结束（对话内容结束）- ✓ 灰色
+
+**对话创建和状态更新**：
+- 支持创建主对话和子对话
+- 子对话创建时自动更新父对话状态为等待
+- 子对话完成时自动检查并更新父对话状态
+- 支持状态变更回调通知
+
+**对话列表显示**：
+- 对话列表按创建时间降序排序（最新的在前）
+- 支持获取所有对话、根对话、子对话
+- 支持按状态过滤对话
+- 提供统计信息（各状态的对话数量）
+
+**对话切换功能**：
+- 支持切换到指定对话
+- 触发对话切换回调
+- 更新活动对话ID
+
+**父子对话关系管理**：
+- 维护父子对话关系（ParentID字段）
+- 支持嵌套子对话（子对话可以再创建子对话）
+- 提供对话树结构查询
+- 删除对话时递归删除所有子对话
+- 子对话完成时自动恢复父对话状态
+
+**并发安全性**：
+- 使用读写锁（sync.RWMutex）保护并发访问
+- 所有公共方法都是线程安全的
+- 支持并发创建、查询、更新操作
+
 ### 2026-04-08 Task 13 新增：Token 统计功能
 
 #### internal/tui/app.go
