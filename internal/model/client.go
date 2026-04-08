@@ -36,7 +36,7 @@ func NewClient(config *Config) (*Client, error) {
 			Timeout: 300 * time.Minute, // 长时间推理的超时设置，适配慢速本地模型
 		},
 	}, nil
-} 
+}
 
 // ChatCompletion 发送聊天补全请求
 // ctx: 上下文，用于取消请求
@@ -253,12 +253,10 @@ func (c *Client) processStreamThinkingTags(resp *StreamResponse) {
 
 // extractAndCleanThinking 提取并清理思考标签
 // 返回清理后的内容
-// 注意：此函数保留思考内容但移除标签，如需完全移除思考内容请修改此函数
+// 注意：此函数保留思考标签，由调用方决定如何处理
 func (c *Client) extractAndCleanThinking(content string) string {
-	// 移除<thinking>和</thinking>标签，保留内容
-	// 如果需要完全移除思考内容，可以使用正则表达式替换
-	content = strings.ReplaceAll(content, "<thinking>", "")
-	content = strings.ReplaceAll(content, "</thinking>", "")
+	// 保留 <thinking> 标签，由 Agent 核心模块处理
+	// 这样可以在流式输出中区分思考内容和正文内容
 	return content
 }
 

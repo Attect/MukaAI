@@ -48,6 +48,9 @@ type Agent struct {
 	onStreamChunk func(chunk string)      // 流式输出回调
 	onToolCall    func(name, args string) // 工具调用回调
 	onIteration   func(iteration int)     // 迭代回调
+
+	// 流式处理器
+	streamHandler StreamHandler // 流式消息处理器
 }
 
 // Config Agent配置
@@ -591,8 +594,20 @@ func (a *Agent) callModel(ctx context.Context) (*modelResponse, error) {
 	var toolCalls []model.ToolCall
 	var currentToolCall *model.ToolCall
 
+	// 创建思考标签处理器
+	thinkingProcessor := NewThinkingTagProcessor()
+
+	// 获取流式处理器（线程安全）
+	a.mu.RLock()
+	handler := a.streamHandler
+	a.mu.RUnlock()
+
 	for event := range streamChan {
 		if event.Error != nil {
+			// 调用错误回调
+			if handler != nil {
+				handler.OnError(event.Error)
+			}
 			return nil, event.Error
 		}
 
@@ -613,7 +628,20 @@ func (a *Agent) callModel(ctx context.Context) (*modelResponse, error) {
 		if choice.Delta.Content != "" {
 			contentBuilder.WriteString(choice.Delta.Content)
 
-			// 流式输出回调
+			// 使用思考标签处理器处理内容
+			thinking, content := thinkingProcessor.Process(choice.Delta.Content)
+
+			// 调用流式处理器回调
+			if handler != nil {
+				if thinking != "" {
+					handler.OnThinking(thinking)
+				}
+				if content != "" {
+					handler.OnContent(content)
+				}
+			}
+
+			// 兼容旧的回调
 			if a.onStreamChunk != nil {
 				a.onStreamChunk(choice.Delta.Content)
 			}
@@ -626,6 +654,10 @@ func (a *Agent) callModel(ctx context.Context) (*modelResponse, error) {
 				if tc.ID != "" {
 					if currentToolCall != nil {
 						toolCalls = append(toolCalls, *currentToolCall)
+						// 调用工具调用回调（完成）
+						if handler != nil {
+							handler.OnToolCall(ConvertToolCall(*currentToolCall), true)
+						}
 					}
 					currentToolCall = &model.ToolCall{
 						ID:   tc.ID,
@@ -635,9 +667,17 @@ func (a *Agent) callModel(ctx context.Context) (*modelResponse, error) {
 							Arguments: tc.Function.Arguments,
 						},
 					}
+					// 调用工具调用回调（开始）
+					if handler != nil {
+						handler.OnToolCall(ConvertToolCall(*currentToolCall), false)
+					}
 				} else if currentToolCall != nil {
 					// 追加参数
 					currentToolCall.Function.Arguments += tc.Function.Arguments
+					// 调用工具调用回调（更新）
+					if handler != nil {
+						handler.OnToolCall(ConvertToolCall(*currentToolCall), false)
+					}
 				}
 			}
 		}
@@ -646,11 +686,40 @@ func (a *Agent) callModel(ctx context.Context) (*modelResponse, error) {
 	// 添加最后一个工具调用
 	if currentToolCall != nil {
 		toolCalls = append(toolCalls, *currentToolCall)
+		// 调用工具调用回调（完成）
+		if handler != nil {
+			handler.OnToolCall(ConvertToolCall(*currentToolCall), true)
+		}
+	}
+
+	// 刷新思考标签处理器的缓冲区
+	if handler != nil {
+		thinking, content := thinkingProcessor.Flush()
+		if thinking != "" {
+			handler.OnThinking(thinking)
+		}
+		if content != "" {
+			handler.OnContent(content)
+		}
+	}
+
+	// 估算 token 用量
+	// 简单估算：平均每4个字符约1个token
+	totalContent := contentBuilder.String()
+	for _, tc := range toolCalls {
+		totalContent += tc.Function.Name + tc.Function.Arguments
+	}
+	usage := len(totalContent) / 4
+
+	// 调用完成回调
+	if handler != nil {
+		handler.OnComplete(usage)
 	}
 
 	return &modelResponse{
 		Content:   contentBuilder.String(),
 		ToolCalls: toolCalls,
+		Usage:     usage,
 	}, nil
 }
 
@@ -658,11 +727,17 @@ func (a *Agent) callModel(ctx context.Context) (*modelResponse, error) {
 type modelResponse struct {
 	Content   string
 	ToolCalls []model.ToolCall
+	Usage     int // token 用量（估算）
 }
 
 // executeTools 执行工具调用
 func (a *Agent) executeTools(ctx context.Context, toolCalls []model.ToolCall) ([]model.Message, error) {
 	results := make([]model.Message, 0, len(toolCalls))
+
+	// 获取流式处理器（线程安全）
+	a.mu.RLock()
+	handler := a.streamHandler
+	a.mu.RUnlock()
 
 	for _, tc := range toolCalls {
 		// 记录工具调用
@@ -682,6 +757,12 @@ func (a *Agent) executeTools(ctx context.Context, toolCalls []model.ToolCall) ([
 			if a.logger != nil {
 				a.logger.LogToolResult(tc.Function.Name, err.Error(), false)
 			}
+
+			// 调用工具结果回调（失败）
+			if handler != nil {
+				handler.OnToolResult(ConvertToolCallWithResult(tc, "", err.Error()))
+			}
+
 			return nil, err
 		}
 
@@ -695,6 +776,15 @@ func (a *Agent) executeTools(ctx context.Context, toolCalls []model.ToolCall) ([
 				}
 			}
 			a.logger.LogToolResult(tc.Function.Name, resultContent, true)
+		}
+
+		// 调用工具结果回调（成功）
+		if handler != nil && len(result) > 0 {
+			resultContent := ""
+			if len(result) > 0 {
+				resultContent = result[0].Content
+			}
+			handler.OnToolResult(ConvertToolCallWithResult(tc, resultContent, ""))
 		}
 
 		results = append(results, result...)
@@ -815,6 +905,20 @@ func (a *Agent) SetOnIteration(callback func(iteration int)) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.onIteration = callback
+}
+
+// SetStreamHandler 设置流式消息处理器
+func (a *Agent) SetStreamHandler(handler StreamHandler) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.streamHandler = handler
+}
+
+// GetStreamHandler 获取流式消息处理器
+func (a *Agent) GetStreamHandler() StreamHandler {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.streamHandler
 }
 
 // GetHistory 获取消息历史管理器

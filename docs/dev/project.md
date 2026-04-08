@@ -2,6 +2,109 @@
 
 ## 更新日志
 
+### 2026-04-08 Task 10 新增：流式消息处理
+
+#### internal/agent/stream.go
+- `StreamHandler` - 流式消息处理器接口
+  - OnThinking(chunk string): 处理思考内容块
+  - OnContent(chunk string): 处理正文内容块
+  - OnToolCall(call ToolCallInfo, isComplete bool): 处理工具调用
+  - OnToolResult(result ToolCallInfo): 处理工具执行结果
+  - OnComplete(usage int): 处理推理完成
+  - OnError(err error): 处理错误
+- `ToolCallInfo` - 工具调用信息结构体
+  - ID: 工具调用唯一标识
+  - Name: 工具名称
+  - Arguments: 工具参数（JSON 格式）
+  - IsComplete: 是否已完成流式生成
+  - Result: 工具执行结果
+  - ResultError: 工具执行错误
+- `StreamHandlerFunc` - 函数式流式处理器
+  - 支持链式调用设置回调函数
+  - 支持空函数的安全调用
+- `NewStreamHandlerFunc()` - 创建基于函数的流式处理器
+- `ConvertToolCall(tc)` - 将 model.ToolCall 转换为 ToolCallInfo
+- `ConvertToolCallWithResult(tc, result, error)` - 将 model.ToolCall 转换为带结果的 ToolCallInfo
+
+#### internal/agent/thinking.go
+- `ThinkingTagProcessor` - 思考标签处理器
+  - 识别和处理 `<thinking>` 标签
+  - 支持跨块的标签处理
+  - 区分思考内容和正文内容
+- `NewThinkingTagProcessor()` - 创建新的思考标签处理器
+- `Process(chunk)` - 处理内容块，返回思考内容和正文内容
+- `Flush()` - 刷新缓冲区，返回剩余内容
+- `IsInThinking()` - 是否正在思考标签内
+- `Reset()` - 重置处理器状态
+
+#### internal/agent/core.go
+- `Agent` 结构体新增字段：
+  - `streamHandler StreamHandler` - 流式消息处理器
+- `modelResponse` 结构体新增字段：
+  - `Usage int` - token 用量（估算）
+- `SetStreamHandler(handler)` - 设置流式消息处理器
+- `GetStreamHandler()` - 获取流式消息处理器
+- `callModel()` - 重构以支持流式回调：
+  - 使用 ThinkingTagProcessor 处理思考标签
+  - 调用 streamHandler 的 OnThinking 和 OnContent 方法
+  - 调用 streamHandler 的 OnToolCall 方法
+  - 估算 token 用量并调用 OnComplete 回调
+- `executeTools()` - 重构以支持工具结果回调：
+  - 调用 streamHandler 的 OnToolResult 方法
+
+#### internal/model/client.go
+- `extractAndCleanThinking()` - 修改为保留思考标签
+  - 不再移除 `<thinking>` 标签
+  - 由 Agent 核心模块处理标签
+
+#### internal/agent/stream_test.go
+- 完整的单元测试覆盖
+- 测试 StreamHandlerFunc 的各个回调方法
+- 测试空函数的安全调用
+- 测试工具调用转换函数
+- 所有测试通过（3个测试用例）
+
+#### internal/agent/thinking_test.go
+- 完整的单元测试覆盖
+- 测试基本的思考标签处理
+- 测试纯思考内容和纯正文内容
+- 测试混合内容
+- 测试多个思考块
+- 测试跨块的标签处理
+- 测试未闭合的标签
+- 测试刷新缓冲区
+- 测试重置处理器
+- 测试状态检查
+- 测试空标签
+- 测试嵌套标签
+- 所有测试通过（10个测试用例）
+
+#### 功能实现说明
+**流式消息处理流程**：
+1. 模型客户端接收流式响应
+2. Agent 核心模块使用 ThinkingTagProcessor 处理内容
+3. 识别思考内容（`<thinking>` 标签内）和正文内容
+4. 调用 StreamHandler 的相应回调方法
+5. 处理工具调用和工具结果
+6. 在推理完成时调用 OnComplete 回调
+
+**思考标签处理**：
+- 支持识别 `<thinking>` 和 `</thinking>` 标签
+- 支持跨块的标签处理（标签可能被分割到多个流式块中）
+- 正确区分思考内容和正文内容
+- 处理未闭合的标签
+
+**与 TUI 的集成**：
+- TUI 模块实现了 StreamHandler 接口（`internal/tui/messages.go` 中的 `StreamHandlerImpl`）
+- Agent 核心模块通过 SetStreamHandler 方法设置处理器
+- 流式消息通过回调方法传递到 TUI
+- TUI 实时更新界面显示
+
+**性能优化**：
+- 使用缓冲区处理跨块的标签
+- 避免频繁的字符串操作
+- 线程安全的流式处理器访问
+
 ### 2026-04-08 Task 6 新增：输入组件
 
 #### internal/tui/components/input.go

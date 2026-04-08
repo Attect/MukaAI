@@ -29,33 +29,33 @@
 
 ## Phase 3: UI 组件开发
 
-- [ ] Task 5: 实现状态栏组件
-  - [ ] SubTask 5.1: 创建 internal/tui/components/statusbar.go
-  - [ ] SubTask 5.2: 实现工作目录显示
-  - [ ] SubTask 5.3: 实现 token 用量显示
-  - [ ] SubTask 5.4: 实现推理次数显示
-  - [ ] SubTask 5.5: 实现样式美化
+- [x] Task 5: 实现状态栏组件
+  - [x] SubTask 5.1: 创建 internal/tui/components/statusbar.go
+  - [x] SubTask 5.2: 实现工作目录显示
+  - [x] SubTask 5.3: 实现 token 用量显示
+  - [x] SubTask 5.4: 实现推理次数显示
+  - [x] SubTask 5.5: 实现样式美化
 
-- [ ] Task 6: 实现输入组件
-  - [ ] SubTask 6.1: 创建 internal/tui/components/input.go
-  - [ ] SubTask 6.2: 集成 bubbles/textarea 组件
-  - [ ] SubTask 6.3: 实现单行/多行输入模式切换
-  - [ ] SubTask 6.4: 实现输入历史记录
-  - [ ] SubTask 6.5: 实现内置命令解析（/cd, /conversations 等）
+- [x] Task 6: 实现输入组件
+  - [x] SubTask 6.1: 创建 internal/tui/components/input.go
+  - [x] SubTask 6.2: 集成 bubbles/textarea 组件
+  - [x] SubTask 6.3: 实现单行/多行输入模式切换
+  - [x] SubTask 6.4: 实现输入历史记录
+  - [x] SubTask 6.5: 实现内置命令解析（/cd, /conversations 等）
 
-- [ ] Task 7: 实现对话显示组件
-  - [ ] SubTask 7.1: 创建 internal/tui/components/chat.go
-  - [ ] SubTask 7.2: 集成 bubbles/viewport 组件实现滚动
-  - [ ] SubTask 7.3: 实现消息渲染逻辑
-  - [ ] SubTask 7.4: 实现自动滚动到底部
-  - [ ] SubTask 7.5: 实现消息样式区分（用户、模型、工具）
+- [x] Task 7: 实现对话显示组件
+  - [x] SubTask 7.1: 创建 internal/tui/components/chat.go
+  - [x] SubTask 7.2: 集成 bubbles/viewport 组件实现滚动
+  - [x] SubTask 7.3: 实现消息渲染逻辑
+  - [x] SubTask 7.4: 实现自动滚动到底部
+  - [x] SubTask 7.5: 实现消息样式区分（用户、模型、工具）
 
-- [ ] Task 8: 实现对话列表弹窗组件
-  - [ ] SubTask 8.1: 创建 internal/tui/components/dialog.go
-  - [ ] SubTask 8.2: 实现对话列表显示
-  - [ ] SubTask 8.3: 实现状态标注（活动、等待、结束）
-  - [ ] SubTask 8.4: 实现时间排序
-  - [ ] SubTask 8.5: 实现对话选择和切换
+- [x] Task 8: 实现对话列表弹窗组件
+  - [x] SubTask 8.1: 创建 internal/tui/components/dialog.go
+  - [x] SubTask 8.2: 实现对话列表显示
+  - [x] SubTask 8.3: 实现状态标注（活动、等待、结束）
+  - [x] SubTask 8.4: 实现时间排序
+  - [x] SubTask 8.5: 实现对话选择和切换
 
 ## Phase 4: 样式系统
 
