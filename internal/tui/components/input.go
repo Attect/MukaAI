@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	tea "charm.land/bubbletea/v2"
 	"charm.land/bubbles/v2/textarea"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
@@ -81,10 +81,10 @@ type InputComponent struct {
 	prompt string
 
 	// 样式
-	style          lipgloss.Style
-	focusedStyle   lipgloss.Style
-	modeStyle      lipgloss.Style
-	promptStyle    lipgloss.Style
+	style            lipgloss.Style
+	focusedStyle     lipgloss.Style
+	modeStyle        lipgloss.Style
+	promptStyle      lipgloss.Style
 	placeholderStyle lipgloss.Style
 }
 
@@ -154,21 +154,21 @@ func NewInputComponent(config InputComponentConfig) *InputComponent {
 		Foreground(lipgloss.Color("#9CA3AF"))
 
 	return &InputComponent{
-		textarea:        ta,
-		mode:            config.InitialMode,
-		width:           config.Width,
-		height:          config.Height,
-		focused:         true,
-		history:         make([]string, 0),
-		historyIndex:    -1,
-		maxHistory:      config.MaxHistory,
-		tempInput:       "",
-		placeholder:     config.Placeholder,
-		prompt:          config.Prompt,
-		style:           style,
-		focusedStyle:    focusedStyle,
-		modeStyle:       modeStyle,
-		promptStyle:     promptStyle,
+		textarea:         ta,
+		mode:             config.InitialMode,
+		width:            config.Width,
+		height:           config.Height,
+		focused:          true,
+		history:          make([]string, 0),
+		historyIndex:     -1,
+		maxHistory:       config.MaxHistory,
+		tempInput:        "",
+		placeholder:      config.Placeholder,
+		prompt:           config.Prompt,
+		style:            style,
+		focusedStyle:     focusedStyle,
+		modeStyle:        modeStyle,
+		promptStyle:      promptStyle,
 		placeholderStyle: placeholderStyle,
 	}
 }
@@ -373,28 +373,29 @@ func (ic *InputComponent) navigateHistory(direction int) {
 	// 第一次向上导航时，保存当前输入
 	if direction == -1 && ic.historyIndex == -1 {
 		ic.tempInput = ic.textarea.Value()
+		// 从最新的历史记录开始
+		ic.historyIndex = len(ic.history) - 1
+		ic.textarea.SetValue(ic.history[ic.historyIndex])
+		return
 	}
 
 	// 计算新索引
 	newIndex := ic.historyIndex + direction
 
 	// 边界检查
-	if newIndex < -1 {
-		newIndex = -1
+	if newIndex < 0 {
+		newIndex = 0
 	} else if newIndex >= len(ic.history) {
-		newIndex = len(ic.history) - 1
+		// 超出范围，恢复当前输入
+		ic.textarea.SetValue(ic.tempInput)
+		ic.historyIndex = -1
+		return
 	}
 
 	ic.historyIndex = newIndex
 
-	// 更新输入框内容
-	if newIndex == -1 {
-		// 恢复临时输入
-		ic.textarea.SetValue(ic.tempInput)
-	} else {
-		// 显示历史记录
-		ic.textarea.SetValue(ic.history[newIndex])
-	}
+	// 显示历史记录
+	ic.textarea.SetValue(ic.history[newIndex])
 }
 
 // AddToHistory 添加到历史记录

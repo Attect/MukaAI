@@ -140,25 +140,37 @@ func TestInputComponentHistoryNavigation(t *testing.T) {
 	currentInput := "current"
 	ic.SetValue(currentInput)
 
-	// 向上导航（更早的历史）
+	// 向上导航（更早的历史）- 应该显示最新的历史记录
 	ic.navigateHistory(-1)
 	if ic.GetValue() != inputs[2] {
 		t.Errorf("Expected value %q, got %q", inputs[2], ic.GetValue())
 	}
 
-	// 继续向上
+	// 继续向上 - 显示更早的历史
 	ic.navigateHistory(-1)
 	if ic.GetValue() != inputs[1] {
 		t.Errorf("Expected value %q, got %q", inputs[1], ic.GetValue())
 	}
 
+	// 继续向上 - 显示最早的历史
+	ic.navigateHistory(-1)
+	if ic.GetValue() != inputs[0] {
+		t.Errorf("Expected value %q, got %q", inputs[0], ic.GetValue())
+	}
+
 	// 向下导航（更新的历史）
+	ic.navigateHistory(1)
+	if ic.GetValue() != inputs[1] {
+		t.Errorf("Expected value %q, got %q", inputs[1], ic.GetValue())
+	}
+
+	// 继续向下
 	ic.navigateHistory(1)
 	if ic.GetValue() != inputs[2] {
 		t.Errorf("Expected value %q, got %q", inputs[2], ic.GetValue())
 	}
 
-	// 导航到末尾（恢复当前输入）
+	// 继续向下 - 恢复当前输入
 	ic.navigateHistory(1)
 	if ic.GetValue() != currentInput {
 		t.Errorf("Expected value %q, got %q", currentInput, ic.GetValue())
@@ -173,7 +185,7 @@ func TestInputComponentHistoryLimit(t *testing.T) {
 
 	// 添加超过限制的历史记录
 	for i := 0; i < 10; i++ {
-		ic.AddToHistory("input")
+		ic.AddToHistory("input" + string(rune('0'+i)))
 	}
 
 	// 检查历史记录数量

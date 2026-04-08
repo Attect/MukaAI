@@ -2,6 +2,75 @@
 
 ## 更新日志
 
+### 2026-04-08 Task 6 新增：输入组件
+
+#### internal/tui/components/input.go
+- `InputMode` - 输入模式类型（single-line / multi-line）
+- `CommandType` - 命令类型枚举
+  - CommandNone: 无命令
+  - CommandCD: 切换目录命令
+  - CommandConversations: 显示对话列表
+  - CommandClear: 清空对话
+  - CommandSave: 保存对话
+  - CommandHelp: 显示帮助
+  - CommandExit: 退出程序
+- `Command` - 解析后的命令结构体
+  - Type: 命令类型
+  - Name: 命令名称
+  - Args: 命令参数
+  - Raw: 原始输入
+- `InputComponent` - 输入组件（支持单行/多行模式切换、输入历史记录和命令解析）
+  - 集成 bubbles/textarea 组件
+  - 支持单行输入模式（Enter 提交）
+  - 支持多行输入模式（Ctrl+Enter 提交）
+  - 支持 Tab 键切换输入模式
+  - 支持输入历史记录（上下箭头浏览）
+  - 支持内置命令解析（/cd, /conversations, /clear, /save, /help, /exit）
+- `InputComponentConfig` - 输入组件配置结构体
+  - Width: 宽度
+  - Height: 高度（多行模式）
+  - Placeholder: 占位符
+  - Prompt: 提示符
+  - MaxHistory: 最大历史记录数
+  - InitialMode: 初始输入模式
+- `DefaultInputComponentConfig()` - 返回默认输入组件配置
+- `NewInputComponent(config)` - 创建新的输入组件
+- `Init()` - 初始化组件
+- `Update(msg)` - 更新组件状态
+- `View()` - 渲染组件
+- `ToggleMode()` - 切换输入模式
+- `SetMode(mode)` - 设置输入模式
+- `GetMode()` - 获取当前输入模式
+- `GetValue()` - 获取输入内容
+- `SetValue(value)` - 设置输入内容
+- `Clear()` - 清空输入
+- `Focus()` - 获取焦点
+- `Blur()` - 失去焦点
+- `SetWidth(width)` - 设置宽度
+- `SetHeight(height)` - 设置高度
+- `AddToHistory(input)` - 添加到历史记录
+- `GetHistory()` - 获取历史记录
+- `ClearHistory()` - 清空历史记录
+- `ParseCommand(input)` - 解析命令
+- `IsCommand(input)` - 检查输入是否为命令
+- `GetCommandHelp()` - 获取命令帮助文本
+- `ShouldSubmit(key)` - 检查是否应该提交输入
+
+#### internal/tui/components/input_test.go
+- 完整的单元测试覆盖
+- 测试输入组件创建和配置
+- 测试输入模式切换
+- 测试输入值操作
+- 测试历史记录功能
+- 测试历史记录导航
+- 测试历史记录限制
+- 测试命令解析
+- 测试提交判断
+- 测试焦点管理
+- 测试尺寸设置
+- 测试视图渲染
+- 所有测试通过（14个测试用例）
+
 ### 2026-04-08 Task 7 新增：对话显示组件
 
 #### internal/tui/components/chat.go
