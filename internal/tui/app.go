@@ -142,11 +142,11 @@ type AppModel struct {
 	// Agent 回调接口
 	agent AgentInterface
 
-	// 是否已初始化
-	initialized bool
-
 	// 流式更新管理器
 	streamManager *StreamUpdateManager
+
+	// 是否已初始化
+	initialized bool
 }
 
 // AgentInterface Agent 接口定义
@@ -929,4 +929,61 @@ func (m AppModel) handleHelpCommand() tea.Cmd {
 	return func() tea.Msg {
 		return NewCommandExecutedMsg("help", nil, helpText, nil)
 	}
+}
+
+// handleBatchUpdate 处理批量更新消息
+func (m *AppModel) handleBatchUpdate(result *FlushResult) {
+	if result == nil || !result.HasData() {
+		return
+	}
+
+	// 处理思考内容
+	if result.HasThinking && m.activeConv != nil && m.activeConv.currentMessage != nil {
+		m.activeConv.currentMessage.Thinking += result.Thinking
+		m.activeConv.currentMessage.IsStreaming = true
+		m.activeConv.currentMessage.StreamingType = "thinking"
+	}
+
+	// 处理正文内容
+	if result.HasContent && m.activeConv != nil && m.activeConv.currentMessage != nil {
+		m.activeConv.currentMessage.Content += result.Content
+		m.activeConv.currentMessage.IsStreaming = true
+		m.activeConv.currentMessage.StreamingType = "content"
+	}
+
+	// 处理工具调用
+	if result.HasToolCalls && m.activeConv != nil && m.activeConv.currentMessage != nil {
+		for _, tc := range result.ToolCalls {
+			// 查找或添加工具调用
+			found := false
+			for i, existingTc := range m.activeConv.currentMessage.ToolCalls {
+				if existingTc.ID == tc.ID {
+					m.activeConv.currentMessage.ToolCalls[i] = tc
+					found = true
+					break
+				}
+			}
+			if !found {
+				m.activeConv.currentMessage.ToolCalls = append(m.activeConv.currentMessage.ToolCalls, tc)
+			}
+		}
+		m.activeConv.currentMessage.IsStreaming = true
+		m.activeConv.currentMessage.StreamingType = "tool"
+	}
+
+	// 处理工具结果
+	if result.HasToolResult && m.activeConv != nil && m.activeConv.currentMessage != nil {
+		for _, tc := range result.ToolResults {
+			for i, existingTc := range m.activeConv.currentMessage.ToolCalls {
+				if existingTc.ID == tc.ID {
+					m.activeConv.currentMessage.ToolCalls[i].Result = tc.Result
+					m.activeConv.currentMessage.ToolCalls[i].ResultError = tc.ResultError
+					break
+				}
+			}
+		}
+	}
+
+	// 更新对话视图
+	m.updateChatView()
 }

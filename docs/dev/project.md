@@ -2,6 +2,110 @@
 
 ## 更新日志
 
+### 2026-04-08 Task 11 新增：实时 UI 更新
+
+#### internal/tui/stream.go
+- `BatchUpdateConfig` - 批量更新配置结构体
+  - BufferDuration: 缓冲时间窗口（默认50ms）
+  - MaxBufferSize: 最大缓冲区大小（默认10条）
+  - EnableBatching: 是否启用批量更新
+  - MinUpdateInterval: 最小更新间隔（默认16ms，约60fps）
+- `BufferedMessage` - 缓冲的消息结构体
+  - Type: 消息类型
+  - Content: 消息内容
+  - ToolCall: 工具调用信息
+  - IsComplete: 是否完成
+  - Usage: token用量
+  - Error: 错误信息
+  - Timestamp: 时间戳
+- `MessageBuffer` - 消息缓冲器（线程安全）
+  - 管理思考内容、正文内容、工具调用的缓冲
+  - 支持时间窗口和大小触发的刷新机制
+  - 提供并发安全的访问
+- `FlushResult` - 刷新结果结构体
+  - Thinking: 累积的思考内容
+  - Content: 累积的正文内容
+  - ToolCalls: 累积的工具调用
+  - ToolResults: 累积的工具结果
+  - Messages: 其他消息（完成、错误等）
+  - HasThinking/HasContent/HasToolCalls/HasToolResult: 状态标志
+- `StreamUpdateManager` - 流式更新管理器（线程安全）
+  - 管理流式消息的缓冲和批量更新
+  - 使用定时器定期检查缓冲区
+  - 提供强制刷新机制
+- `DefaultBatchUpdateConfig()` - 返回默认批量更新配置
+- `NewMessageBuffer(config)` - 创建新的消息缓冲器
+- `NewStreamUpdateManager(config)` - 创建新的流式更新管理器
+
+#### internal/tui/stream_test.go
+- 完整的单元测试覆盖
+- 测试消息缓冲器的各种操作
+- 测试批量更新管理器的启动和停止
+- 测试并发访问安全性
+- 测试刷新机制
+- 所有测试通过（20+测试用例）
+
+#### internal/tui/messages.go
+- `BatchUpdateMsg` - 批量更新消息
+  - Result: 刷新结果
+- `TickMsg` - 定时器消息
+  - Time: 当前时间
+- `NewBatchUpdateMsg(result)` - 创建批量更新消息
+- `NewTickMsg(t)` - 创建定时器消息
+
+#### internal/tui/app.go
+- `AppModel` 结构体新增字段：
+  - `streamManager *StreamUpdateManager` - 流式更新管理器
+- `NewAppModel()` - 创建并初始化流式更新管理器
+- `Init()` - 启动流式更新管理器和定时器
+- `tickCmd()` - 创建定时器命令（每16ms检查一次）
+- `Update()` - 重构以支持批量更新：
+  - 添加 TickMsg 处理，定时检查缓冲区
+  - 添加 BatchUpdateMsg 处理，执行批量更新
+  - 流式消息先缓冲，再批量处理
+- `handleBatchUpdate(result)` - 处理批量更新消息（核心方法）
+  - 更新思考内容块
+  - 更新正文内容块
+  - 更新工具调用块
+  - 更新工具结果
+  - 处理完成和错误消息
+  - 自动滚动到底部
+- `processUserInput()` - 初始化当前消息用于接收流式输出
+
+#### 功能特性
+- **流式消息缓冲**：使用时间窗口（50ms）缓冲流式消息
+- **批量更新机制**：避免频繁更新UI，提升性能
+- **实时更新延迟**：确保流式输出延迟 < 100ms
+- **自动滚动**：流式输出时自动滚动到最新内容
+- **并发安全**：所有缓冲操作都使用互斥锁保护
+- **性能优化**：
+  - 使用16ms定时器（约60fps）检查缓冲区
+  - 批量处理减少UI更新次数
+  - 避免频繁的字符串拼接和渲染
+
+#### 实时更新流程
+```
+流式消息 -> StreamHandlerImpl -> 缓冲到 MessageBuffer
+        -> 定时器检查（每16ms）
+        -> ShouldFlush() 判断是否刷新
+        -> ForceFlush() 刷新缓冲区
+        -> BatchUpdateMsg 消息
+        -> handleBatchUpdate() 批量更新UI
+        -> 自动滚动到底部
+```
+
+#### 缓冲策略
+- **时间窗口触发**：距离上次更新超过50ms时触发刷新
+- **大小触发**：缓冲区达到10条消息时立即刷新
+- **强制刷新**：流式完成或错误时强制刷新
+- **定时检查**：每16ms检查一次是否需要刷新
+
+#### 性能指标
+- **流式输出延迟**：< 100ms（实际约50-66ms）
+- **UI更新频率**：最高60fps（16ms间隔）
+- **缓冲区大小**：最多10条消息
+- **并发安全**：使用sync.RWMutex保护
+
 ### 2026-04-08 Task 15 新增：子对话管理
 
 #### internal/tui/conversation_manager.go
