@@ -141,12 +141,12 @@
 
 ## Phase 12: 快捷键支持
 
-- [ ] Task 18: 实现快捷键系统
-  - [ ] SubTask 18.1: 实现 Enter 提交输入
-  - [ ] SubTask 18.2: 实现 Ctrl+Enter 多行提交
-  - [ ] SubTask 18.3: 实现 Tab 切换输入模式
-  - [ ] SubTask 18.4: 实现 Ctrl+L 显示对话列表
-  - [ ] SubTask 18.5: 实现 Ctrl+C/Esc 退出
+- [x] Task 18: 实现快捷键系统
+  - [x] SubTask 18.1: 实现 Enter 提交输入
+  - [x] SubTask 18.2: 实现 Ctrl+Enter 多行提交
+  - [x] SubTask 18.3: 实现 Tab 切换输入模式
+  - [x] SubTask 18.4: 实现 Ctrl+L 显示对话列表
+  - [x] SubTask 18.5: 实现 Ctrl+C/Esc 退出
 
 ## Phase 13: 测试与优化
 
