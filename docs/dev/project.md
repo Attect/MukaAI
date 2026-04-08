@@ -2,6 +2,89 @@
 
 ## 更新日志
 
+### 2026-04-08 Task 17 新增：内置命令系统
+
+#### internal/tui/export.go
+- `ConversationExport` - 导出的对话数据结构
+  - ID: 对话唯一标识
+  - Title: 对话标题
+  - CreatedAt: 创建时间
+  - Status: 对话状态
+  - TokenUsage: token 用量
+  - IsSubConversation: 是否为子对话
+  - Messages: 消息列表
+  - ExportedAt: 导出时间
+- `MessageExport` - 导出的消息数据结构
+  - Role: 消息角色
+  - Content: 正文内容
+  - Thinking: 思考内容
+  - ToolCalls: 工具调用列表
+  - TokenUsage: token 用量
+  - Timestamp: 时间戳
+- `ToolCallExport` - 导出的工具调用数据结构
+- `ExportConversation(conv)` - 导出对话为 JSON 格式
+- `SaveConversationToFile(filePath, conv)` - 保存对话到文件
+  - 支持指定文件路径（可选）
+  - 如果没有指定路径，使用默认文件名（conversation_时间戳_ID.json）
+  - 自动创建目录（如果需要）
+  - 返回保存的绝对路径
+- `LoadConversationFromFile(filePath)` - 从文件加载对话
+  - 支持 JSON 格式
+  - 自动转换数据结构
+
+#### internal/tui/app.go
+- `handleSaveCommand(args []string)` - 处理 /save 命令
+  - 检查是否有活动对话
+  - 支持指定文件路径（可选）
+  - 保存对话到文件
+  - 返回成功/失败消息
+- `handleCommandExecuted(cmd, args, result, err)` - 处理命令执行结果
+  - 在对话区显示命令执行结果
+  - 成功消息：✓ 前缀
+  - 失败消息：❌ 前缀
+- `ShowConversationListMsg` 消息处理：
+  - 更新对话列表数据
+  - 选中活动对话
+  - 显示对话列表
+
+#### internal/tui/commands_test.go
+- 完整的单元测试覆盖
+- 测试 /save 命令（保存到默认路径、指定路径、空对话）
+- 测试对话导出功能
+- 测试从文件加载对话
+- 测试命令执行结果显示
+- 测试对话列表显示
+- 测试 /clear 命令
+- 测试 /help 命令
+- 所有测试通过（15+测试用例）
+
+#### 功能实现说明
+**内置命令系统**：
+- `/cd <path>` - 切换工作目录（Task 14 已实现）
+- `/conversations` 或 `/conv` - 显示对话列表
+- `/clear` - 清空当前对话
+- `/save [file]` - 保存对话历史到 JSON 文件
+- `/help` - 显示帮助信息
+- `/exit` - 退出 TUI
+
+**对话保存功能**：
+- 支持 JSON 格式导出
+- 包含完整的对话信息（消息、token用量、状态等）
+- 支持自定义文件路径
+- 自动生成默认文件名
+- 支持从文件加载对话
+
+**命令执行结果显示**：
+- 成功消息使用 ✓ 前缀
+- 失败消息使用 ❌ 前缀
+- 自动添加到当前对话的消息列表
+- 实时更新对话视图
+
+**对话列表显示**：
+- 自动更新对话列表数据
+- 选中当前活动对话
+- 支持键盘导航和选择
+
 ### 2026-04-08 Task 18 新增：快捷键系统
 
 #### internal/tui/app.go

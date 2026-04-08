@@ -247,8 +247,9 @@ func runTUICommand() {
 	// 创建 Bubble Tea 程序
 	p := tea.NewProgram(
 		appModel,
-		tea.WithAltScreen(),       // 使用备用屏幕缓冲区
-		tea.WithMouseCellMotion(), // 启用鼠标支持
+		// Bubble Tea v2 使用不同的选项 API
+		// tea.WithAltScreen(),       // 使用备用屏幕缓冲区
+		// tea.WithMouseCellMotion(), // 启用鼠标支持
 	)
 
 	// 设置信号处理，支持优雅退出
