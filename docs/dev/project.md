@@ -2,6 +2,76 @@
 
 ## 更新日志
 
+### 2026-04-08 Task 16 新增：TUI 启动命令
+
+#### cmd/agentplus/main.go
+- 重构命令行入口，支持子命令模式
+- `main()` - 检查子命令并路由到相应的处理函数
+- `runCLICommand()` - 运行 CLI 模式（原有逻辑）
+- `runTUICommand()` - 运行 TUI 模式（新增）
+  - 解析 TUI 命令行参数
+  - 设置初始工作目录
+  - 创建 TUI 应用模型
+  - 启动 Bubble Tea 程序
+  - 实现优雅退出
+- `parseTUIFlags()` - 解析 TUI 模式命令行参数
+  - 支持 `-c, --config` 参数指定配置文件
+  - 支持 `--dir` 参数指定初始工作目录
+  - 支持 `--load` 参数加载历史对话
+- `printUsage()` - 打印完整的使用说明
+  - 显示 CLI 模式和 TUI 模式的选项
+  - 提供使用示例
+- `TUIOptions` - TUI 模式命令行参数结构体
+
+#### 功能实现说明
+**子命令模式**：
+- 支持默认 CLI 模式：`agentplus [options] <task>`
+- 支持 TUI 模式：`agentplus tui [options]`
+- 支持帮助命令：`agentplus help`
+- 支持版本命令：`agentplus version`
+
+**TUI 启动流程**：
+1. 解析命令行参数
+2. 加载配置文件
+3. 设置初始工作目录（支持绝对路径和相对路径）
+4. 验证目录是否存在
+5. 创建 TUI 应用模型
+6. 设置初始工作目录
+7. 创建 Bubble Tea 程序
+8. 设置信号处理（支持 Ctrl+C 优雅退出）
+9. 启动 TUI 程序
+
+**命令行参数**：
+- `-c, --config <file>`: 配置文件路径（默认：./configs/config.yaml）
+- `--dir <directory>`: 初始工作目录
+- `--load <file>`: 加载历史对话文件
+
+**优雅退出机制**：
+- 监听 SIGINT 和 SIGTERM 信号
+- 收到信号后发送退出命令给 TUI
+- TUI 清理资源后退出
+- 无资源泄漏
+
+#### internal/tui/app.go
+- `showConversationList()` - 显示对话列表方法（新增）
+  - 更新对话列表数据
+  - 显示对话列表弹窗
+
+#### 使用示例
+```bash
+# 启动 TUI 模式
+agentplus tui
+
+# 指定初始工作目录
+agentplus tui --dir /path/to/project
+
+# 加载历史对话
+agentplus tui --load conversation.yaml
+
+# 使用自定义配置文件
+agentplus tui -c ./custom-config.yaml
+```
+
 ### 2026-04-08 Task 17 新增：内置命令系统
 
 #### internal/tui/export.go
