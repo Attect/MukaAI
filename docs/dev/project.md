@@ -2,7 +2,83 @@
 
 ## 更新日志
 
-### 2026-04-08 Task 11 新增：实时 UI 更新
+### 2026-04-08 Task 14 新增：工作目录管理
+
+#### internal/tui/app.go
+- `AppModel` 结构体更新：
+  - 使用 `*components.StatusBar` 替代旧的 `StatusBar` 结构体
+  - 新增 `streamManager *StreamUpdateManager` 字段
+- `NewAppModel()` - 更新以初始化 components.StatusBar 并获取当前工作目录
+- `handleCommand(cmd string)` - 实现命令解析和路由
+  - 支持 `/cd <path>` 命令
+  - 支持 `/conversations` 命令
+  - 支持 `/clear` 命令
+  - 支持 `/save` 命令
+  - 支持 `/help` 命令
+  - 支持 `/exit` 命令
+- `handleCDCommand(args []string)` - 处理目录切换命令
+  - 支持绝对路径和相对路径
+  - 支持特殊路径（`~` 用户主目录）
+  - 自动解析相对路径为绝对路径
+  - 清理路径（处理 `.` 和 `..`）
+- `validateDirectory(dir string)` - 验证目录是否存在且可访问
+  - 检查路径是否存在
+  - 检查是否为目录
+  - 检查访问权限
+- `handleWorkingDirChanged(oldDir, newDir)` - 处理工作目录变更
+  - 更新当前目录
+  - 更新状态栏显示
+- `handleCommandExecuted(cmd, args, result, err)` - 处理命令执行结果
+- `SetCurrentDir(dir string)` - 设置当前工作目录（供外部调用）
+- `GetCurrentDir()` - 获取当前工作目录
+- `handleClearCommand()` - 清空当前对话
+- `handleSaveCommand(args []string)` - 保存对话（待实现）
+- `handleHelpCommand()` - 显示帮助信息
+- `handleBatchUpdate(result *FlushResult)` - 处理批量更新消息
+
+#### internal/tui/app_test.go
+- 完整的单元测试覆盖
+- 测试目录验证功能
+- 测试 /cd 命令处理
+- 测试相对路径切换
+- 测试用户主目录切换
+- 测试工作目录变更处理
+- 测试设置当前目录
+- 测试命令处理路由
+- 测试命令执行结果处理
+- 测试清空对话命令
+- 测试帮助命令
+- 所有测试通过（15+测试用例）
+
+#### 功能实现说明
+**工作目录管理流程**：
+1. 用户输入 `/cd <path>` 命令
+2. handleCommand 解析命令并路由到 handleCDCommand
+3. handleCDCommand 验证目录路径
+4. 切换到新目录
+5. 发送 WorkingDirChangedMsg 消息
+6. handleWorkingDirChanged 更新状态
+7. 状态栏显示新目录
+
+**目录验证机制**：
+- 检查路径是否存在
+- 检查是否为目录（不是文件）
+- 检查访问权限
+- 返回详细的错误信息
+
+**错误处理**：
+- 目录不存在：返回明确的错误信息
+- 路径不是目录：返回明确的错误信息
+- 权限不足：返回权限错误
+- 缺少参数：返回参数错误
+
+**状态栏更新**：
+- 使用 components.StatusBar 组件
+- 自动显示当前工作目录
+- 显示 token 用量和推理次数
+- 支持目录路径缩写
+
+### 2026-04-08 Task 11 新增：实时 UI 更新机制更新
 
 #### internal/tui/stream.go
 - `BatchUpdateConfig` - 批量更新配置结构体
