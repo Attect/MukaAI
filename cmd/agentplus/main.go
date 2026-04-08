@@ -8,15 +8,19 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
+
+	tea "charm.land/bubbletea/v2"
 
 	"agentplus/internal/agent"
 	"agentplus/internal/config"
 	"agentplus/internal/model"
 	"agentplus/internal/state"
 	"agentplus/internal/tools"
+	"agentplus/internal/tui"
 )
 
 // 版本信息
@@ -36,7 +40,41 @@ type CLIOptions struct {
 	TaskGoal      string
 }
 
+// TUIOptions TUI 模式命令行参数
+type TUIOptions struct {
+	ConfigPath string
+	Dir        string
+	Load       string
+}
+
 func main() {
+	// 检查是否为子命令模式
+	if len(os.Args) > 1 {
+		cmd := os.Args[1]
+
+		// 检查是否为 tui 子命令
+		if cmd == "tui" {
+			runTUICommand()
+			return
+		}
+
+		// 检查是否为 help 或 version
+		if cmd == "help" || cmd == "--help" || cmd == "-h" {
+			printUsage()
+			return
+		}
+		if cmd == "version" || cmd == "--version" || cmd == "-v" {
+			fmt.Printf("%s v%s\n", Name, Version)
+			return
+		}
+	}
+
+	// 默认运行 CLI 模式
+	runCLICommand()
+}
+
+// runCLICommand 运行 CLI 模式
+func runCLICommand() {
 	// 解析命令行参数
 	opts := parseFlags()
 
@@ -155,6 +193,144 @@ func main() {
 	printResult(result)
 }
 
+// runTUICommand 运行 TUI 模式
+func runTUICommand() {
+	// 解析 TUI 命令行参数
+	opts := parseTUIFlags()
+
+	// 加载配置
+	cfg, err := config.LoadConfig(opts.ConfigPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 设置初始工作目录
+	initialDir := opts.Dir
+	if initialDir == "" {
+		// 使用配置中的工作目录
+		initialDir, err = cfg.GetAbsoluteWorkDir()
+		if err != nil {
+			initialDir, err = os.Getwd()
+			if err != nil {
+				initialDir = "."
+			}
+		}
+	} else {
+		// 转换为绝对路径
+		initialDir, err = filepath.Abs(initialDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error resolving directory path: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	// 验证目录是否存在
+	if _, err := os.Stat(initialDir); os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "Directory does not exist: %s\n", initialDir)
+		os.Exit(1)
+	}
+
+	// 创建 TUI 应用模型
+	appModel := tui.NewAppModel()
+
+	// 设置初始工作目录
+	appModel.SetCurrentDir(initialDir)
+
+	// 如果指定了加载历史对话文件
+	if opts.Load != "" {
+		// TODO: 实现加载历史对话的逻辑
+		// 这需要在后续任务中实现对话持久化功能
+		fmt.Printf("Loading conversation from: %s\n", opts.Load)
+	}
+
+	// 创建 Bubble Tea 程序
+	p := tea.NewProgram(
+		appModel,
+		tea.WithAltScreen(),       // 使用备用屏幕缓冲区
+		tea.WithMouseCellMotion(), // 启用鼠标支持
+	)
+
+	// 设置信号处理，支持优雅退出
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		// 发送退出信号给 TUI
+		p.Send(tea.Quit())
+	}()
+
+	// 启动 TUI 程序
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error running TUI: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// parseTUIFlags 解析 TUI 模式命令行参数
+func parseTUIFlags() *TUIOptions {
+	opts := &TUIOptions{}
+
+	// 创建 flagSet 用于解析 tui 子命令的参数
+	tuiFlags := flag.NewFlagSet("tui", flag.ExitOnError)
+	tuiFlags.StringVar(&opts.ConfigPath, "c", "./configs/config.yaml", "配置文件路径")
+	tuiFlags.StringVar(&opts.ConfigPath, "config", "./configs/config.yaml", "配置文件路径")
+	tuiFlags.StringVar(&opts.Dir, "dir", "", "初始工作目录")
+	tuiFlags.StringVar(&opts.Load, "load", "", "加载历史对话文件")
+
+	// 设置帮助信息
+	tuiFlags.Usage = func() {
+		fmt.Fprintf(os.Stderr, "%s v%s - TUI Mode\n\n", Name, Version)
+		fmt.Fprintf(os.Stderr, "Usage: agentplus tui [options]\n\n")
+		fmt.Fprintf(os.Stderr, "Options:\n")
+		tuiFlags.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\nExamples:\n")
+		fmt.Fprintf(os.Stderr, "  agentplus tui\n")
+		fmt.Fprintf(os.Stderr, "  agentplus tui --dir /path/to/project\n")
+		fmt.Fprintf(os.Stderr, "  agentplus tui --load conversation.yaml\n")
+	}
+
+	// 解析参数（跳过前两个参数：程序名和 "tui"）
+	if len(os.Args) > 2 {
+		if err := tuiFlags.Parse(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error parsing flags: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	return opts
+}
+
+// printUsage 打印使用说明
+func printUsage() {
+	fmt.Fprintf(os.Stderr, "%s v%s - AI Agent CLI Tool\n\n", Name, Version)
+	fmt.Fprintf(os.Stderr, "Usage:\n")
+	fmt.Fprintf(os.Stderr, "  agentplus [options] <task>        Run in CLI mode (default)\n")
+	fmt.Fprintf(os.Stderr, "  agentplus tui [options]           Run in TUI mode\n")
+	fmt.Fprintf(os.Stderr, "  agentplus help                    Show this help message\n")
+	fmt.Fprintf(os.Stderr, "  agentplus version                 Show version information\n")
+	fmt.Fprintf(os.Stderr, "\nCLI Mode Options:\n")
+	fmt.Fprintf(os.Stderr, "  -c, --config <file>               配置文件路径 (default: ./configs/config.yaml)\n")
+	fmt.Fprintf(os.Stderr, "  -t, --task <id>                   继续已有任务ID\n")
+	fmt.Fprintf(os.Stderr, "  -w, --workdir <dir>               工作目录\n")
+	fmt.Fprintf(os.Stderr, "  -v, --verbose                     详细输出\n")
+	fmt.Fprintf(os.Stderr, "  --no-supervisor                   禁用监督\n")
+	fmt.Fprintf(os.Stderr, "  --max-iterations <n>              最大迭代次数\n")
+	fmt.Fprintf(os.Stderr, "\nTUI Mode Options:\n")
+	fmt.Fprintf(os.Stderr, "  -c, --config <file>               配置文件路径 (default: ./configs/config.yaml)\n")
+	fmt.Fprintf(os.Stderr, "  --dir <directory>                 初始工作目录\n")
+	fmt.Fprintf(os.Stderr, "  --load <file>                     加载历史对话文件\n")
+	fmt.Fprintf(os.Stderr, "\nExamples:\n")
+	fmt.Fprintf(os.Stderr, "  # CLI 模式\n")
+	fmt.Fprintf(os.Stderr, "  agentplus \"创建一个Hello World程序\"\n")
+	fmt.Fprintf(os.Stderr, "  agentplus -c ./config.yaml \"分析项目结构\"\n")
+	fmt.Fprintf(os.Stderr, "  agentplus -t task-123 \"继续执行任务\"\n")
+	fmt.Fprintf(os.Stderr, "\n  # TUI 模式\n")
+	fmt.Fprintf(os.Stderr, "  agentplus tui\n")
+	fmt.Fprintf(os.Stderr, "  agentplus tui --dir /path/to/project\n")
+	fmt.Fprintf(os.Stderr, "  agentplus tui --load conversation.yaml\n")
+}
+
 // parseFlags 解析命令行参数
 func parseFlags() *CLIOptions {
 	opts := &CLIOptions{}
@@ -171,20 +347,7 @@ func parseFlags() *CLIOptions {
 	flag.IntVar(&opts.MaxIterations, "max-iterations", 0, "最大迭代次数")
 
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "%s v%s - AI Agent CLI Tool\n\n", Name, Version)
-		fmt.Fprintf(os.Stderr, "Usage: agentplus [options] <task>\n\n")
-		fmt.Fprintf(os.Stderr, "Options:\n")
-		flag.PrintDefaults()
-		fmt.Fprintf(os.Stderr, "\nInteractive Commands:\n")
-		fmt.Fprintf(os.Stderr, "  /help     显示帮助信息\n")
-		fmt.Fprintf(os.Stderr, "  /status   显示当前任务状态\n")
-		fmt.Fprintf(os.Stderr, "  /pause    暂停任务\n")
-		fmt.Fprintf(os.Stderr, "  /resume   恢复任务\n")
-		fmt.Fprintf(os.Stderr, "  /quit     退出程序\n")
-		fmt.Fprintf(os.Stderr, "\nExamples:\n")
-		fmt.Fprintf(os.Stderr, "  agentplus \"创建一个Hello World程序\"\n")
-		fmt.Fprintf(os.Stderr, "  agentplus -c ./config.yaml \"分析项目结构\"\n")
-		fmt.Fprintf(os.Stderr, "  agentplus -t task-123 \"继续执行任务\"\n")
+		printUsage()
 	}
 
 	flag.Parse()

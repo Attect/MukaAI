@@ -94,30 +94,30 @@
 
 ## Phase 7: Token 统计
 
-- [ ] Task 13: 实现 Token 统计功能
-  - [ ] SubTask 13.1: 在消息结构中添加 token 用量字段
-  - [ ] SubTask 13.2: 实现单次对话 token 显示
-  - [ ] SubTask 13.3: 实现总 token 用量累计
-  - [ ] SubTask 13.4: 实现推理次数统计
-  - [ ] SubTask 13.5: 在状态栏中显示统计数据
+- [x] Task 13: 实现 Token 统计功能
+  - [x] SubTask 13.1: 在消息结构中添加 token 用量字段
+  - [x] SubTask 13.2: 实现单次对话 token 显示
+  - [x] SubTask 13.3: 实现总 token 用量累计
+  - [x] SubTask 13.4: 实现推理次数统计
+  - [x] SubTask 13.5: 在状态栏中显示统计数据
 
 ## Phase 8: 工作目录管理
 
-- [ ] Task 14: 实现工作目录管理
-  - [ ] SubTask 14.1: 实现当前目录显示
-  - [ ] SubTask 14.2: 实现 /cd 命令解析
-  - [ ] SubTask 14.3: 实现目录切换逻辑
-  - [ ] SubTask 14.4: 实现目录验证和错误处理
-  - [ ] SubTask 14.5: 更新状态栏显示
+- [x] Task 14: 实现工作目录管理
+  - [x] SubTask 14.1: 实现当前目录显示
+  - [x] SubTask 14.2: 实现 /cd 命令解析
+  - [x] SubTask 14.3: 实现目录切换逻辑
+  - [x] SubTask 14.4: 实现目录验证和错误处理
+  - [x] SubTask 14.5: 更新状态栏显示
 
 ## Phase 9: 子对话管理
 
-- [ ] Task 15: 实现子对话管理
-  - [ ] SubTask 15.1: 定义对话状态类型（active, waiting, finished）
-  - [ ] SubTask 15.2: 实现对话创建和状态更新
-  - [ ] SubTask 15.3: 实现对话列表显示
-  - [ ] SubTask 15.4: 实现对话切换功能
-  - [ ] SubTask 15.5: 实现父子对话关系管理
+- [x] Task 15: 实现子对话管理
+  - [x] SubTask 15.1: 定义对话状态类型（active, waiting, finished）
+  - [x] SubTask 15.2: 实现对话创建和状态更新
+  - [x] SubTask 15.3: 实现对话列表显示
+  - [x] SubTask 15.4: 实现对话切换功能
+  - [x] SubTask 15.5: 实现父子对话关系管理
 
 ## Phase 10: 命令行入口
 

@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 
 	"agentplus/internal/tui/components"
@@ -123,9 +122,10 @@ type AppModel struct {
 	activeConv    *Conversation
 
 	// UI 组件
-	input     textinput.Model
-	chatView  *components.ChatView
-	statusBar *components.StatusBar
+	input      *components.InputComponent
+	chatView   *components.ChatView
+	statusBar  *components.StatusBar
+	dialogList *components.DialogList
 
 	// 状态标志
 	isStreaming  bool
@@ -198,17 +198,20 @@ type StreamHandler interface {
 
 // NewAppModel 创建新的 TUI 应用 Model
 func NewAppModel() AppModel {
-	// 创建输入框
-	ti := textinput.New()
-	ti.Placeholder = "请输入你的问题..."
-	ti.Focus()
-	ti.CharLimit = 10000
+	// 创建输入组件
+	inputConfig := components.DefaultInputComponentConfig()
+	inputConfig.Width = 80
+	inputConfig.Height = 3
+	input := components.NewInputComponent(inputConfig)
 
 	// 创建对话显示组件
 	chatView := components.NewChatView(80, 24)
 
 	// 创建状态栏组件
 	statusBar := components.NewStatusBar(components.DefaultStatusBarConfig())
+
+	// 创建对话列表组件
+	dialogList := components.NewDialogList()
 
 	// 获取当前工作目录
 	currentDir, err := os.Getwd()
@@ -221,9 +224,10 @@ func NewAppModel() AppModel {
 	streamManager := NewStreamUpdateManager(DefaultBatchUpdateConfig())
 
 	return AppModel{
-		input:         ti,
+		input:         input,
 		chatView:      chatView,
 		statusBar:     statusBar,
+		dialogList:    dialogList,
 		conversations: make([]*Conversation, 0),
 		inputMode:     InputModeSingleLine,
 		currentDir:    currentDir,
@@ -245,7 +249,7 @@ func (m AppModel) Init() tea.Cmd {
 	m.streamManager.Start()
 
 	return tea.Batch(
-		textinput.Blink,
+		m.input.Init(),
 		// 启动定时器，定期检查缓冲区
 		m.tickCmd(),
 	)
@@ -263,43 +267,88 @@ func (m AppModel) tickCmd() tea.Cmd {
 func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
+	// 如果对话列表可见，优先处理对话列表的输入
+	if m.dialogList.IsVisible() {
+		selected, handled := m.dialogList.Update(msg)
+		if handled {
+			// 用户选择了对话
+			if selected != nil {
+				m.SwitchConversation(selected.ID)
+				m.dialogList.Hide()
+			}
+			return m, tea.Batch(cmds...)
+		}
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		// 处理窗口大小变化
 		m.width = msg.Width
 		m.height = msg.Height
 		m.statusBar.SetWidth(msg.Width)
-		m.chatView.SetSize(msg.Width, m.height-4) // 减去状态栏和输入框的高度
+		m.chatView.SetSize(msg.Width, m.height-6) // 减去状态栏和输入框的高度
+		m.input.SetWidth(msg.Width)
+		m.dialogList.SetSize(msg.Width-4, m.height-6)
 
 	case tea.KeyMsg:
 		// 处理键盘输入
-		switch msg.String() {
-		case "ctrl+c", "esc":
+		keyStr := msg.String()
+
+		// 全局快捷键
+		switch keyStr {
+		case "ctrl+c":
 			// 退出 TUI
 			m.streamManager.Stop()
 			return m, tea.Quit
 
-		case "enter":
-			// 提交输入
-			if m.inputMode == InputModeSingleLine {
-				content := m.input.Value()
-				if content != "" {
-					cmds = append(cmds, m.handleUserInput(content))
-					m.input.SetValue("")
-				}
+		case "esc":
+			// 如果对话列表可见，关闭对话列表
+			if m.dialogList.IsVisible() {
+				m.dialogList.Hide()
+				return m, nil
 			}
-
-		case "tab":
-			// 切换输入模式
-			if m.inputMode == InputModeSingleLine {
-				m.inputMode = InputModeMultiLine
-			} else {
-				m.inputMode = InputModeSingleLine
-			}
+			// 否则退出 TUI
+			m.streamManager.Stop()
+			return m, tea.Quit
 
 		case "ctrl+l":
-			// 显示对话列表
-			m.showConvList = !m.showConvList
+			// 显示/隐藏对话列表
+			m.toggleConversationList()
+			return m, nil
+		}
+
+		// 输入相关快捷键（仅在对话列表不可见时处理）
+		if !m.dialogList.IsVisible() {
+			// Tab 键切换输入模式
+			if keyStr == "tab" {
+				m.input.ToggleMode()
+				// 同步 inputMode 状态
+				if m.input.GetMode() == components.InputModeSingleLine {
+					m.inputMode = InputModeSingleLine
+				} else {
+					m.inputMode = InputModeMultiLine
+				}
+				return m, nil
+			}
+
+			// Enter 和 Ctrl+Enter 提交逻辑
+			if m.input.ShouldSubmit(keyStr) {
+				content := m.input.GetValue()
+				if content != "" {
+					// 添加到历史记录
+					m.input.AddToHistory(content)
+					cmds = append(cmds, m.handleUserInput(content))
+					m.input.Clear()
+				}
+				return m, tea.Batch(cmds...)
+			}
+		}
+
+		// 更新输入组件（处理其他按键）
+		var inputCmd tea.Cmd
+		m.input, inputCmd = m.input.Update(msg)
+		if inputCmd != nil {
+			cmds = append(cmds, inputCmd)
 		}
 
 	case TickMsg:
@@ -351,15 +400,24 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// 处理工作目录变更消息
 		m.handleWorkingDirChanged(msg.OldDir, msg.NewDir)
 
+	case ShowConversationListMsg:
+		// 处理显示对话列表消息
+		if msg.Show {
+			// 更新对话列表数据
+			m.updateDialogList()
+			// 如果有活动对话，选中它
+			if m.activeConv != nil {
+				m.dialogList.SelectConversationByID(m.activeConv.ID)
+			}
+			m.dialogList.Show()
+		} else {
+			m.dialogList.Hide()
+		}
+
 	case CommandExecutedMsg:
 		// 处理命令执行消息
 		m.handleCommandExecuted(msg.Command, msg.Args, msg.Result, msg.Error)
 	}
-
-	// 更新输入框
-	var cmd tea.Cmd
-	m.input, cmd = m.input.Update(msg)
-	cmds = append(cmds, cmd)
 
 	// 更新对话显示组件
 	_, vpCmd := m.chatView.Update(msg)
@@ -381,6 +439,12 @@ func (m AppModel) View() tea.View {
 
 	// 组合界面
 	content := statusBar + "\n" + chatArea + "\n" + inputArea
+
+	// 如果对话列表可见，渲染对话列表覆盖层
+	if m.dialogList.IsVisible() {
+		overlay := m.dialogList.RenderOverlay(m.width, m.height)
+		content = overlay
+	}
 
 	// 创建 View 对象
 	v := tea.View{}
@@ -591,6 +655,45 @@ func (m AppModel) renderChatArea() string {
 // renderInputArea 渲染输入框
 func (m AppModel) renderInputArea() string {
 	return m.input.View()
+}
+
+// toggleConversationList 切换对话列表显示
+func (m *AppModel) toggleConversationList() {
+	if m.dialogList.IsVisible() {
+		m.dialogList.Hide()
+	} else {
+		// 更新对话列表数据
+		m.updateDialogList()
+		m.dialogList.Show()
+	}
+}
+
+// updateDialogList 更新对话列表数据
+func (m *AppModel) updateDialogList() {
+	// 将 Conversation 转换为 components.Conversation
+	dialogConvs := make([]*components.Conversation, 0, len(m.conversations))
+	for _, conv := range m.conversations {
+		dialogConv := &components.Conversation{
+			ID:                conv.ID,
+			CreatedAt:         conv.CreatedAt,
+			Status:            components.ConvStatus(conv.Status),
+			Title:             conv.Title,
+			IsSubConversation: conv.IsSubConversation,
+			AgentRole:         conv.AgentRole,
+			MessageCount:      len(conv.Messages),
+			TokenUsage:        conv.TokenUsage,
+		}
+		dialogConvs = append(dialogConvs, dialogConv)
+	}
+	m.dialogList.SetConversations(dialogConvs)
+}
+
+// showConversationList 显示对话列表
+func (m AppModel) showConversationList() {
+	// 更新对话列表数据
+	m.updateDialogList()
+	// 显示对话列表
+	m.dialogList.Show()
 }
 
 // renderConversation 渲染对话内容
@@ -859,14 +962,38 @@ func (m *AppModel) handleWorkingDirChanged(oldDir, newDir string) {
 
 // handleCommandExecuted 处理命令执行结果
 func (m *AppModel) handleCommandExecuted(cmd string, args []string, result string, err error) {
-	if err != nil {
-		// 显示错误消息
-		m.lastError = err.Error()
-		// TODO: 在对话区显示错误消息
-	} else if result != "" {
-		// 显示成功消息
-		// TODO: 在对话区显示成功消息
+	if m.activeConv == nil {
+		return
 	}
+
+	// 创建系统消息
+	var systemMsg Message
+	if err != nil {
+		// 错误消息
+		systemMsg = Message{
+			Role:      MessageRoleAssistant,
+			Content:   fmt.Sprintf("❌ 命令执行失败: %s\n错误: %v", cmd, err),
+			Timestamp: time.Now(),
+		}
+	} else if result != "" {
+		// 成功消息
+		systemMsg = Message{
+			Role:      MessageRoleAssistant,
+			Content:   fmt.Sprintf("✓ %s", result),
+			Timestamp: time.Now(),
+		}
+	} else {
+		// 无结果消息
+		systemMsg = Message{
+			Role:      MessageRoleAssistant,
+			Content:   fmt.Sprintf("✓ 命令 %s 执行成功", cmd),
+			Timestamp: time.Now(),
+		}
+	}
+
+	// 添加到当前对话
+	m.activeConv.Messages = append(m.activeConv.Messages, systemMsg)
+	m.updateChatView()
 }
 
 // SetCurrentDir 设置当前工作目录（供外部调用）
@@ -914,9 +1041,31 @@ func (m AppModel) handleClearCommand() tea.Cmd {
 
 // handleSaveCommand 处理 /save 命令
 func (m AppModel) handleSaveCommand(args []string) tea.Cmd {
-	// TODO: 实现保存对话功能
+	// 检查是否有活动对话
+	if m.activeConv == nil {
+		return func() tea.Msg {
+			return NewCommandExecutedMsg("save", args, "", fmt.Errorf("没有活动对话"))
+		}
+	}
+
+	// 获取文件路径（可选）
+	var filePath string
+	if len(args) > 0 {
+		filePath = args[0]
+	}
+
+	// 保存对话到文件
+	savedPath, err := SaveConversationToFile(filePath, m.activeConv)
+	if err != nil {
+		return func() tea.Msg {
+			return NewCommandExecutedMsg("save", args, "", fmt.Errorf("保存失败: %w", err))
+		}
+	}
+
+	// 返回成功消息
+	result := fmt.Sprintf("对话已保存到: %s", savedPath)
 	return func() tea.Msg {
-		return NewCommandExecutedMsg("save", args, "", fmt.Errorf("保存功能暂未实现"))
+		return NewCommandExecutedMsg("save", args, result, nil)
 	}
 }
 

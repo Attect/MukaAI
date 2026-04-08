@@ -2,6 +2,84 @@
 
 ## 更新日志
 
+### 2026-04-08 Task 18 新增：快捷键系统
+
+#### internal/tui/app.go
+- `AppModel` 结构体更新：
+  - 使用 `*components.InputComponent` 替代 `textinput.Model`
+  - 新增 `dialogList *components.DialogList` 字段
+- `NewAppModel()` - 更新以初始化 InputComponent 和 DialogList
+- `Init()` - 更新以使用 InputComponent 的初始化命令
+- `Update()` - 重构快捷键处理逻辑：
+  - **Enter 键提交**：单行模式下直接提交，多行模式下换行
+  - **Ctrl+Enter 提交**：多行模式下提交输入
+  - **Tab 切换模式**：在单行和多行输入模式间切换，自动同步状态
+  - **Ctrl+L 显示对话列表**：切换对话列表显示状态，自动更新对话数据
+  - **Esc 键智能退出**：对话列表可见时关闭列表，否则退出 TUI
+  - **Ctrl+C 退出**：全局退出 TUI
+  - 优先处理对话列表的输入事件
+  - 快捷键不与输入冲突（Enter 在多行模式下换行而非提交）
+- `View()` - 更新以渲染对话列表覆盖层
+- `renderInputArea()` - 更新以使用 InputComponent 的视图
+- `toggleConversationList()` - 切换对话列表显示状态
+- `updateDialogList()` - 更新对话列表数据（将 Conversation 转换为 components.Conversation）
+
+#### internal/tui/keybindings_test.go
+- 完整的单元测试覆盖
+- 测试 AppModel 创建和初始化
+- 测试输入模式切换（Tab 键）
+- 测试提交判断逻辑（Enter/Ctrl+Enter）
+- 测试对话列表切换（Ctrl+L）
+- 测试输入历史记录
+- 测试输入模式同步
+- 测试对话列表导航和排序
+- 测试对话切换功能
+- 测试输入值操作
+- 测试命令解析
+- 测试快捷键帮助文本
+- 所有测试通过（15+测试用例）
+
+#### 功能实现说明
+**快捷键系统设计原则**：
+- **不与输入冲突**：Enter 在多行模式下换行，Ctrl+Enter 提交
+- **智能上下文感知**：Esc 键根据对话列表状态决定行为
+- **优先级处理**：对话列表可见时优先处理其输入事件
+- **状态同步**：Tab 切换模式时自动同步 AppModel 和 InputComponent 的状态
+
+**快捷键绑定**：
+| 快捷键 | 功能 | 说明 |
+|--------|------|------|
+| Enter | 提交输入 | 单行模式 |
+| Ctrl+Enter | 提交输入 | 多行模式 |
+| Tab | 切换输入模式 | 单行 ↔ 多行 |
+| Ctrl+L | 显示对话列表 | 切换显示状态 |
+| Esc | 关闭对话列表/退出 | 智能上下文感知 |
+| Ctrl+C | 退出 TUI | 全局退出 |
+
+**输入模式特性**：
+- **单行模式**：Enter 提交，适合简短输入
+- **多行模式**：Enter 换行，Ctrl+Enter 提交，适合长文本输入
+- **历史记录**：↑↓ 键浏览历史输入
+- **命令解析**：支持 /cd, /conversations, /clear, /save, /help, /exit 等命令
+
+**对话列表功能**：
+- 按创建时间降序排序（最新的在前）
+- 显示对话状态（活动/等待/结束）
+- 支持键盘导航（↑↓ 或 j/k）
+- Enter 选择对话，Esc 关闭列表
+
+#### 与 InputComponent 的集成
+- AppModel 使用 InputComponent 替代简单的 textinput.Model
+- InputComponent 处理输入相关的快捷键（Tab, Enter, Ctrl+Enter, ↑↓）
+- AppModel 处理全局快捷键（Ctrl+L, Esc, Ctrl+C）
+- 通过 ShouldSubmit 方法判断是否应该提交输入
+- 自动同步输入模式状态
+
+#### 性能优化
+- 对话列表仅在显示时更新数据
+- 快捷键处理优先级明确，避免冲突
+- 输入组件独立处理输入事件，减少 AppModel 的复杂度
+
 ### 2026-04-08 Task 14 新增：工作目录管理
 
 #### internal/tui/app.go
