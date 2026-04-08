@@ -68,6 +68,13 @@ func TestHandleCDCommand(t *testing.T) {
 	model := NewAppModel()
 	originalDir := model.currentDir
 
+	// 保存当前工作目录，测试结束后恢复
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("获取当前工作目录失败: %v", err)
+	}
+	defer os.Chdir(wd)
+
 	// 测试切换到临时目录
 	tempDir := t.TempDir()
 	cmd := model.handleCDCommand([]string{tempDir})
@@ -163,10 +170,17 @@ func TestHandleCDCommandWithHomeDirectory(t *testing.T) {
 func TestHandleCDCommandWithRelativePath(t *testing.T) {
 	model := NewAppModel()
 
+	// 保存当前工作目录，测试结束后恢复
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("获取当前工作目录失败: %v", err)
+	}
+	defer os.Chdir(wd)
+
 	// 创建临时目录结构
 	tempDir := t.TempDir()
 	subDir := filepath.Join(tempDir, "subdir")
-	err := os.Mkdir(subDir, 0755)
+	err = os.Mkdir(subDir, 0755)
 	if err != nil {
 		t.Fatalf("创建子目录失败: %v", err)
 	}
@@ -216,10 +230,18 @@ func TestHandleWorkingDirChanged(t *testing.T) {
 // TestSetCurrentDir 测试设置当前工作目录
 func TestSetCurrentDir(t *testing.T) {
 	model := NewAppModel()
+
+	// 保存当前工作目录，测试结束后恢复
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("获取当前工作目录失败: %v", err)
+	}
+	defer os.Chdir(wd)
+
 	tempDir := t.TempDir()
 
 	// 测试设置当前目录
-	err := model.SetCurrentDir(tempDir)
+	err = model.SetCurrentDir(tempDir)
 	if err != nil {
 		t.Errorf("设置当前目录失败: %v", err)
 	}
