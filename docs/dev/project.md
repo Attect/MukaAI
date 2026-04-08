@@ -2,6 +2,135 @@
 
 ## 更新日志
 
+### 2026-04-08 Task 2 新增：TUI 模块目录结构
+
+#### internal/tui/app.go
+- `InputMode` - 输入模式类型（single-line / multi-line）
+- `ConvStatus` - 对话状态类型（active / waiting / finished）
+- `MessageRole` - 消息角色类型（user / assistant / tool）
+- `ToolCall` - 工具调用信息结构体
+  - ID: 工具调用唯一标识
+  - Name: 工具名称
+  - Arguments: 工具参数（JSON 格式）
+  - IsComplete: 是否已完成流式生成
+  - Result: 工具执行结果
+  - ResultError: 工具执行错误
+- `Message` - 对话消息结构体
+  - Role: 消息角色
+  - Content: 正文内容
+  - Thinking: 思考内容
+  - ToolCalls: 工具调用列表
+  - TokenUsage: token 用量
+  - Timestamp: 时间戳
+  - IsStreaming: 是否正在流式输出
+  - StreamingContent: 流式输出的当前内容
+  - StreamingType: 流式输出类型（thinking/content/tool）
+- `Conversation` - 对话结构体
+  - ID: 对话唯一标识
+  - CreatedAt: 创建时间
+  - Status: 对话状态
+  - Messages: 消息列表
+  - TokenUsage: token 用量
+  - Title: 对话标题
+  - IsSubConversation: 是否为子对话
+  - ParentID: 父对话 ID（如果是子对话）
+  - AgentRole: Agent 角色（如果是子对话）
+- `StatusBar` - 状态栏组件
+- `AppModel` - TUI 主应用 Model（实现 Bubble Tea Model-Update-View 架构）
+  - 状态管理：currentDir, totalTokens, inferenceCount
+  - 对话管理：conversations, activeConv
+  - UI 组件：input, chatView, statusBar
+  - 状态标志：isStreaming, showConvList, inputMode
+- `AgentInterface` - Agent 接口定义（解耦 TUI 和 Agent 核心逻辑）
+  - SendMessage(content string) error
+  - Cancel() error
+  - SetStreamHandler(handler StreamHandler)
+  - GetConversations() []*Conversation
+  - SwitchConversation(id string) error
+  - GetCurrentConversation() *Conversation
+  - Close() error
+- `StreamHandler` - 流式消息处理器接口
+  - OnThinking(chunk string)
+  - OnContent(chunk string)
+  - OnToolCall(call ToolCall, isComplete bool)
+  - OnToolResult(result ToolCall)
+  - OnComplete(usage int)
+  - OnError(err error)
+- `NewAppModel() AppModel` - 创建新的 TUI 应用 Model
+- `Init() tea.Cmd` - 初始化 TUI 应用
+- `Update(msg tea.Msg) (tea.Model, tea.Cmd)` - 处理消息和更新状态
+- `View() tea.View` - 渲染 TUI 界面
+- `SetAgent(agent AgentInterface)` - 设置 Agent 接口
+- `AddConversation(conv *Conversation)` - 添加新对话
+- `SwitchConversation(id string)` - 切换到指定对话
+
+#### internal/tui/messages.go
+- `UserInputMsg` - 用户输入消息
+- `StreamThinkingMsg` - 流式思考内容消息
+- `StreamContentMsg` - 流式正文内容消息
+- `StreamToolCallMsg` - 流式工具调用消息
+- `StreamToolResultMsg` - 工具执行结果消息
+- `StreamCompleteMsg` - 流式输出完成消息
+- `StreamErrorMsg` - 流式输出错误消息
+- `ConversationCreatedMsg` - 对话创建消息
+- `ConversationSwitchedMsg` - 对话切换消息
+- `ConversationStatusUpdatedMsg` - 对话状态更新消息
+- `WorkingDirChangedMsg` - 工作目录变更消息
+- `TokenUsageUpdatedMsg` - token 用量更新消息
+- `InferenceCountUpdatedMsg` - 推理次数更新消息
+- `InputModeChangedMsg` - 输入模式变更消息
+- `ShowConversationListMsg` - 显示对话列表消息
+- `CommandExecutedMsg` - 命令执行消息
+- `NewStreamThinkingMsg(chunk string) StreamThinkingMsg` - 创建流式思考内容消息
+- `NewStreamContentMsg(chunk string) StreamContentMsg` - 创建流式正文内容消息
+- `NewStreamToolCallMsg(call ToolCall, isComplete bool) StreamToolCallMsg` - 创建流式工具调用消息
+- `NewStreamToolResultMsg(result ToolCall) StreamToolResultMsg` - 创建工具执行结果消息
+- `NewStreamCompleteMsg(usage int) StreamCompleteMsg` - 创建流式输出完成消息
+- `NewStreamErrorMsg(err error) StreamErrorMsg` - 创建流式输出错误消息
+- `StreamHandlerImpl` - 流式处理器实现（实现 StreamHandler 接口）
+- `MessageBuilder` - 消息构建器
+- `ConversationBuilder` - 对话构建器
+
+#### internal/tui/styles.go
+- 颜色主题定义（基础颜色、消息类型颜色、状态颜色）
+- 基础样式定义（styleBase, styleTitle, styleStatusBar, styleInput, styleChatArea）
+- 消息样式定义（styleUserMessage, styleThinking, styleContent, styleToolCall, styleToolResult, styleTokenUsage）
+- 状态样式定义（styleStatusActive, styleStatusWaiting, styleStatusFinished）
+- 对话列表样式定义（styleConversationList, styleConversationItem, styleConversationItemSelected）
+- 错误样式定义（styleError, styleErrorBox）
+- 帮助文本样式定义（styleHelp, styleKeybinding, styleDescription）
+- `GetStatusStyle(status ConvStatus) lipgloss.Style` - 根据状态获取样式
+- `GetStatusIcon(status ConvStatus) string` - 根据状态获取图标
+- `GetMessageRoleStyle(role MessageRole) lipgloss.Style` - 根据消息角色获取样式
+- `FormatUserMessage(content string) string` - 格式化用户消息
+- `FormatThinking(thinking string, isStreaming bool) string` - 格式化思考内容
+- `FormatContent(content string, isStreaming bool) string` - 格式化正文内容
+- `FormatToolCall(name, args string, isComplete bool) string` - 格式化工具调用
+- `FormatToolResult(result string, isError bool) string` - 格式化工具结果
+- `FormatTokenUsage(usage int) string` - 格式化 token 用量
+- `FormatError(err string) string` - 格式化错误消息
+- `FormatStatusBar(dir string, totalTokens, inferenceCount int, width int) string` - 格式化状态栏
+- `FormatConversationItem(conv *Conversation, isSelected bool) string` - 格式化对话列表项
+- `FormatHelpText() string` - 格式化帮助文本
+
+#### internal/tui/components/ 目录
+- 创建 components 子目录，用于存放 UI 组件（input.go, chat.go, statusbar.go, dialog.go 等）
+
+#### 依赖更新
+- 升级到 Bubble Tea v2（charm.land/bubbletea/v2）
+- 升级到 Bubbles v2（charm.land/bubbles/v2）
+- 升级到 Lipgloss v2（charm.land/lipgloss/v2）
+
+#### TUI 功能实现
+- **Bubble Tea 框架集成**：使用 Model-Update-View 架构管理界面状态
+- **对话界面布局**：状态栏、对话区、输入区三部分布局
+- **流式输出实时显示**：支持思考内容、正文内容、工具调用的流式显示
+- **工具调用格式化**：流式生成中显示原文，完成后格式化为友好显示
+- **Token 用量统计**：单次对话和总 token 用量显示
+- **工作目录管理**：显示当前工作目录
+- **子对话管理**：支持对话列表展示和状态标注
+- **快捷键支持**：Enter 提交、Tab 切换模式、Ctrl+L 查看列表、Ctrl+C 退出
+
 ### 2026-04-07 Task 15 改进：校验机制优化
 
 #### internal/agent/selfcorrector.go
