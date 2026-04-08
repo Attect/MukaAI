@@ -2,6 +2,195 @@
 
 ## 更新日志
 
+### 2026-04-08 Task 13 新增：Token 统计功能
+
+#### internal/tui/app.go
+- `AppModel` 结构体：
+  - `totalTokens int` - 总 token 用量
+  - `inferenceCount int` - 推理次数
+- `handleStreamComplete(usage int)` - 处理流式完成消息，更新 token 统计
+  - 更新当前消息的 `TokenUsage`
+  - 累加到对话的 `TokenUsage`
+  - 累加到全局的 `totalTokens`
+  - 增加 `inferenceCount`
+  - 更新状态栏显示
+
+#### internal/tui/messages.go
+- `StreamCompleteMsg` - 流式完成消息
+  - `Usage int` - token 用量
+- `TokenUsageUpdatedMsg` - token 用量更新消息
+  - `TotalTokens int` - 总 token 用量
+  - `Delta int` - 增量
+- `InferenceCountUpdatedMsg` - 推理次数更新消息
+  - `Count int` - 推理次数
+- `NewStreamCompleteMsg(usage int)` - 创建流式完成消息
+- `NewTokenUsageUpdatedMsg(total, delta int)` - 创建 token 用量更新消息
+- `NewInferenceCountUpdatedMsg(count int)` - 创建推理次数更新消息
+- `MessageBuilder.SetTokenUsage(usage int)` - 设置消息的 token 用量
+- `ConversationBuilder.SetTokenUsage(usage int)` - 设置对话的 token 用量
+
+#### internal/tui/components/statusbar.go
+- `StatusBar` - 状态栏组件
+  - `TotalTokens int` - 总 token 用量
+  - `InferenceCount int` - 推理次数
+- `SetTokens(tokens int)` - 设置 token 用量
+- `SetInferenceCount(count int)` - 设置推理次数
+- `UpdateTokens(delta int)` - 更新 token 用量（增量）
+- `UpdateInferenceCount(delta int)` - 更新推理次数（增量）
+- `Render()` - 渲染状态栏，显示 token 用量和推理次数
+
+#### internal/tui/components/chat.go
+- `MessageData` - 消息数据结构体
+  - `TokenUsage int` - token 用量
+- `RenderTokenUsage(usage int)` - 渲染 token 用量
+- `RenderAssistantMessage(msg MessageData)` - 渲染助手消息，包含 token 用量显示
+
+#### internal/agent/core.go
+- `modelResponse` 结构体：
+  - `Usage int` - token 用量（估算）
+- `callModel()` - 调用模型并估算 token 用量
+  - 使用简单的字符数估算（平均每4个字符约1个token）
+  - 调用 `handler.OnComplete(usage)` 传递 token 用量
+
+#### internal/tui/conversation_manager.go
+- `Conversation` 结构体：
+  - `TokenUsage int` - token 用量
+- `UpdateTokenUsage(convID string, usage int)` - 更新对话的 token 用量
+- `GetTotalTokenUsage()` - 获取所有对话的总 token 用量
+
+#### internal/tui/token_stats_test.go
+- 完整的单元测试覆盖
+- 测试消息和对话的 token 用量字段
+- 测试 AppModel 的 token 统计功能
+- 测试处理流式完成消息
+- 测试多次推理的 token 累计
+- 测试多个对话的 token 统计
+- 测试消息构建器和对话构建器的 token 用量设置
+- 测试状态栏的 token 统计更新
+- 测试对话渲染中的 token 显示
+- 测试边界情况（0值、大数值）
+- 所有测试通过（15个测试用例）
+
+#### internal/tui/conversation_manager_test.go
+- 测试对话管理器的 token 统计功能
+- 测试创建对话和子对话
+- 测试更新 token 用量
+- 测试获取总 token 用量
+- 所有测试通过
+
+#### 功能特性
+- **单次对话 token 显示**：每条助手消息下方显示 token 用量
+- **总 token 用量累计**：全局累计所有对话的 token 用量
+- **推理次数统计**：统计总推理次数
+- **状态栏显示**：实时显示总 token 用量和推理次数
+- **数据更新机制**：
+  - 流式完成时自动更新统计数据
+  - 状态栏实时同步最新数据
+  - 支持多对话的 token 统计
+- **Token 估算**：
+  - 使用字符数估算（每4个字符约1个token）
+  - 包含内容、思考、工具调用的 token 估算
+  - 对于显示用途足够准确
+
+#### 数据流程
+```
+模型响应 -> Agent.callModel() 估算 token 用量
+        -> StreamHandler.OnComplete(usage)
+        -> StreamHandlerImpl.OnComplete()
+        -> NewStreamCompleteMsg(usage)
+        -> AppModel.handleStreamComplete(usage)
+        -> 更新消息 TokenUsage
+        -> 累加到对话 TokenUsage
+        -> 累加到全局 totalTokens
+        -> 增加 inferenceCount
+        -> 更新状态栏显示
+```
+
+#### 显示效果
+- **消息下方**：`Tokens: 150`（灰色斜体）
+- **状态栏**：`📁 /path/to/dir │ Tokens: 12345 │ Inferences: 5`
+- **实时更新**：每次推理完成后立即更新显示
+
+### 2026-04-08 Task 9 新增：样式定义系统
+
+#### internal/tui/styles.go
+- `Theme` - 主题配置结构体
+  - 基础颜色：Primary、Secondary、Success、Warning、Error、Info、Muted、Background、Border
+  - 消息类型颜色：UserMessage、Thinking、Content、ToolCall、ToolResult、ToolError
+  - 状态颜色：Active、Waiting、Finished
+  - 布局配置：Layout
+- `LayoutConfig` - 布局配置结构体
+  - 边框配置：BorderWidth、BorderRadius、BorderStyle
+  - 间距配置：PaddingHorizontal、PaddingVertical、MarginHorizontal、MarginVertical
+  - 对齐配置：HorizontalAlign、VerticalAlign
+- `DefaultTheme()` - 返回默认主题配置（深色主题）
+- `DarkTheme()` - 返回深色主题
+- `LightTheme()` - 返回浅色主题
+- `SetTheme(theme)` - 设置当前主题
+- `GetTheme()` - 获取当前主题
+- `updateStylesFromTheme()` - 根据当前主题更新样式定义
+- `NewBorderStyle(borderType, color)` - 创建边框样式
+- `NewPaddingStyle(vertical, horizontal)` - 创建内边距样式
+- `NewMarginStyle(vertical, horizontal)` - 创建外边距样式
+- `NewAlignedStyle(horizontal, vertical)` - 创建对齐样式
+- `NewBoxStyle(borderType, borderColor, paddingVertical, paddingHorizontal)` - 创建盒子样式
+- `StyleBuilder` - 样式构建器（链式调用）
+  - Foreground(color): 设置前景色
+  - Background(color): 设置背景色
+  - Bold(bold): 设置粗体
+  - Italic(italic): 设置斜体
+  - Underline(underline): 设置下划线
+  - Padding(vertical, horizontal): 设置内边距
+  - Margin(vertical, horizontal): 设置外边距
+  - Border(border): 设置边框
+  - BorderForeground(color): 设置边框颜色
+  - Width(width): 设置宽度
+  - Height(height): 设置高度
+  - Align(horizontal, vertical): 设置对齐
+  - Build(): 构建最终样式
+  - Render(text): 渲染文本
+- `JoinHorizontal(texts...)` - 水平连接多个文本
+- `JoinVertical(texts...)` - 垂直连接多个文本
+- `Place(width, height, hPos, vPos, content)` - 将内容放置在指定大小的区域内
+- `Width(text)` - 获取文本渲染后的宽度
+- `Height(text)` - 获取文本渲染后的高度
+
+#### 样式定义
+- **基础样式**：styleBase、styleTitle、styleStatusBar、styleStatusItem、styleInput、styleInputFocused、styleChatArea
+- **消息样式**：styleUserMessage、styleUserContent、styleThinking、styleThinkingBox、styleThinkingTitle、styleContent、styleToolCall、styleToolCallBox、styleToolCallTitle、styleToolArgs、styleToolResult、styleToolResultBox、styleToolError、styleTokenUsage
+- **状态样式**：styleStatusActive、styleStatusWaiting、styleStatusFinished
+- **对话列表样式**：styleConversationList、styleConversationListTitle、styleConversationItem、styleConversationItemSelected、styleConversationTitle、styleConversationTime
+- **错误样式**：styleError、styleErrorBox
+- **帮助文本样式**：styleHelp、styleKeybinding、styleDescription
+
+#### 颜色主题
+- **默认主题**：
+  - 基础颜色：Primary(#7C3AED)、Secondary(#3B82F6)、Success(#10B981)、Warning(#F59E0B)、Error(#EF4444)
+  - 消息类型颜色：UserMessage(#3B82F6)、Thinking(#6B7280)、Content(#F3F4F6)、ToolCall(#F59E0B)、ToolResult(#10B981)、ToolError(#EF4444)
+  - 状态颜色：Active(#10B981)、Waiting(#F59E0B)、Finished(#6B7280)
+- **深色主题**：更深的背景色和边框色
+- **浅色主题**：浅色背景和深色文本
+
+#### internal/tui/styles_test.go
+- 完整的单元测试覆盖
+- 测试主题创建和配置
+- 测试样式定义
+- 测试格式化函数
+- 测试状态样式
+- 测试布局样式辅助函数
+- 测试样式构建器
+- 测试样式工具函数
+- 所有测试通过（30+测试用例）
+
+#### 功能特性
+- **主题系统**：支持默认主题、深色主题、浅色主题，可自定义主题
+- **颜色主题**：基础颜色、消息类型颜色、状态颜色
+- **布局样式**：边框样式（normal、rounded、double、thick、hidden）、间距样式、对齐样式
+- **样式构建器**：链式调用的样式构建接口
+- **样式工具函数**：水平连接、垂直连接、居中放置、宽度高度计算
+- **消息格式化**：用户消息、思考内容、正文内容、工具调用、工具结果、错误消息
+- **状态样式**：活动状态、等待状态、结束状态
+
 ### 2026-04-08 Task 10 新增：流式消息处理
 
 #### internal/agent/stream.go

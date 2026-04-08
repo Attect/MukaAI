@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	tea "charm.land/bubbletea/v2"
 	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
@@ -29,6 +29,9 @@ type ChatView struct {
 
 	// 消息样式
 	styles ChatStyles
+
+	// formatter 工具调用格式化器
+	formatter *Formatter
 }
 
 // ChatStyles 对话样式配置
@@ -113,13 +116,13 @@ type ToolCallData struct {
 // DefaultChatStyles 返回默认对话样式
 func DefaultChatStyles() ChatStyles {
 	// 颜色定义
-	colorUserMessage := lipgloss.Color("#3B82F6")    // 蓝色 - 用户消息
-	colorThinking := lipgloss.Color("#6B7280")       // 灰色 - 思考内容
-	colorContent := lipgloss.Color("#F3F4F6")        // 浅灰色 - 正文内容
-	colorToolCall := lipgloss.Color("#F59E0B")       // 黄色 - 工具调用
-	colorToolResult := lipgloss.Color("#10B981")     // 绿色 - 工具结果
-	colorToolError := lipgloss.Color("#EF4444")      // 红色 - 工具错误
-	colorMuted := lipgloss.Color("#9CA3AF")          // 浅灰色 - 弱化文本
+	colorUserMessage := lipgloss.Color("#3B82F6") // 蓝色 - 用户消息
+	colorThinking := lipgloss.Color("#6B7280")    // 灰色 - 思考内容
+	colorContent := lipgloss.Color("#F3F4F6")     // 浅灰色 - 正文内容
+	colorToolCall := lipgloss.Color("#F59E0B")    // 黄色 - 工具调用
+	colorToolResult := lipgloss.Color("#10B981")  // 绿色 - 工具结果
+	colorToolError := lipgloss.Color("#EF4444")   // 红色 - 工具错误
+	colorMuted := lipgloss.Color("#9CA3AF")       // 浅灰色 - 弱化文本
 
 	return ChatStyles{
 		UserMessage: lipgloss.NewStyle().
@@ -214,11 +217,12 @@ func NewChatView(width, height int) *ChatView {
 	vp.SetContent("")
 
 	return &ChatView{
-		viewport:    vp,
-		width:       width,
-		height:      height,
-		autoScroll:  true,
-		styles:      DefaultChatStyles(),
+		viewport:   vp,
+		width:      width,
+		height:     height,
+		autoScroll: true,
+		styles:     DefaultChatStyles(),
+		formatter:  NewFormatter(),
 	}
 }
 
@@ -228,11 +232,12 @@ func NewChatViewWithStyles(width, height int, styles ChatStyles) *ChatView {
 	vp.SetContent("")
 
 	return &ChatView{
-		viewport:    vp,
-		width:       width,
-		height:      height,
-		autoScroll:  true,
-		styles:      styles,
+		viewport:   vp,
+		width:      width,
+		height:     height,
+		autoScroll: true,
+		styles:     styles,
+		formatter:  NewFormatter(),
 	}
 }
 
@@ -450,39 +455,19 @@ func (c *ChatView) RenderContent(content string, isStreaming bool) string {
 
 // RenderToolCall 渲染工具调用
 func (c *ChatView) RenderToolCall(tc ToolCallData, isStreaming bool) string {
-	title := c.styles.ToolCallTitle.Render("┌─ Tool: " + tc.Name + " ────────────────────────────────────┐")
-
-	var content string
-	if tc.IsComplete {
-		// 格式化显示参数
-		content = c.styles.ToolArgs.Render("Parameters:\n" + tc.Arguments)
-	} else {
-		// 流式生成中，显示原文
-		content = c.styles.ToolArgs.Render(tc.Arguments)
-		if isStreaming {
-			content += c.styles.StreamingCursor.Render("▌")
-		}
-	}
-
-	footer := c.styles.ToolCallTitle.Render("└────────────────────────────────────────────────────┘")
-
-	return title + "\n" + c.styles.ToolCallBox.Render(content) + "\n" + footer
+	// 使用格式化器格式化工具调用
+	return c.formatter.FormatToolCall(tc.Name, tc.Arguments, tc.IsComplete)
 }
 
 // RenderToolResult 渲染工具结果
 func (c *ChatView) RenderToolResult(tc ToolCallData) string {
-	title := c.styles.ToolCallTitle.Render("┌─ Tool Result ──────────────────────────────────────┐")
-
-	var content string
-	if tc.ResultError != "" {
-		content = c.styles.ToolError.Render(tc.ResultError)
-	} else {
-		content = c.styles.ToolResult.Render(tc.Result)
+	// 使用格式化器格式化工具结果
+	isError := tc.ResultError != ""
+	result := tc.Result
+	if isError {
+		result = tc.ResultError
 	}
-
-	footer := c.styles.ToolCallTitle.Render("└────────────────────────────────────────────────────┘")
-
-	return title + "\n" + c.styles.ToolResultBox.Render(content) + "\n" + footer
+	return c.formatter.FormatToolResult(result, isError)
 }
 
 // RenderTokenUsage 渲染 token 用量

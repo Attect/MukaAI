@@ -2,6 +2,10 @@
 package tui
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/textinput"
@@ -106,18 +110,6 @@ type Conversation struct {
 	currentMessage *Message
 }
 
-// StatusBar 状态栏组件
-type StatusBar struct {
-	// Width 宽度
-	Width int
-	// CurrentDir 当前工作目录
-	CurrentDir string
-	// TotalTokens 总 token 用量
-	TotalTokens int
-	// InferenceCount 推理次数
-	InferenceCount int
-}
-
 // AppModel TUI 主应用 Model
 // 实现 Bubble Tea 的 Model-Update-View 架构
 type AppModel struct {
@@ -133,7 +125,7 @@ type AppModel struct {
 	// UI 组件
 	input     textinput.Model
 	chatView  *components.ChatView
-	statusBar StatusBar
+	statusBar *components.StatusBar
 
 	// 状态标志
 	isStreaming  bool
@@ -152,6 +144,9 @@ type AppModel struct {
 
 	// 是否已初始化
 	initialized bool
+
+	// 流式更新管理器
+	streamManager *StreamUpdateManager
 }
 
 // AgentInterface Agent 接口定义
@@ -212,20 +207,56 @@ func NewAppModel() AppModel {
 	// 创建对话显示组件
 	chatView := components.NewChatView(80, 24)
 
+	// 创建状态栏组件
+	statusBar := components.NewStatusBar(components.DefaultStatusBarConfig())
+
+	// 获取当前工作目录
+	currentDir, err := os.Getwd()
+	if err != nil {
+		currentDir = "~"
+	}
+	statusBar.SetDirectory(currentDir)
+
+	// 创建流式更新管理器
+	streamManager := NewStreamUpdateManager(DefaultBatchUpdateConfig())
+
 	return AppModel{
 		input:         ti,
 		chatView:      chatView,
+		statusBar:     statusBar,
 		conversations: make([]*Conversation, 0),
 		inputMode:     InputModeSingleLine,
+		currentDir:    currentDir,
 		initialized:   false,
+		streamManager: streamManager,
 	}
 }
 
 // Init 初始化 TUI 应用
 func (m AppModel) Init() tea.Cmd {
+	// 设置流式更新管理器的回调
+	m.streamManager.SetOnUpdate(func(result *FlushResult) {
+		// 通过发送消息触发 UI 更新
+		// 注意：这里不能直接调用 m.Update，需要通过消息机制
+		// 实际的更新逻辑在 handleBatchUpdate 中
+	})
+
+	// 启动流式更新管理器
+	m.streamManager.Start()
+
 	return tea.Batch(
 		textinput.Blink,
+		// 启动定时器，定期检查缓冲区
+		m.tickCmd(),
 	)
+}
+
+// tickCmd 创建定时器命令
+func (m AppModel) tickCmd() tea.Cmd {
+	// 每 16ms 检查一次（约 60fps）
+	return tea.Tick(16*time.Millisecond, func(t time.Time) tea.Msg {
+		return NewTickMsg(t)
+	})
 }
 
 // Update 处理消息和更新状态
@@ -237,14 +268,15 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// 处理窗口大小变化
 		m.width = msg.Width
 		m.height = msg.Height
-		m.statusBar.Width = msg.Width
-		m.chatView.SetSize(msg.Width, msg.Height-4) // 减去状态栏和输入框的高度
+		m.statusBar.SetWidth(msg.Width)
+		m.chatView.SetSize(msg.Width, m.height-4) // 减去状态栏和输入框的高度
 
 	case tea.KeyMsg:
 		// 处理键盘输入
 		switch msg.String() {
 		case "ctrl+c", "esc":
 			// 退出 TUI
+			m.streamManager.Stop()
 			return m, tea.Quit
 
 		case "enter":
@@ -270,33 +302,58 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showConvList = !m.showConvList
 		}
 
+	case TickMsg:
+		// 定时检查缓冲区
+		if m.streamManager.GetBuffer().ShouldFlush() {
+			result := m.streamManager.ForceFlush()
+			if result.HasData() {
+				cmds = append(cmds, func() tea.Msg {
+					return NewBatchUpdateMsg(result)
+				})
+			}
+		}
+		// 继续定时器
+		cmds = append(cmds, m.tickCmd())
+
+	case BatchUpdateMsg:
+		// 处理批量更新消息
+		m.handleBatchUpdate(msg.Result)
+
 	case StreamThinkingMsg:
-		// 处理思考内容流式消息
-		m.handleStreamThinking(msg.Chunk)
+		// 处理思考内容流式消息（缓冲）
+		m.streamManager.AddThinking(msg.Chunk)
 
 	case StreamContentMsg:
-		// 处理正文内容流式消息
-		m.handleStreamContent(msg.Chunk)
+		// 处理正文内容流式消息（缓冲）
+		m.streamManager.AddContent(msg.Chunk)
 
 	case StreamToolCallMsg:
-		// 处理工具调用流式消息
-		m.handleStreamToolCall(msg.Call, msg.IsComplete)
+		// 处理工具调用流式消息（缓冲）
+		m.streamManager.AddToolCall(msg.Call, msg.IsComplete)
 
 	case StreamToolResultMsg:
-		// 处理工具执行结果消息
-		m.handleStreamToolResult(msg.Result)
+		// 处理工具执行结果消息（缓冲）
+		m.streamManager.AddToolResult(msg.Result)
 
 	case StreamCompleteMsg:
-		// 处理推理完成消息
-		m.handleStreamComplete(msg.Usage)
+		// 处理推理完成消息（缓冲）
+		m.streamManager.AddComplete(msg.Usage)
 
 	case StreamErrorMsg:
-		// 处理错误消息
-		m.handleStreamError(msg.Error)
+		// 处理错误消息（缓冲）
+		m.streamManager.AddError(msg.Error)
 
 	case UserInputMsg:
 		// 处理用户输入消息
 		cmds = append(cmds, m.processUserInput(msg.Content))
+
+	case WorkingDirChangedMsg:
+		// 处理工作目录变更消息
+		m.handleWorkingDirChanged(msg.OldDir, msg.NewDir)
+
+	case CommandExecutedMsg:
+		// 处理命令执行消息
+		m.handleCommandExecuted(msg.Command, msg.Args, msg.Result, msg.Error)
 	}
 
 	// 更新输入框
@@ -353,6 +410,13 @@ func (m AppModel) processUserInput(content string) tea.Cmd {
 			Timestamp: time.Now(),
 		}
 		m.activeConv.Messages = append(m.activeConv.Messages, userMsg)
+
+		// 初始化当前消息（用于接收流式输出）
+		m.activeConv.currentMessage = &Message{
+			Role:      MessageRoleAssistant,
+			Timestamp: time.Now(),
+		}
+
 		m.updateChatView()
 	}
 
@@ -369,9 +433,42 @@ func (m AppModel) processUserInput(content string) tea.Cmd {
 
 // handleCommand 处理命令
 func (m AppModel) handleCommand(cmd string) tea.Cmd {
-	// TODO: 实现命令解析和处理
-	// 支持的命令：/cd, /conversations, /clear, /save, /help, /exit
-	return nil
+	// 解析命令
+	parts := strings.Fields(cmd)
+	if len(parts) == 0 {
+		return nil
+	}
+
+	cmdName := strings.ToLower(parts[0])
+	args := parts[1:]
+
+	// 根据命令类型路由
+	switch cmdName {
+	case "/cd":
+		return m.handleCDCommand(args)
+	case "/conversations", "/conv":
+		// 显示对话列表
+		return func() tea.Msg {
+			return NewShowConversationListMsg(true)
+		}
+	case "/clear":
+		// 清空当前对话
+		return m.handleClearCommand()
+	case "/save":
+		// 保存对话
+		return m.handleSaveCommand(args)
+	case "/help":
+		// 显示帮助
+		return m.handleHelpCommand()
+	case "/exit", "/quit", "/q":
+		// 退出程序
+		return tea.Quit
+	default:
+		// 未知命令，显示错误
+		return func() tea.Msg {
+			return NewCommandExecutedMsg(cmdName, args, "", fmt.Errorf("未知命令: %s", cmdName))
+		}
+	}
 }
 
 // handleStreamThinking 处理思考内容流式消息
@@ -458,8 +555,8 @@ func (m *AppModel) handleStreamComplete(usage int) {
 	m.inferenceCount++
 
 	// 更新状态栏
-	m.statusBar.TotalTokens = m.totalTokens
-	m.statusBar.InferenceCount = m.inferenceCount
+	m.statusBar.SetTokens(m.totalTokens)
+	m.statusBar.SetInferenceCount(m.inferenceCount)
 
 	m.isStreaming = false
 	m.updateChatView()
@@ -483,7 +580,7 @@ func (m *AppModel) updateChatView() {
 
 // renderStatusBar 渲染状态栏
 func (m AppModel) renderStatusBar() string {
-	return FormatStatusBar(m.currentDir, m.totalTokens, m.inferenceCount, m.width)
+	return m.statusBar.Render()
 }
 
 // renderChatArea 渲染对话区
@@ -565,5 +662,271 @@ func (m *AppModel) SwitchConversation(id string) {
 			m.updateChatView()
 			break
 		}
+	}
+}
+
+// handleBatchUpdate 处理批量更新消息
+// 这是实时 UI 更新的核心方法，处理缓冲后的流式消息
+func (m *AppModel) handleBatchUpdate(result *FlushResult) {
+	if m.activeConv == nil {
+		return
+	}
+
+	// 确保有当前消息
+	if m.activeConv.currentMessage == nil {
+		m.activeConv.currentMessage = &Message{
+			Role:      MessageRoleAssistant,
+			Timestamp: time.Now(),
+		}
+	}
+
+	// 更新思考内容
+	if result.HasThinking {
+		m.activeConv.currentMessage.Thinking += result.Thinking
+		m.activeConv.currentMessage.IsStreaming = true
+		m.activeConv.currentMessage.StreamingType = "thinking"
+	}
+
+	// 更新正文内容
+	if result.HasContent {
+		m.activeConv.currentMessage.Content += result.Content
+		m.activeConv.currentMessage.IsStreaming = true
+		m.activeConv.currentMessage.StreamingType = "content"
+	}
+
+	// 更新工具调用
+	if result.HasToolCalls {
+		for _, tc := range result.ToolCalls {
+			// 查找或添加工具调用
+			found := false
+			for i, existingTc := range m.activeConv.currentMessage.ToolCalls {
+				if existingTc.ID == tc.ID {
+					m.activeConv.currentMessage.ToolCalls[i] = tc
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				m.activeConv.currentMessage.ToolCalls = append(m.activeConv.currentMessage.ToolCalls, tc)
+			}
+		}
+		m.activeConv.currentMessage.IsStreaming = true
+		m.activeConv.currentMessage.StreamingType = "tool"
+	}
+
+	// 更新工具结果
+	if result.HasToolResult {
+		for _, tr := range result.ToolResults {
+			for i, tc := range m.activeConv.currentMessage.ToolCalls {
+				if tc.ID == tr.ID {
+					m.activeConv.currentMessage.ToolCalls[i].Result = tr.Result
+					m.activeConv.currentMessage.ToolCalls[i].ResultError = tr.ResultError
+					break
+				}
+			}
+		}
+	}
+
+	// 处理其他消息（完成、错误等）
+	for _, msg := range result.Messages {
+		switch msg.Type {
+		case "complete":
+			// 完成当前消息
+			m.activeConv.currentMessage.IsStreaming = false
+			m.activeConv.currentMessage.TokenUsage = msg.Usage
+			m.activeConv.currentMessage.Timestamp = time.Now()
+
+			// 更新统计
+			m.activeConv.TokenUsage += msg.Usage
+			m.totalTokens += msg.Usage
+			m.inferenceCount++
+
+			// 更新状态栏
+			m.statusBar.SetTokens(m.totalTokens)
+			m.statusBar.SetInferenceCount(m.inferenceCount)
+
+			m.isStreaming = false
+
+		case "error":
+			// 处理错误
+			m.lastError = msg.Error.Error()
+			m.isStreaming = false
+		}
+	}
+
+	// 更新对话视图
+	m.updateChatView()
+
+	// 自动滚动到底部
+	if m.activeConv.currentMessage.IsStreaming {
+		m.chatView.ScrollToBottom()
+	}
+}
+
+// ========== 工作目录管理 ==========
+
+// handleCDCommand 处理 /cd 命令
+func (m AppModel) handleCDCommand(args []string) tea.Cmd {
+	// 检查参数
+	if len(args) == 0 {
+		return func() tea.Msg {
+			return NewCommandExecutedMsg("cd", args, "", fmt.Errorf("缺少目录参数"))
+		}
+	}
+
+	// 获取目标目录
+	targetDir := args[0]
+
+	// 处理特殊路径
+	if targetDir == "~" {
+		// 用户主目录
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return func() tea.Msg {
+				return NewCommandExecutedMsg("cd", args, "", fmt.Errorf("无法获取用户主目录: %w", err))
+			}
+		}
+		targetDir = homeDir
+	} else if targetDir == "-" {
+		// 上一个目录（暂不支持，返回错误）
+		return func() tea.Msg {
+			return NewCommandExecutedMsg("cd", args, "", fmt.Errorf("暂不支持切换到上一个目录"))
+		}
+	}
+
+	// 解析相对路径为绝对路径
+	if !filepath.IsAbs(targetDir) {
+		targetDir = filepath.Join(m.currentDir, targetDir)
+	}
+
+	// 清理路径（处理 . 和 ..）
+	targetDir = filepath.Clean(targetDir)
+
+	// 验证目录
+	if err := m.validateDirectory(targetDir); err != nil {
+		return func() tea.Msg {
+			return NewCommandExecutedMsg("cd", args, "", err)
+		}
+	}
+
+	// 保存旧目录
+	oldDir := m.currentDir
+
+	// 切换目录
+	if err := os.Chdir(targetDir); err != nil {
+		return func() tea.Msg {
+			return NewCommandExecutedMsg("cd", args, "", fmt.Errorf("切换目录失败: %w", err))
+		}
+	}
+
+	// 返回工作目录变更消息
+	return func() tea.Msg {
+		return NewWorkingDirChangedMsg(oldDir, targetDir)
+	}
+}
+
+// validateDirectory 验证目录是否存在且可访问
+func (m AppModel) validateDirectory(dir string) error {
+	// 检查路径是否存在
+	info, err := os.Stat(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("目录不存在: %s", dir)
+		}
+		if os.IsPermission(err) {
+			return fmt.Errorf("没有权限访问目录: %s", dir)
+		}
+		return fmt.Errorf("无法访问目录: %w", err)
+	}
+
+	// 检查是否为目录
+	if !info.IsDir() {
+		return fmt.Errorf("路径不是目录: %s", dir)
+	}
+
+	return nil
+}
+
+// handleWorkingDirChanged 处理工作目录变更
+func (m *AppModel) handleWorkingDirChanged(oldDir, newDir string) {
+	// 更新当前目录
+	m.currentDir = newDir
+
+	// 更新状态栏显示
+	m.statusBar.SetDirectory(newDir)
+}
+
+// handleCommandExecuted 处理命令执行结果
+func (m *AppModel) handleCommandExecuted(cmd string, args []string, result string, err error) {
+	if err != nil {
+		// 显示错误消息
+		m.lastError = err.Error()
+		// TODO: 在对话区显示错误消息
+	} else if result != "" {
+		// 显示成功消息
+		// TODO: 在对话区显示成功消息
+	}
+}
+
+// SetCurrentDir 设置当前工作目录（供外部调用）
+func (m *AppModel) SetCurrentDir(dir string) error {
+	// 验证目录
+	if err := m.validateDirectory(dir); err != nil {
+		return err
+	}
+
+	// 切换目录
+	if err := os.Chdir(dir); err != nil {
+		return fmt.Errorf("切换目录失败: %w", err)
+	}
+
+	// 更新状态
+	m.currentDir = dir
+	m.statusBar.SetDirectory(dir)
+
+	// 发送工作目录变更消息（如果需要）
+	// 这里不发送消息，因为这是外部调用，不需要触发消息循环
+
+	return nil
+}
+
+// GetCurrentDir 获取当前工作目录
+func (m *AppModel) GetCurrentDir() string {
+	return m.currentDir
+}
+
+// ========== 其他命令处理 ==========
+
+// handleClearCommand 处理 /clear 命令
+func (m AppModel) handleClearCommand() tea.Cmd {
+	if m.activeConv != nil {
+		// 清空当前对话的消息
+		m.activeConv.Messages = make([]Message, 0)
+		m.activeConv.TokenUsage = 0
+		m.updateChatView()
+	}
+
+	return func() tea.Msg {
+		return NewCommandExecutedMsg("clear", nil, "对话已清空", nil)
+	}
+}
+
+// handleSaveCommand 处理 /save 命令
+func (m AppModel) handleSaveCommand(args []string) tea.Cmd {
+	// TODO: 实现保存对话功能
+	return func() tea.Msg {
+		return NewCommandExecutedMsg("save", args, "", fmt.Errorf("保存功能暂未实现"))
+	}
+}
+
+// handleHelpCommand 处理 /help 命令
+func (m AppModel) handleHelpCommand() tea.Cmd {
+	// 创建输入组件实例以获取帮助文本
+	inputComp := components.NewInputComponent(components.DefaultInputComponentConfig())
+	helpText := inputComp.GetCommandHelp()
+
+	return func() tea.Msg {
+		return NewCommandExecutedMsg("help", nil, helpText, nil)
 	}
 }

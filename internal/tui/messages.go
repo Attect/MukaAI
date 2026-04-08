@@ -115,6 +115,30 @@ type CommandExecutedMsg struct {
 	Error error
 }
 
+// BatchUpdateMsg 批量更新消息
+// 用于批量处理缓冲的流式消息
+type BatchUpdateMsg struct {
+	// Result 刷新结果
+	Result *FlushResult
+}
+
+// TickMsg 定时器消息
+// 用于定时检查缓冲区是否需要刷新
+type TickMsg struct {
+	// Time 当前时间
+	Time time.Time
+}
+
+// NewBatchUpdateMsg 创建批量更新消息
+func NewBatchUpdateMsg(result *FlushResult) BatchUpdateMsg {
+	return BatchUpdateMsg{Result: result}
+}
+
+// NewTickMsg 创建定时器消息
+func NewTickMsg(t time.Time) TickMsg {
+	return TickMsg{Time: t}
+}
+
 // NewStreamThinkingMsg 创建流式思考内容消息
 func NewStreamThinkingMsg(chunk string) StreamThinkingMsg {
 	return StreamThinkingMsg{Chunk: chunk}

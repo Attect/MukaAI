@@ -1,5 +1,5 @@
-// Package tui 提供基于 Bubble Tea 的终端用户界面
-package tui
+// Package components 提供 TUI 组件实现
+package components
 
 import (
 	"encoding/json"

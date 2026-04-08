@@ -59,22 +59,22 @@
 
 ## Phase 4: 样式系统
 
-- [ ] Task 9: 实现样式定义
-  - [ ] SubTask 9.1: 创建 internal/tui/styles.go
-  - [ ] SubTask 9.2: 定义颜色主题
-  - [ ] SubTask 9.3: 定义消息样式（用户、思考、正文、工具、错误）
-  - [ ] SubTask 9.4: 定义状态样式（活动、等待、结束）
-  - [ ] SubTask 9.5: 定义布局样式（边框、间距、对齐）
+- [x] Task 9: 实现样式定义
+  - [x] SubTask 9.1: 创建 internal/tui/styles.go
+  - [x] SubTask 9.2: 定义颜色主题
+  - [x] SubTask 9.3: 定义消息样式（用户、思考、正文、工具、错误）
+  - [x] SubTask 9.4: 定义状态样式（活动、等待、结束）
+  - [x] SubTask 9.5: 定义布局样式（边框、间距、对齐）
 
 ## Phase 5: 流式输出处理
 
-- [ ] Task 10: 实现流式消息处理
-  - [ ] SubTask 10.1: 在 internal/agent/core.go 中添加 StreamHandler 接口
-  - [ ] SubTask 10.2: 实现 OnThinking() 回调方法
-  - [ ] SubTask 10.3: 实现 OnContent() 回调方法
-  - [ ] SubTask 10.4: 实现 OnToolCall() 回调方法
-  - [ ] SubTask 10.5: 实现 OnToolResult() 回调方法
-  - [ ] SubTask 10.6: 实现 OnComplete() 回调方法
+- [x] Task 10: 实现流式消息处理
+  - [x] SubTask 10.1: 在 internal/agent/core.go 中添加 StreamHandler 接口
+  - [x] SubTask 10.2: 实现 OnThinking() 回调方法
+  - [x] SubTask 10.3: 实现 OnContent() 回调方法
+  - [x] SubTask 10.4: 实现 OnToolCall() 回调方法
+  - [x] SubTask 10.5: 实现 OnToolResult() 回调方法
+  - [x] SubTask 10.6: 实现 OnComplete() 回调方法
 
 - [ ] Task 11: 实现实时 UI 更新
   - [ ] SubTask 11.1: 实现流式消息到 Bubble Tea 消息的转换
@@ -85,12 +85,12 @@
 
 ## Phase 6: 工具调用格式化
 
-- [ ] Task 12: 实现工具调用格式化器
-  - [ ] SubTask 12.1: 创建 internal/tui/formatter.go
-  - [ ] SubTask 12.2: 实现工具调用 JSON 解析
-  - [ ] SubTask 12.3: 实现参数格式化显示
-  - [ ] SubTask 12.4: 实现工具结果格式化显示
-  - [ ] SubTask 12.5: 实现折叠/展开功能
+- [x] Task 12: 实现工具调用格式化器
+  - [x] SubTask 12.1: 创建 internal/tui/formatter.go
+  - [x] SubTask 12.2: 实现工具调用 JSON 解析
+  - [x] SubTask 12.3: 实现参数格式化显示
+  - [x] SubTask 12.4: 实现工具结果格式化显示
+  - [x] SubTask 12.5: 实现折叠/展开功能
 
 ## Phase 7: Token 统计
 
