@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +43,10 @@ const (
 	VerifyIssueTypeInvalidPath VerifyIssueType = "invalid_path"
 	// VerifyIssueTypePermissionDenied 权限拒绝
 	VerifyIssueTypePermissionDenied VerifyIssueType = "permission_denied"
+	// VerifyIssueTypeJSSyntaxError JavaScript语法错误
+	VerifyIssueTypeJSSyntaxError VerifyIssueType = "js_syntax_error"
+	// VerifyIssueTypeHTMLStructureError HTML结构错误
+	VerifyIssueTypeHTMLStructureError VerifyIssueType = "html_structure_error"
 )
 
 // VerifyIssue 校验发现的问题
@@ -99,6 +104,10 @@ type VerifyConfig struct {
 	RequiredKeywords   []string `json:"required_keywords"`    // 必需的关键词列表
 	KeywordMatchMode   string   `json:"keyword_match_mode"`   // 关键词匹配模式：any（任一匹配）, all（全部匹配）
 
+	// 语法检查配置
+	CheckJSSyntax     bool `json:"check_js_syntax"`      // 是否检查JavaScript语法
+	CheckHTMLStructure bool `json:"check_html_structure"` // 是否检查HTML结构
+
 	// 自定义规则配置
 	EnableCustomRules bool `json:"enable_custom_rules"` // 是否启用自定义规则
 
@@ -116,6 +125,8 @@ func DefaultVerifierConfig() *VerifyConfig {
 		CheckKeywords:       true,
 		RequiredKeywords:    []string{},
 		KeywordMatchMode:    "any",
+		CheckJSSyntax:       true,  // 默认启用JavaScript语法检查
+		CheckHTMLStructure:  true,  // 默认启用HTML结构检查
 		EnableCustomRules:   true,
 		StopOnFirstFailure:  false,
 		MaxIssuesToReport:   50,
@@ -263,7 +274,59 @@ func (v *Verifier) Verify(files []string, taskState *state.TaskState) *VerifyRes
 		}
 	}
 
-	// 4. 执行自定义规则
+	// 4. 检查JavaScript语法（只检查.js文件）
+	if v.config.CheckJSSyntax && !(v.config.StopOnFirstFailure && len(result.Issues) > 0) {
+		for _, file := range files {
+			if v.config.StopOnFirstFailure && len(result.Issues) > 0 {
+				break
+			}
+			// 只检查存在的.js文件
+			if _, err := os.Stat(file); os.IsNotExist(err) {
+				continue
+			}
+			if !strings.HasSuffix(strings.ToLower(file), ".js") {
+				continue
+			}
+			// 读取文件内容并检查语法
+			if content, err := os.ReadFile(file); err == nil {
+				issues := v.checkJSSyntax(string(content), file)
+				if len(issues) > 0 {
+					result.Issues = append(result.Issues, issues...)
+					result.Failed += len(issues)
+				} else {
+					result.Passed++
+				}
+			}
+		}
+	}
+
+	// 5. 检查HTML结构（只检查.html文件）
+	if v.config.CheckHTMLStructure && !(v.config.StopOnFirstFailure && len(result.Issues) > 0) {
+		for _, file := range files {
+			if v.config.StopOnFirstFailure && len(result.Issues) > 0 {
+				break
+			}
+			// 只检查存在的.html文件
+			if _, err := os.Stat(file); os.IsNotExist(err) {
+				continue
+			}
+			if !strings.HasSuffix(strings.ToLower(file), ".html") {
+				continue
+			}
+			// 读取文件内容并检查结构
+			if content, err := os.ReadFile(file); err == nil {
+				issues := v.checkHTMLStructure(string(content), file)
+				if len(issues) > 0 {
+					result.Issues = append(result.Issues, issues...)
+					result.Failed += len(issues)
+				} else {
+					result.Passed++
+				}
+			}
+		}
+	}
+
+	// 6. 执行自定义规则
 	if v.config.EnableCustomRules && !(v.config.StopOnFirstFailure && len(result.Issues) > 0) {
 		v.mu.RLock()
 		rules := v.customRules
@@ -324,23 +387,11 @@ func (v *Verifier) VerifyTaskCompletion(files []string, taskState *state.TaskSta
 		Failed:    0,
 	}
 
-	// 1. 检查任务状态是否为completed
-	if taskState != nil && !taskState.IsCompleted() {
-		issue := VerifyIssue{
-			Type:        VerifyIssueTypeContentMissing,
-			Severity:    "high",
-			Description: "任务状态不是completed",
-			Evidence:    fmt.Sprintf("当前状态: %s", taskState.Task.Status),
-			Suggestion:  "请确保任务已完成所有必要步骤",
-			Timestamp:   time.Now(),
-		}
-		result.Issues = append(result.Issues, issue)
-		result.Failed++
-	} else {
-		result.Passed++
-	}
+	// 注意：在complete_task工具调用时，任务状态还是in_progress
+	// 所以这里不检查任务状态，只检查文件和内容
+	// 任务状态的检查由Agent核心的强制校验负责
 
-	// 2. 检查所有必需文件是否存在且非空
+	// 1. 检查所有必需文件是否存在且非空
 	for _, file := range files {
 		// 检查文件存在
 		if issue := v.checkFileExists(file); issue != nil {
@@ -373,6 +424,46 @@ func (v *Verifier) VerifyTaskCompletion(files []string, taskState *state.TaskSta
 				result.Failed += len(issues)
 			} else {
 				result.Passed++
+			}
+		}
+	}
+
+	// 4. JavaScript语法检查（如果启用）
+	if v.config.CheckJSSyntax {
+		for _, file := range files {
+			// 只检查.html和.js文件
+			ext := strings.ToLower(filepath.Ext(file))
+			if ext == ".html" || ext == ".htm" || ext == ".js" {
+				content, err := os.ReadFile(file)
+				if err != nil {
+					continue
+				}
+				if issues := v.checkJSSyntax(string(content), file); len(issues) > 0 {
+					result.Issues = append(result.Issues, issues...)
+					result.Failed += len(issues)
+				} else {
+					result.Passed++
+				}
+			}
+		}
+	}
+
+	// 5. HTML结构检查（如果启用）
+	if v.config.CheckHTMLStructure {
+		for _, file := range files {
+			// 只检查.html文件
+			ext := strings.ToLower(filepath.Ext(file))
+			if ext == ".html" || ext == ".htm" {
+				content, err := os.ReadFile(file)
+				if err != nil {
+					continue
+				}
+				if issues := v.checkHTMLStructure(string(content), file); len(issues) > 0 {
+					result.Issues = append(result.Issues, issues...)
+					result.Failed += len(issues)
+				} else {
+					result.Passed++
+				}
 			}
 		}
 	}
@@ -823,4 +914,322 @@ func (v *Verifier) GetCustomRules() []VerifyRule {
 	rules := make([]VerifyRule, len(v.customRules))
 	copy(rules, v.customRules)
 	return rules
+}
+
+// checkJSSyntax 检查JavaScript语法
+func (v *Verifier) checkJSSyntax(content string, filePath string) []VerifyIssue {
+	issues := make([]VerifyIssue, 0)
+
+	// 检查未闭合的字符串
+	issues = append(issues, v.checkUnclosedStrings(content, filePath)...)
+
+	// 检查未闭合的括号
+	issues = append(issues, v.checkUnclosedBrackets(content, filePath)...)
+
+	// 检查模板字符串中的对象字面量问题
+	issues = append(issues, v.checkTemplateLiteralObjects(content, filePath)...)
+
+	// 检查常见语法错误
+	issues = append(issues, v.checkCommonJSErrors(content, filePath)...)
+
+	return issues
+}
+
+// checkUnclosedStrings 检查未闭合的字符串
+func (v *Verifier) checkUnclosedStrings(content string, filePath string) []VerifyIssue {
+	issues := make([]VerifyIssue, 0)
+
+	// 简单检查：统计引号数量
+	singleQuotes := strings.Count(content, "'")
+	doubleQuotes := strings.Count(content, "\"")
+	backticks := strings.Count(content, "`")
+
+	// 检查转义引号
+	escapedSingle := strings.Count(content, "\\'")
+	escapedDouble := strings.Count(content, "\\\"")
+
+	effectiveSingle := singleQuotes - escapedSingle
+	effectiveDouble := doubleQuotes - escapedDouble
+
+	if effectiveSingle%2 != 0 {
+		issues = append(issues, VerifyIssue{
+			Type:        VerifyIssueTypeJSSyntaxError,
+			Severity:    "high",
+			Description: "检测到未闭合的单引号字符串",
+			Evidence:    fmt.Sprintf("文件 '%s' 中单引号数量为奇数(%d)", filePath, effectiveSingle),
+			Suggestion:  "请检查并确保所有单引号字符串正确闭合",
+			FilePath:    filePath,
+			Timestamp:   time.Now(),
+		})
+	}
+
+	if effectiveDouble%2 != 0 {
+		issues = append(issues, VerifyIssue{
+			Type:        VerifyIssueTypeJSSyntaxError,
+			Severity:    "high",
+			Description: "检测到未闭合的双引号字符串",
+			Evidence:    fmt.Sprintf("文件 '%s' 中双引号数量为奇数(%d)", filePath, effectiveDouble),
+			Suggestion:  "请检查并确保所有双引号字符串正确闭合",
+			FilePath:    filePath,
+			Timestamp:   time.Now(),
+		})
+	}
+
+	if backticks%2 != 0 {
+		issues = append(issues, VerifyIssue{
+			Type:        VerifyIssueTypeJSSyntaxError,
+			Severity:    "high",
+			Description: "检测到未闭合的模板字符串",
+			Evidence:    fmt.Sprintf("文件 '%s' 中反引号数量为奇数(%d)", filePath, backticks),
+			Suggestion:  "请检查并确保所有模板字符串正确闭合",
+			FilePath:    filePath,
+			Timestamp:   time.Now(),
+		})
+	}
+
+	return issues
+}
+
+// checkUnclosedBrackets 检查未闭合的括号
+func (v *Verifier) checkUnclosedBrackets(content string, filePath string) []VerifyIssue {
+	issues := make([]VerifyIssue, 0)
+
+	// 移除字符串内容后再检查括号
+	cleanContent := v.removeStringContent(content)
+
+	parenCount := 0
+	bracketCount := 0
+	braceCount := 0
+
+	for _, ch := range cleanContent {
+		switch ch {
+		case '(':
+			parenCount++
+		case ')':
+			parenCount--
+		case '[':
+			bracketCount++
+		case ']':
+			bracketCount--
+		case '{':
+			braceCount++
+		case '}':
+			braceCount--
+		}
+	}
+
+	if parenCount != 0 {
+		issues = append(issues, VerifyIssue{
+			Type:        VerifyIssueTypeJSSyntaxError,
+			Severity:    "high",
+			Description: "检测到未闭合的圆括号",
+			Evidence:    fmt.Sprintf("文件 '%s' 中圆括号不匹配(差%d)", filePath, parenCount),
+			Suggestion:  "请检查并确保所有圆括号正确闭合",
+			FilePath:    filePath,
+			Timestamp:   time.Now(),
+		})
+	}
+
+	if bracketCount != 0 {
+		issues = append(issues, VerifyIssue{
+			Type:        VerifyIssueTypeJSSyntaxError,
+			Severity:    "high",
+			Description: "检测到未闭合的方括号",
+			Evidence:    fmt.Sprintf("文件 '%s' 中方括号不匹配(差%d)", filePath, bracketCount),
+			Suggestion:  "请检查并确保所有方括号正确闭合",
+			FilePath:    filePath,
+			Timestamp:   time.Now(),
+		})
+	}
+
+	if braceCount != 0 {
+		issues = append(issues, VerifyIssue{
+			Type:        VerifyIssueTypeJSSyntaxError,
+			Severity:    "high",
+			Description: "检测到未闭合的花括号",
+			Evidence:    fmt.Sprintf("文件 '%s' 中花括号不匹配(差%d)", filePath, braceCount),
+			Suggestion:  "请检查并确保所有花括号正确闭合",
+			FilePath:    filePath,
+			Timestamp:   time.Now(),
+		})
+	}
+
+	return issues
+}
+
+// checkTemplateLiteralObjects 检查模板字符串中的对象字面量问题
+func (v *Verifier) checkTemplateLiteralObjects(content string, filePath string) []VerifyIssue {
+	issues := make([]VerifyIssue, 0)
+
+	// 检查模板字符串中直接包含多行对象字面量的模式
+	// 模式：模板字符串内 ${...} 中包含换行的对象
+	re := regexp.MustCompile("`[^`]*\\$\\{[^}]*\\n[^}]*\\}[^`]*`")
+	matches := re.FindAllString(content, -1)
+
+	for _, match := range matches {
+		issues = append(issues, VerifyIssue{
+			Type:        VerifyIssueTypeJSSyntaxError,
+			Severity:    "medium",
+			Description: "模板字符串中包含多行对象字面量可能导致格式问题",
+			Evidence:    fmt.Sprintf("文件 '%s' 中发现: %s", filePath, v.truncateString(match, 100)),
+			Suggestion:  "建议将对象字面量提取到变量中，然后在模板字符串中引用",
+			FilePath:    filePath,
+			Timestamp:   time.Now(),
+		})
+	}
+
+	return issues
+}
+
+// checkCommonJSErrors 检查常见JavaScript语法错误
+func (v *Verifier) checkCommonJSErrors(content string, filePath string) []VerifyIssue {
+	issues := make([]VerifyIssue, 0)
+
+	// 检查缺少分号的函数声明（可选，但有助于代码质量）
+	// 检查未定义的变量使用（简化检查）
+	// 检查可能的保留字误用
+
+	// 检查file协议兼容性问题
+	if strings.Contains(content, "navigator.clipboard") {
+		issues = append(issues, VerifyIssue{
+			Type:        VerifyIssueTypeJSSyntaxError,
+			Severity:    "medium",
+			Description: "使用navigator.clipboard在file协议下可能受限",
+			Evidence:    fmt.Sprintf("文件 '%s' 中使用了navigator.clipboard", filePath),
+			Suggestion:  "建议添加降级方案，使用document.execCommand('copy')作为备选",
+			FilePath:    filePath,
+			Timestamp:   time.Now(),
+		})
+	}
+
+	// 检查localStorage/sessionStorage在file协议下的兼容性
+	if strings.Contains(content, "localStorage.") || strings.Contains(content, "sessionStorage.") {
+		issues = append(issues, VerifyIssue{
+			Type:        VerifyIssueTypeJSSyntaxError,
+			Severity:    "low",
+			Description: "localStorage/sessionStorage在file协议下可能受限",
+			Evidence:    fmt.Sprintf("文件 '%s' 中使用了localStorage或sessionStorage", filePath),
+			Suggestion:  "建议添加try-catch处理可能的异常",
+			FilePath:    filePath,
+			Timestamp:   time.Now(),
+		})
+	}
+
+	return issues
+}
+
+// checkHTMLStructure 检查HTML结构
+func (v *Verifier) checkHTMLStructure(content string, filePath string) []VerifyIssue {
+	issues := make([]VerifyIssue, 0)
+
+	// 检查DOCTYPE声明
+	if !strings.Contains(strings.ToUpper(content), "<!DOCTYPE") {
+		issues = append(issues, VerifyIssue{
+			Type:        VerifyIssueTypeHTMLStructureError,
+			Severity:    "medium",
+			Description: "HTML文档缺少DOCTYPE声明",
+			Evidence:    fmt.Sprintf("文件 '%s' 未找到DOCTYPE声明", filePath),
+			Suggestion:  "建议在文档开头添加 <!DOCTYPE html>",
+			FilePath:    filePath,
+			Timestamp:   time.Now(),
+		})
+	}
+
+	// 检查基本HTML结构
+	requiredTags := []string{"<html", "</html>", "<head>", "</head>", "<body>", "</body>"}
+	for _, tag := range requiredTags {
+		if !strings.Contains(strings.ToLower(content), strings.ToLower(tag)) {
+			issues = append(issues, VerifyIssue{
+				Type:        VerifyIssueTypeHTMLStructureError,
+				Severity:    "medium",
+				Description: fmt.Sprintf("HTML文档缺少必需标签: %s", tag),
+				Evidence:    fmt.Sprintf("文件 '%s' 未找到标签 %s", filePath, tag),
+				Suggestion:  "请确保HTML文档结构完整",
+				FilePath:    filePath,
+				Timestamp:   time.Now(),
+			})
+		}
+	}
+
+	// 检查常见未闭合标签
+	issues = append(issues, v.checkUnclosedTags(content, filePath)...)
+
+	return issues
+}
+
+// checkUnclosedTags 检查未闭合的HTML标签
+func (v *Verifier) checkUnclosedTags(content string, filePath string) []VerifyIssue {
+	issues := make([]VerifyIssue, 0)
+
+	// 自闭合标签列表
+	selfClosingTags := map[string]bool{
+		"br": true, "hr": true, "img": true, "input": true,
+		"meta": true, "link": true, "area": true, "base": true,
+		"col": true, "embed": true, "param": true, "source": true,
+		"track": true, "wbr": true,
+	}
+
+	// 提取所有标签
+	tagRegex := regexp.MustCompile(`<(/?)(\w+)[^>]*>`)
+	matches := tagRegex.FindAllStringSubmatch(content, -1)
+
+	openTags := make(map[string]int)
+
+	for _, match := range matches {
+		isClosing := match[1] == "/"
+		tagName := strings.ToLower(match[2])
+
+		if selfClosingTags[tagName] {
+			continue
+		}
+
+		if isClosing {
+			if count, exists := openTags[tagName]; exists {
+				if count > 0 {
+					openTags[tagName]--
+				}
+			}
+		} else {
+			openTags[tagName]++
+		}
+	}
+
+	// 检查未闭合的标签
+	for tagName, count := range openTags {
+		if count > 0 {
+			issues = append(issues, VerifyIssue{
+				Type:        VerifyIssueTypeHTMLStructureError,
+				Severity:    "high",
+				Description: fmt.Sprintf("检测到未闭合的HTML标签: <%s>", tagName),
+				Evidence:    fmt.Sprintf("文件 '%s' 中 <%s> 标签有 %d 个未闭合", filePath, tagName, count),
+				Suggestion:  fmt.Sprintf("请检查并确保所有 <%s> 标签正确闭合", tagName),
+				FilePath:    filePath,
+				Timestamp:   time.Now(),
+			})
+		}
+	}
+
+	return issues
+}
+
+// removeStringContent 移除字符串内容以便检查括号
+func (v *Verifier) removeStringContent(content string) string {
+	// 移除单引号字符串
+	result := regexp.MustCompile(`'[^']*'`).ReplaceAllString(content, "''")
+	// 移除双引号字符串
+	result = regexp.MustCompile(`"[^"]*"`).ReplaceAllString(result, "\"\"")
+	// 移除模板字符串
+	result = regexp.MustCompile("`[^`]*`").ReplaceAllString(result, "``")
+	// 移除注释
+	result = regexp.MustCompile(`//[^\n]*`).ReplaceAllString(result, "")
+	result = regexp.MustCompile(`/\*[\s\S]*?\*/`).ReplaceAllString(result, "")
+	return result
+}
+
+// truncateString 截断字符串
+func (v *Verifier) truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

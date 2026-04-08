@@ -171,6 +171,8 @@ const VerificationPrompt = `
 1. 文件存在性检查：确认你声称创建的文件确实存在
 2. 内容完整性检查：确认文件内容不为空且符合基本要求
 3. 需求匹配检查：确认实现的功能符合任务要求
+4. JavaScript语法检查：检测未闭合的字符串、括号等语法错误
+5. HTML结构检查：检测标签闭合、DOCTYPE声明等结构问题
 
 如果校验失败，你需要：
 1. 仔细阅读失败原因
@@ -181,6 +183,57 @@ const VerificationPrompt = `
 - 不要假设文件已存在，确保实际创建了文件
 - 不要输出虚假的完成报告，系统会验证
 - 如果遇到困难，如实报告问题，不要编造结果
+` + CodeQualityPrompt
+
+// CodeQualityPrompt 代码质量要求提示词
+const CodeQualityPrompt = `
+## 代码质量要求
+
+生成的代码必须满足以下质量标准：
+
+### 1. 语法正确性
+- 确保所有代码语法正确，无基础错误
+- JavaScript中正确闭合所有字符串、括号、花括号
+- HTML标签必须正确闭合
+- CSS选择器和属性必须语法正确
+
+### 2. 格式规范
+- 代码格式清晰，缩进正确一致
+- 避免过长的行，适当换行
+- 使用有意义的变量名和函数名
+
+### 3. 兼容性考虑
+- 使用file协议时，注意以下限制：
+  - navigator.clipboard API可能不可用，需要降级处理
+  - localStorage/sessionStorage可能不可用
+  - fetch/XMLHttpRequest可能受限
+- 提供必要的降级方案和错误处理
+
+### 4. 常见错误避免
+- **模板字符串陷阱**：不要在模板字符串内直接写多行对象字面量
+  错误示例: let str = "结果: " + JSON.stringify(obj, null, 2)
+  正确示例: 先格式化再拼接
+
+- **剪贴板兼容性**：必须提供降级方案
+  正确示例: 
+  function copyToClipboard(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text);
+      } else {
+          // 降级方案：使用document.execCommand
+          const textarea = document.createElement('textarea');
+          textarea.value = text;
+          document.body.appendChild(textarea);
+          textarea.select();
+          document.execCommand('copy');
+          document.body.removeChild(textarea);
+      }
+  }
+
+### 5. 功能完整性
+- 确保所有需求功能都已实现
+- 提供必要的用户交互反馈
+- 处理边界情况和错误输入
 `
 
 // BuildVerificationFailurePrompt 构建校验失败提示词

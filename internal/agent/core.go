@@ -334,11 +334,22 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 				}
 
 				// 添加工具结果到历史
-				a.history.AddMessages(toolResults)
+			a.history.AddMessages(toolResults)
 
-				// 检查是否有任务完成/失败的工具调用
-				for _, tc := range response.ToolCalls {
-					if tc.Function.Name == "complete_task" {
+			// 检查是否有end_exploration工具调用
+			for _, tc := range response.ToolCalls {
+				if tc.Function.Name == "end_exploration" {
+					// 声明探索阶段结束
+					a.reviewer.EndExploration()
+					if a.logger != nil {
+						a.logger.LogMessage("system", "探索阶段已结束，开始严格监控任务进度")
+					}
+				}
+			}
+
+			// 检查是否有任务完成/失败的工具调用
+			for _, tc := range response.ToolCalls {
+				if tc.Function.Name == "complete_task" {
 						// 在完成任务前进行校验
 						verifyResult := a.verifyTaskCompletion(runCtx, taskGoal)
 

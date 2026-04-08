@@ -59,12 +59,14 @@ func main() {
 完成后调用complete_task工具标记任务完成。`
 
 	verifierConfig := &agent.VerifyConfig{
-		CheckFileExists:   true,
-		CheckFileNonEmpty: true,
-		CheckKeywords:     true,
-		RequiredKeywords:  []string{"Base64", "JSON", "时间戳", "工作台"},
-		KeywordMatchMode:  "all",
-		MaxIssuesToReport: 10,
+		CheckFileExists:    true,
+		CheckFileNonEmpty:  true,
+		CheckKeywords:      true,
+		RequiredKeywords:   []string{"Base64", "JSON", "时间戳", "工作台"},
+		KeywordMatchMode:   "all",
+		MaxIssuesToReport:  10,
+		CheckJSSyntax:      true, // 启用JavaScript语法检查
+		CheckHTMLStructure: true, // 启用HTML结构检查
 	}
 
 	correctorConfig := &agent.SelfCorrectorConfig{

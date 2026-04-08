@@ -106,6 +106,11 @@ type ReviewConfig struct {
 
 	// 文件验证
 	MaxFileChecksPerReview int `json:"max_file_checks_per_review"` // 每次审查最大文件检查数
+
+	// 探索期配置
+	ExplorationPeriodIterations int `json:"exploration_period_iterations"` // 探索期迭代次数（此期间内跳过no_progress检查）
+	MaxExplorationDuration      int `json:"max_exploration_duration"`      // 最大探索持续时间（秒）
+	EnableSmartExplorationCheck bool `json:"enable_smart_exploration_check"` // 是否启用智能探索检测
 }
 
 // DefaultReviewConfig 返回默认审查配置
@@ -120,6 +125,9 @@ func DefaultReviewConfig() *ReviewConfig {
 		MaxIterationsWithoutProgress: 5,
 		ProgressCheckWindow:          3,
 		MaxFileChecksPerReview:       10,
+		ExplorationPeriodIterations:  3,   // 前3次迭代为探索期
+		MaxExplorationDuration:       120, // 最大探索时间2分钟
+		EnableSmartExplorationCheck:  true,
 	}
 }
 
@@ -139,6 +147,23 @@ type Reviewer struct {
 	// 进度跟踪
 	iterationCount   int
 	lastProgressStep string
+
+	// 探索行为跟踪
+	explorationStartTime time.Time
+	explorationActions   []ExplorationAction
+	totalExplorationTime time.Duration
+	
+	// 探索结束声明
+	explorationEnded bool
+}
+
+// ExplorationAction 探索行为记录
+type ExplorationAction struct {
+	ToolName    string    `json:"tool_name"`
+	Arguments   string    `json:"arguments"`
+	Timestamp   time.Time `json:"timestamp"`
+	IsRelevant  bool      `json:"is_relevant"`  // 是否与任务相关
+	Exploration string    `json:"exploration"`  // 探索类型：environment, file, command
 }
 
 // ActionRecord 操作记录
@@ -157,8 +182,9 @@ func NewReviewer(config *ReviewConfig) *Reviewer {
 	}
 
 	return &Reviewer{
-		config:        config,
-		actionHistory: make([]ActionRecord, 0),
+		config:            config,
+		actionHistory:     make([]ActionRecord, 0),
+		explorationActions: make([]ExplorationAction, 0),
 	}
 }
 
@@ -174,9 +200,20 @@ func (r *Reviewer) ReviewOutput(output string, toolCalls []model.ToolCall, taskS
 	}
 
 	// 1. 方向偏离检测
+	// 改进：只有在输出不包含工具调用且输出过短时才检查
+	// 如果模型输出了工具调用，说明正在执行任务，不需要检查方向
 	if r.config.EnableDirectionCheck && taskState != nil {
-		if issue := r.checkDirection(output, taskState); issue != nil {
-			result.Issues = append(result.Issues, *issue)
+		// 检查是否有工具调用
+		hasToolCalls := len(toolCalls) > 0
+		// 检查输出长度
+		outputLen := len(strings.TrimSpace(output))
+		
+		// 只有在没有工具调用且输出过短时才检查方向
+		// 这避免了误报：模型输出工具调用是正确行为
+		if !hasToolCalls && outputLen < 50 {
+			if issue := r.checkDirection(output, taskState); issue != nil {
+				result.Issues = append(result.Issues, *issue)
+			}
 		}
 	}
 
@@ -205,7 +242,7 @@ func (r *Reviewer) ReviewOutput(output string, toolCalls []model.ToolCall, taskS
 
 	// 4. 进度验证
 	if taskState != nil {
-		if issue := r.checkProgress(taskState); issue != nil {
+		if issue := r.checkProgress(taskState, toolCalls); issue != nil {
 			result.Issues = append(result.Issues, *issue)
 		}
 	}
@@ -271,12 +308,47 @@ func (r *Reviewer) checkDirection(output string, taskState *state.TaskState) *Re
 		return nil
 	}
 
-	goal := strings.ToLower(taskState.Task.Goal)
-	outputLower := strings.ToLower(output)
+	// 提取任务目标中的关键词（过滤短词和无意义词）
+	goalLower := strings.ToLower(taskState.Task.Goal)
+	words := strings.Fields(goalLower)
 
-	// 检查是否包含与目标相关的关键词
-	// 提取目标中的关键词（简化实现）
-	keywords := extractKeywords(goal)
+	// 过滤关键词：只保留长度>=3的词，并排除常见无意义词
+	stopWords := map[string]bool{
+		"的": true, "是": true, "在": true, "有": true, "和": true,
+		"与": true, "或": true, "等": true, "及": true, "了": true,
+		"the": true, "a": true, "an": true, "is": true, "are": true,
+		"was": true, "were": true, "be": true, "been": true, "being": true,
+		"have": true, "has": true, "had": true, "do": true, "does": true,
+		"did": true, "will": true, "would": true, "could": true, "should": true,
+		"may": true, "might": true, "must": true, "shall": true, "can": true,
+		"to": true, "of": true, "in": true, "for": true, "on": true,
+		"with": true, "at": true, "by": true, "from": true, "as": true,
+		"into": true, "through": true, "during": true, "before": true, "after": true,
+		"above": true, "below": true, "between": true, "under": true, "again": true,
+		"further": true, "then": true, "once": true, "here": true, "there": true,
+		"when": true, "where": true, "why": true, "how": true, "all": true,
+		"each": true, "few": true, "more": true, "most": true, "other": true,
+		"some": true, "such": true, "no": true, "nor": true, "not": true,
+		"only": true, "own": true, "same": true, "so": true, "than": true,
+		"too": true, "very": true, "just": true, "and": true, "but": true,
+		"if": true, "or": true, "because": true, "until": true, "while": true,
+	}
+
+	keywords := make([]string, 0)
+	for _, word := range words {
+		// 只保留长度>=3且不在停用词列表中的词
+		if len(word) >= 3 && !stopWords[word] {
+			keywords = append(keywords, word)
+		}
+	}
+
+	// 如果没有有效关键词，跳过检查
+	if len(keywords) == 0 {
+		return nil
+	}
+
+	// 检查输出中是否包含关键词
+	outputLower := strings.ToLower(output)
 	matchedCount := 0
 	for _, kw := range keywords {
 		if strings.Contains(outputLower, kw) {
@@ -284,14 +356,16 @@ func (r *Reviewer) checkDirection(output string, taskState *state.TaskState) *Re
 		}
 	}
 
-	// 如果关键词匹配率过低，可能偏离方向
-	if len(keywords) > 0 && matchedCount < len(keywords)/3 {
+	// 降低阈值：只有当匹配率低于20%时才报告偏离
+	// 原阈值是33%，过于严格
+	matchRate := float64(matchedCount) / float64(len(keywords))
+	if matchRate < 0.2 {
 		return &ReviewIssue{
 			Type:        IssueTypeDirection,
-			Severity:    "medium",
+			Severity:    "low", // 降低严重度
 			Description: "输出内容可能与任务目标偏离",
-			Evidence:    fmt.Sprintf("目标: %s\n输出: %s", taskState.Task.Goal, truncateString(output, 200)),
-			Suggestion:  "请确保输出内容与任务目标相关，专注于完成当前任务",
+			Evidence:    fmt.Sprintf("目标关键词: %v\n匹配率: %.1f%%\n输出片段: %s", keywords, matchRate*100, truncateString(output, 200)),
+			Suggestion:  "请确保输出内容与任务目标相关",
 			Timestamp:   time.Now(),
 		}
 	}
@@ -434,7 +508,7 @@ func (r *Reviewer) checkFabrication(output string, toolCalls []model.ToolCall) [
 
 // checkProgress 检查进度
 // 验证是否真正推进任务进度
-func (r *Reviewer) checkProgress(taskState *state.TaskState) *ReviewIssue {
+func (r *Reviewer) checkProgress(taskState *state.TaskState, toolCalls []model.ToolCall) *ReviewIssue {
 	r.mu.Lock()
 	r.iterationCount++
 	currentIteration := r.iterationCount
@@ -448,12 +522,21 @@ func (r *Reviewer) checkProgress(taskState *state.TaskState) *ReviewIssue {
 
 	// 检查进度是否停滞
 	if currentStep == r.lastProgressStep {
-		if currentIteration >= r.config.MaxIterationsWithoutProgress {
+		// 检查是否是环境探索行为
+		isExploration := r.isExplorationAction(toolCalls)
+		
+		// 如果是探索行为，使用更高的阈值
+		threshold := r.config.MaxIterationsWithoutProgress
+		if isExploration {
+			threshold = r.config.MaxIterationsWithoutProgress * 2 // 探索行为允许更多迭代
+		}
+		
+		if currentIteration >= threshold {
 			return &ReviewIssue{
 				Type:        IssueTypeNoProgress,
 				Severity:    "medium",
 				Description: fmt.Sprintf("已迭代%d次但任务进度未推进", currentIteration),
-				Evidence:    fmt.Sprintf("当前阶段: %s, 已完成步骤: %v", taskState.Progress.CurrentPhase, taskState.Progress.CompletedSteps),
+				Evidence:    fmt.Sprintf("当前阶段: %s, 已完成步骤: %v, 是否探索: %v", taskState.Progress.CurrentPhase, taskState.Progress.CompletedSteps, isExploration),
 				Suggestion:  "请检查当前方法是否有效，考虑调整策略或分解任务",
 				Timestamp:   time.Now(),
 			}
@@ -467,6 +550,272 @@ func (r *Reviewer) checkProgress(taskState *state.TaskState) *ReviewIssue {
 	}
 
 	return nil
+}
+
+// isExplorationAction 检查是否是环境探索行为
+// 探索行为包括：查看目录、读取文件、执行环境命令等
+// 改进：分析工具调用参数，判断是否与任务相关
+func (r *Reviewer) isExplorationAction(toolCalls []model.ToolCall) bool {
+	for _, tc := range toolCalls {
+		action := r.analyzeToolCall(tc)
+		
+		// 记录探索行为
+		r.mu.Lock()
+		r.explorationActions = append(r.explorationActions, action)
+		r.mu.Unlock()
+		
+		// 如果发现不相关的探索，返回true
+		if !action.IsRelevant {
+			return true
+		}
+	}
+	return false
+}
+
+// analyzeToolCall 分析工具调用，判断是否是有效的探索行为
+func (r *Reviewer) analyzeToolCall(tc model.ToolCall) ExplorationAction {
+	action := ExplorationAction{
+		ToolName:  tc.Function.Name,
+		Arguments: tc.Function.Arguments,
+		Timestamp: time.Now(),
+	}
+
+	// 根据工具类型分析
+	switch tc.Function.Name {
+	case "list_directory", "ls", "dir":
+		action.Exploration = "environment"
+		// 分析路径是否与任务相关
+		action.IsRelevant = r.isPathRelevant(tc.Function.Arguments)
+		
+	case "read_file", "cat":
+		action.Exploration = "file"
+		// 分析文件是否与任务相关
+		action.IsRelevant = r.isFileRelevant(tc.Function.Arguments)
+		
+	case "execute_command", "shell_execute", "run_command":
+		action.Exploration = "command"
+		// 分析命令是否与任务相关
+		action.IsRelevant = r.isCommandRelevant(tc.Function.Arguments)
+		
+	case "getcwd", "pwd":
+		action.Exploration = "environment"
+		// 获取当前目录通常是有效的探索
+		action.IsRelevant = true
+		
+	case "write_file", "create_file":
+		action.Exploration = "creation"
+		// 写文件是生产性行为，不是探索
+		action.IsRelevant = true
+		
+	case "create_directory", "mkdir":
+		action.Exploration = "creation"
+		action.IsRelevant = true
+		
+	default:
+		// 其他工具调用默认认为是相关的
+		action.IsRelevant = true
+	}
+
+	return action
+}
+
+// isPathRelevant 检查路径是否与任务相关
+func (r *Reviewer) isPathRelevant(arguments string) bool {
+	// 解析参数中的路径
+	var args struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
+		return true // 无法解析时假设相关
+	}
+
+	// 检查路径是否包含常见的工作目录关键词
+	relevantKeywords := []string{
+		"project", "src", "work", "task", "output",
+		"internal", "pkg", "cmd", "api", "web",
+	}
+	
+	pathLower := strings.ToLower(args.Path)
+	for _, kw := range relevantKeywords {
+		if strings.Contains(pathLower, kw) {
+			return true
+		}
+	}
+
+	// 检查是否是系统目录（通常不相关）
+	systemDirs := []string{
+		"/etc", "/usr", "/bin", "/sbin", "/lib",
+		"c:\\windows", "c:\\program files", "c:\\users\\public",
+	}
+	for _, sysDir := range systemDirs {
+		if strings.HasPrefix(pathLower, sysDir) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// isFileRelevant 检查文件是否与任务相关
+func (r *Reviewer) isFileRelevant(arguments string) bool {
+	var args struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
+		return true
+	}
+
+	// 检查文件扩展名是否与任务相关
+	relevantExtensions := []string{
+		".go", ".js", ".ts", ".py", ".java", ".kt",
+		".html", ".css", ".json", ".yaml", ".yml",
+		".md", ".txt", ".xml", ".toml",
+	}
+	
+	pathLower := strings.ToLower(args.Path)
+	for _, ext := range relevantExtensions {
+		if strings.HasSuffix(pathLower, ext) {
+			return true
+		}
+	}
+
+	// 检查是否是配置文件或文档
+	relevantFiles := []string{
+		"readme", "config", "package", "go.mod", "cargo",
+		"requirements", "pom.xml", "build.gradle",
+	}
+	for _, file := range relevantFiles {
+		if strings.Contains(pathLower, file) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isCommandRelevant 检查命令是否与任务相关
+func (r *Reviewer) isCommandRelevant(arguments string) bool {
+	var args struct {
+		Command string `json:"command"`
+		Cmd     string `json:"cmd"`
+	}
+	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
+		return true
+	}
+
+	cmd := args.Command
+	if cmd == "" {
+		cmd = args.Cmd
+	}
+
+	cmdLower := strings.ToLower(cmd)
+
+	// 与任务相关的命令
+	relevantCommands := []string{
+		"go ", "npm ", "yarn ", "pip ", "python ", "node ",
+		"git ", "cargo ", "mvn ", "gradle ",
+		"make", "cmake", "gcc", "clang",
+		"docker ", "kubectl ",
+	}
+	for _, relCmd := range relevantCommands {
+		if strings.HasPrefix(cmdLower, relCmd) {
+			return true
+		}
+	}
+
+	// 环境探索命令（通常相关但需要限制）
+	explorationCommands := []string{
+		"pwd", "cd ", "ls", "dir", "cat ", "type ",
+		"echo ", "which ", "where ", "env",
+	}
+	for _, expCmd := range explorationCommands {
+		if strings.HasPrefix(cmdLower, expCmd) {
+			return true
+		}
+	}
+
+	// 不相关的命令
+	irrelevantCommands := []string{
+		"ping ", "curl ", "wget ", "nc ",
+		"telnet ", "ssh ", "scp ",
+	}
+	for _, irrCmd := range irrelevantCommands {
+		if strings.HasPrefix(cmdLower, irrCmd) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// isInExplorationPeriod 检查是否在探索期内
+func (r *Reviewer) isInExplorationPeriod() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	
+	// 如果Agent已声明探索结束，则不在探索期
+	if r.explorationEnded {
+		return false
+	}
+	
+	// 检查迭代次数是否在探索期内
+	if r.iterationCount <= r.config.ExplorationPeriodIterations {
+		return true
+	}
+	
+	// 检查探索时间是否超过限制
+	if r.config.MaxExplorationDuration > 0 && !r.explorationStartTime.IsZero() {
+		elapsed := time.Since(r.explorationStartTime)
+		if elapsed.Seconds() < float64(r.config.MaxExplorationDuration) {
+			return true
+		}
+	}
+	
+	return false
+}
+
+// EndExploration 声明探索阶段结束
+func (r *Reviewer) EndExploration() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.explorationEnded = true
+}
+
+// ResetExploration 重置探索状态（用于新任务开始时）
+func (r *Reviewer) ResetExploration() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.explorationEnded = false
+	r.explorationStartTime = time.Time{}
+	r.explorationActions = make([]ExplorationAction, 0)
+	r.totalExplorationTime = 0
+}
+
+// getExplorationStats 获取探索统计信息
+func (r *Reviewer) getExplorationStats() map[string]interface{} {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	relevantCount := 0
+	irrelevantCount := 0
+	explorationTypes := make(map[string]int)
+
+	for _, action := range r.explorationActions {
+		if action.IsRelevant {
+			relevantCount++
+		} else {
+			irrelevantCount++
+		}
+		explorationTypes[action.Exploration]++
+	}
+
+	return map[string]interface{}{
+		"total_actions":      len(r.explorationActions),
+		"relevant_actions":   relevantCount,
+		"irrelevant_actions": irrelevantCount,
+		"exploration_types":  explorationTypes,
+		"total_time":         r.totalExplorationTime.String(),
+	}
 }
 
 // recordAction 记录操作

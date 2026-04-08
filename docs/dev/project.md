@@ -2,6 +2,116 @@
 
 ## 更新日志
 
+### 2026-04-08 Task 7 新增：对话显示组件
+
+#### internal/tui/components/chat.go
+- `ChatView` - 对话显示组件
+  - 封装 viewport 组件，提供消息渲染和自动滚动功能
+  - 支持滚动查看历史消息
+  - 自动滚动到最新消息
+  - 支持自定义样式配置
+- `ChatStyles` - 对话样式配置结构体
+  - UserMessage: 用户消息样式
+  - UserContent: 用户消息内容样式
+  - Thinking: 思考内容样式
+  - ThinkingBox: 思考内容框样式
+  - ThinkingTitle: 思考标题样式
+  - Content: 正文内容样式
+  - ToolCall: 工具调用样式
+  - ToolCallBox: 工具调用框样式
+  - ToolCallTitle: 工具调用标题样式
+  - ToolArgs: 工具参数样式
+  - ToolResult: 工具结果样式
+  - ToolResultBox: 工具结果框样式
+  - ToolError: 工具错误样式
+  - TokenUsage: token 用量样式
+  - Error: 错误消息样式
+  - ErrorBox: 错误框样式
+  - StreamingCursor: 流式光标样式
+- `MessageData` - 消息数据结构体
+  - Role: 消息角色（user/assistant/tool）
+  - Content: 正文内容
+  - Thinking: 思考内容
+  - ToolCalls: 工具调用列表
+  - TokenUsage: token 用量
+  - IsStreaming: 是否正在流式输出
+  - StreamingType: 流式输出类型
+- `ToolCallData` - 工具调用数据结构体
+  - ID: 工具调用唯一标识
+  - Name: 工具名称
+  - Arguments: 工具参数
+  - IsComplete: 是否已完成流式生成
+  - Result: 工具执行结果
+  - ResultError: 工具执行错误
+- `DefaultChatStyles() ChatStyles` - 返回默认对话样式
+- `NewChatView(width, height int) *ChatView` - 创建新的对话显示组件
+- `NewChatViewWithStyles(width, height int, styles ChatStyles) *ChatView` - 创建带自定义样式的对话显示组件
+- `Init() tea.Cmd` - 初始化组件
+- `Update(msg tea.Msg) (*ChatView, tea.Cmd)` - 更新组件状态
+- `View() string` - 渲染组件
+- `SetSize(width, height int)` - 设置组件大小
+- `SetWidth(width int)` - 设置宽度
+- `SetHeight(height int)` - 设置高度
+- `SetContent(content string)` - 设置内容
+- `SetAutoScroll(autoScroll bool)` - 设置自动滚动
+- `ScrollToBottom()` - 滚动到底部
+- `ScrollToTop()` - 滚动到顶部
+- `PageDown()` - 向下翻页
+- `PageUp()` - 向上翻页
+- `LineDown()` - 向下滚动一行
+- `LineUp()` - 向上滚动一行
+- `GetViewport() *viewport.Model` - 获取视口组件
+- `RenderMessages(messages []MessageData) string` - 渲染消息列表
+- `RenderMessage(msg MessageData) string` - 渲染单条消息
+- `RenderUserMessage(content string) string` - 渲染用户消息
+- `RenderAssistantMessage(msg MessageData) string` - 渲染助手消息
+- `RenderToolMessage(msg MessageData) string` - 渲染工具消息
+- `RenderThinking(thinking string, isStreaming bool) string` - 渲染思考内容
+- `RenderContent(content string, isStreaming bool) string` - 渲染正文内容
+- `RenderToolCall(tc ToolCallData, isStreaming bool) string` - 渲染工具调用
+- `RenderToolResult(tc ToolCallData) string` - 渲染工具结果
+- `RenderTokenUsage(usage int) string` - 渲染 token 用量
+- `RenderError(err string) string` - 渲染错误消息
+- `GetWidth() int` - 获取宽度
+- `GetHeight() int` - 获取高度
+- `IsAtBottom() bool` - 检查是否在底部
+- `SetStyles(styles ChatStyles)` - 设置样式
+- `GetStyles() ChatStyles` - 获取样式
+
+#### internal/tui/components/chat_test.go
+- 完整的单元测试覆盖
+- 测试对话显示组件创建和配置
+- 测试组件大小设置
+- 测试自动滚动功能
+- 测试消息渲染（用户消息、思考内容、正文、工具调用、工具结果）
+- 测试样式配置
+- 测试滚动方法
+- 所有测试通过（19个测试用例）
+
+#### internal/tui/app.go
+- 更新 `AppModel` 结构体，使用 `*components.ChatView` 替代 `viewport.Model`
+- 更新 `NewAppModel()` 函数，创建 `ChatView` 组件
+- 更新 `Update()` 方法，适配 `ChatView` 组件
+- 实现 `renderConversation()` 方法，将消息转换为 `ChatView` 格式并渲染
+- 添加 `StatusBar` 结构体定义（用于状态管理）
+
+#### 消息样式区分
+- 用户消息：蓝色（#3B82F6）
+- 模型思考：灰色斜体（#6B7280）
+- 模型正文：默认样式（#F3F4F6）
+- 工具调用：黄色（#F59E0B）
+- 工具响应：绿色（#10B981）
+- 错误信息：红色（#EF4444）
+
+#### 功能特性
+- **滚动查看历史消息**：支持上下翻页、单行滚动
+- **自动滚动到最新消息**：新消息到达时自动滚动到底部
+- **流式输出支持**：显示流式光标（▌）
+- **消息样式区分**：不同类型消息使用不同颜色和样式
+- **工具调用格式化**：流式生成中显示原文，完成后格式化为友好显示
+- **思考内容框**：使用边框和标题突出显示思考内容
+- **工具调用框**：使用边框和标题突出显示工具调用
+
 ### 2026-04-08 Task 5 新增：状态栏组件
 
 #### internal/tui/components/statusbar.go

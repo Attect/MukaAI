@@ -207,14 +207,57 @@ func RegisterStateTools(registry *ToolRegistry) {
 	registry.MustRegisterTool(NewCompleteTaskTool())
 	registry.MustRegisterTool(&failTaskTool{})
 	registry.MustRegisterTool(&updateStateTool{})
+	registry.MustRegisterTool(&endExplorationTool{})
 }
 
 // RegisterStateToolsWithVerifier 注册状态工具（带校验器）
 // verifierFunc: 校验回调函数，用于在complete_task时验证任务完成情况
+// endExplorationFunc: 结束探索回调函数，用于Agent主动声明探索阶段结束
 func RegisterStateToolsWithVerifier(registry *ToolRegistry, verifierFunc func(ctx context.Context, taskGoal string, workDir string) *VerifyResult) {
 	registry.MustRegisterTool(NewCompleteTaskToolWithVerifier(verifierFunc))
 	registry.MustRegisterTool(&failTaskTool{})
 	registry.MustRegisterTool(&updateStateTool{})
+	registry.MustRegisterTool(&endExplorationTool{})
+}
+
+// endExplorationTool 结束探索工具
+// Agent可以调用此工具主动声明探索阶段结束
+type endExplorationTool struct{}
+
+func (t *endExplorationTool) Name() string {
+	return "end_exploration"
+}
+
+func (t *endExplorationTool) Description() string {
+	return "声明探索阶段结束，开始执行任务。当完成环境了解、需求分析等探索工作后，调用此工具通知系统。"
+}
+
+func (t *endExplorationTool) Parameters() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"summary": map[string]interface{}{
+				"type":        "string",
+				"description": "探索阶段总结，包括了解到的环境信息、确定的实现方案等",
+			},
+		},
+		"required": []string{"summary"},
+	}
+}
+
+func (t *endExplorationTool) Execute(ctx context.Context, params map[string]interface{}) (*ToolResult, error) {
+	summary, _ := params["summary"].(string)
+
+	return &ToolResult{
+		Success: true,
+		Data: map[string]interface{}{
+			"message": "探索阶段已结束，系统将开始严格监控任务进度",
+			"summary": summary,
+		},
+		Metadata: map[string]interface{}{
+			"exploration_ended": true,
+		},
+	}, nil
 }
 
 func RegisterDefaultStateTools() {
