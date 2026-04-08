@@ -2,6 +2,53 @@
 
 ## 更新日志
 
+### 2026-04-08 Task 5 新增：状态栏组件
+
+#### internal/tui/components/statusbar.go
+- `StatusBarConfig` - 状态栏配置结构体
+  - ShowDirectory: 是否显示工作目录
+  - ShowTokens: 是否显示 token 用量
+  - ShowInferences: 是否显示推理次数
+  - MaxDirectoryLength: 目录最大显示长度
+- `StatusBar` - 状态栏组件
+  - 显示当前工作目录（📁 图标）
+  - 显示总 token 用量
+  - 显示推理次数
+  - 支持配置显示项
+  - 支持目录路径缩写（超过最大长度时）
+  - 使用 lipgloss 进行样式美化
+- `DefaultStatusBarConfig() StatusBarConfig` - 返回默认状态栏配置
+- `NewStatusBar(config StatusBarConfig) *StatusBar` - 创建新的状态栏组件
+- `SetWidth(width int)` - 设置宽度
+- `SetDirectory(dir string)` - 设置工作目录
+- `SetTokens(tokens int)` - 设置 token 用量
+- `SetInferenceCount(count int)` - 设置推理次数
+- `UpdateTokens(delta int)` - 更新 token 用量（增量）
+- `UpdateInferenceCount(delta int)` - 更新推理次数（增量）
+- `Render() string` - 渲染状态栏
+- `formatDirectory(dir string) string` - 格式化目录显示
+- `abbreviatePath(path string, maxLen int) string` - 缩写路径
+- `String() string` - 实现 Stringer 接口
+
+#### internal/tui/components/statusbar_test.go
+- 完整的单元测试覆盖
+- 测试状态栏创建和配置
+- 测试各项设置方法
+- 测试渲染功能
+- 测试目录格式化和缩写
+- 测试并发安全性
+- 所有测试通过（12个测试用例）
+
+#### internal/tui/styles.go
+- 修复 `FormatStatusBar` 函数，使用正确的格式化方式
+- 添加 fmt 包导入
+
+#### internal/tui/app.go
+- 移除旧的 `StatusBar` 结构体定义
+- 使用 `components.StatusBar` 组件
+- 更新 `NewAppModel()` 初始化状态栏组件
+- 更新 `handleStreamComplete()` 方法，同步更新状态栏数据
+
 ### 2026-04-08 Task 8 新增：对话列表弹窗组件
 
 #### internal/tui/components/dialog.go

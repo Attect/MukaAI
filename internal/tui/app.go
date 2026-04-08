@@ -4,9 +4,10 @@ package tui
 import (
 	"time"
 
-	tea "charm.land/bubbletea/v2"
 	"charm.land/bubbles/v2/textinput"
-	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+
+	"agentplus/internal/tui/components"
 )
 
 // InputMode 输入模式类型
@@ -131,7 +132,7 @@ type AppModel struct {
 
 	// UI 组件
 	input     textinput.Model
-	chatView  viewport.Model
+	chatView  *components.ChatView
 	statusBar StatusBar
 
 	// 状态标志
@@ -208,16 +209,15 @@ func NewAppModel() AppModel {
 	ti.Focus()
 	ti.CharLimit = 10000
 
-	// 创建视口（使用 functional options）
-	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(24))
-	vp.SetContent("")
+	// 创建对话显示组件
+	chatView := components.NewChatView(80, 24)
 
 	return AppModel{
-		input:        ti,
-		chatView:     vp,
+		input:         ti,
+		chatView:      chatView,
 		conversations: make([]*Conversation, 0),
-		inputMode:    InputModeSingleLine,
-		initialized:  false,
+		inputMode:     InputModeSingleLine,
+		initialized:   false,
 	}
 }
 
@@ -238,8 +238,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.statusBar.Width = msg.Width
-		m.chatView.SetWidth(msg.Width)
-		m.chatView.SetHeight(msg.Height - 4) // 减去状态栏和输入框的高度
+		m.chatView.SetSize(msg.Width, msg.Height-4) // 减去状态栏和输入框的高度
 
 	case tea.KeyMsg:
 		// 处理键盘输入
@@ -305,9 +304,8 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.input, cmd = m.input.Update(msg)
 	cmds = append(cmds, cmd)
 
-	// 更新视口
-	var vpCmd tea.Cmd
-	m.chatView, vpCmd = m.chatView.Update(msg)
+	// 更新对话显示组件
+	_, vpCmd := m.chatView.Update(msg)
 	cmds = append(cmds, vpCmd)
 
 	return m, tea.Batch(cmds...)
@@ -459,6 +457,10 @@ func (m *AppModel) handleStreamComplete(usage int) {
 	m.totalTokens += usage
 	m.inferenceCount++
 
+	// 更新状态栏
+	m.statusBar.TotalTokens = m.totalTokens
+	m.statusBar.InferenceCount = m.inferenceCount
+
 	m.isStreaming = false
 	m.updateChatView()
 }
@@ -481,7 +483,7 @@ func (m *AppModel) updateChatView() {
 
 // renderStatusBar 渲染状态栏
 func (m AppModel) renderStatusBar() string {
-	return m.statusBar.Render()
+	return FormatStatusBar(m.currentDir, m.totalTokens, m.inferenceCount, m.width)
 }
 
 // renderChatArea 渲染对话区
@@ -496,9 +498,50 @@ func (m AppModel) renderInputArea() string {
 
 // renderConversation 渲染对话内容
 func (m AppModel) renderConversation(conv *Conversation) string {
-	// TODO: 实现对话内容的格式化渲染
-	// 包括用户消息、思考内容、正文、工具调用等
-	return ""
+	// 将 Conversation 的消息转换为 ChatView 的消息格式
+	messages := make([]components.MessageData, 0, len(conv.Messages))
+
+	for _, msg := range conv.Messages {
+		// 转换消息角色
+		var role string
+		switch msg.Role {
+		case MessageRoleUser:
+			role = "user"
+		case MessageRoleAssistant:
+			role = "assistant"
+		case MessageRoleTool:
+			role = "tool"
+		}
+
+		// 转换工具调用
+		toolCalls := make([]components.ToolCallData, 0, len(msg.ToolCalls))
+		for _, tc := range msg.ToolCalls {
+			toolCalls = append(toolCalls, components.ToolCallData{
+				ID:          tc.ID,
+				Name:        tc.Name,
+				Arguments:   tc.Arguments,
+				IsComplete:  tc.IsComplete,
+				Result:      tc.Result,
+				ResultError: tc.ResultError,
+			})
+		}
+
+		// 创建消息数据
+		msgData := components.MessageData{
+			Role:          role,
+			Content:       msg.Content,
+			Thinking:      msg.Thinking,
+			ToolCalls:     toolCalls,
+			TokenUsage:    msg.TokenUsage,
+			IsStreaming:   msg.IsStreaming,
+			StreamingType: msg.StreamingType,
+		}
+
+		messages = append(messages, msgData)
+	}
+
+	// 使用 ChatView 渲染消息
+	return m.chatView.RenderMessages(messages)
 }
 
 // SetAgent 设置 Agent 接口
@@ -523,11 +566,4 @@ func (m *AppModel) SwitchConversation(id string) {
 			break
 		}
 	}
-}
-
-// Render 渲染状态栏
-func (s StatusBar) Render() string {
-	// TODO: 实现状态栏渲染
-	// 显示：工作目录、总 token 用量、推理次数
-	return ""
 }

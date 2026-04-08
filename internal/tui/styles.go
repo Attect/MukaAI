@@ -2,6 +2,8 @@
 package tui
 
 import (
+	"fmt"
+
 	"charm.land/lipgloss/v2"
 )
 
@@ -363,15 +365,16 @@ func FormatError(err string) string {
 }
 
 // FormatStatusBar 格式化状态栏
+// 注意：此函数已废弃，请使用 components.StatusBar 组件
 func FormatStatusBar(dir string, totalTokens, inferenceCount int, width int) string {
 	// 工作目录
 	dirPart := styleStatusItem.Render("📁 " + dir)
 
 	// Token 用量
-	tokenPart := styleStatusItem.Render("Tokens: " + string(rune(totalTokens)))
+	tokenPart := styleStatusItem.Render(fmt.Sprintf("Tokens: %d", totalTokens))
 
 	// 推理次数
-	inferencePart := styleStatusItem.Render("Inferences: " + string(rune(inferenceCount)))
+	inferencePart := styleStatusItem.Render(fmt.Sprintf("Inferences: %d", inferenceCount))
 
 	// 组合状态栏
 	return lipgloss.JoinHorizontal(lipgloss.Top, dirPart, tokenPart, inferencePart)
