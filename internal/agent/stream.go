@@ -32,6 +32,11 @@ type StreamHandler interface {
 	// OnError 处理错误
 	// 当流式输出过程中发生错误时调用
 	OnError(err error)
+
+	// OnTaskDone 处理任务完成
+	// 当整个任务（包括所有迭代）完成后调用，无论成功还是失败
+	// 与 OnComplete 的区别：OnComplete 是单次推理完成，OnTaskDone 是整个任务完成
+	OnTaskDone()
 }
 
 // ToolCallInfo 工具调用信息
@@ -65,6 +70,7 @@ type StreamHandlerFunc struct {
 	onToolResult func(result ToolCallInfo)
 	onComplete   func(usage int)
 	onError      func(err error)
+	onTaskDone   func()
 }
 
 // NewStreamHandlerFunc 创建基于函数的流式处理器
@@ -108,6 +114,12 @@ func (h *StreamHandlerFunc) OnError(fn func(err error)) *StreamHandlerFunc {
 	return h
 }
 
+// OnTaskDone 设置任务完成处理函数
+func (h *StreamHandlerFunc) OnTaskDone(fn func()) *StreamHandlerFunc {
+	h.onTaskDone = fn
+	return h
+}
+
 // Build 构建 StreamHandler 接口
 func (h *StreamHandlerFunc) Build() StreamHandler {
 	return &streamHandlerFuncImpl{
@@ -117,6 +129,7 @@ func (h *StreamHandlerFunc) Build() StreamHandler {
 		onToolResult: h.onToolResult,
 		onComplete:   h.onComplete,
 		onError:      h.onError,
+		onTaskDone:   h.onTaskDone,
 	}
 }
 
@@ -128,6 +141,7 @@ type streamHandlerFuncImpl struct {
 	onToolResult func(result ToolCallInfo)
 	onComplete   func(usage int)
 	onError      func(err error)
+	onTaskDone   func()
 }
 
 func (h *streamHandlerFuncImpl) OnThinking(chunk string) {
@@ -163,6 +177,12 @@ func (h *streamHandlerFuncImpl) OnComplete(usage int) {
 func (h *streamHandlerFuncImpl) OnError(err error) {
 	if h.onError != nil {
 		h.onError(err)
+	}
+}
+
+func (h *streamHandlerFuncImpl) OnTaskDone() {
+	if h.onTaskDone != nil {
+		h.onTaskDone()
 	}
 }
 

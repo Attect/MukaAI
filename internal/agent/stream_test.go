@@ -16,6 +16,7 @@ func TestStreamHandlerFunc(t *testing.T) {
 	var toolResultCalled bool
 	var completeCalled bool
 	var errorCalled bool
+	var taskDoneCalled bool
 
 	// 创建流式处理器
 	handler := NewStreamHandlerFunc().
@@ -55,6 +56,9 @@ func TestStreamHandlerFunc(t *testing.T) {
 				t.Errorf("Expected error 'test error', got '%s'", err.Error())
 			}
 		}).
+		OnTaskDone(func() {
+			taskDoneCalled = true
+		}).
 		Build()
 
 	// 测试各个方法
@@ -87,6 +91,11 @@ func TestStreamHandlerFunc(t *testing.T) {
 	if !errorCalled {
 		t.Error("OnError was not called")
 	}
+
+	handler.OnTaskDone()
+	if !taskDoneCalled {
+		t.Error("OnTaskDone was not called")
+	}
 }
 
 // TestStreamHandlerFuncWithNilFunctions 测试空函数的流式处理器
@@ -101,6 +110,7 @@ func TestStreamHandlerFuncWithNilFunctions(t *testing.T) {
 	handler.OnToolResult(ToolCallInfo{Name: "test"})
 	handler.OnComplete(100)
 	handler.OnError(errors.New("error"))
+	handler.OnTaskDone()
 }
 
 // TestConvertToolCall 测试工具调用转换

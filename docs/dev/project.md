@@ -2,6 +2,83 @@
 
 ## 更新日志
 
+### 2026-04-09 Task GUI 新增：Wails GUI 后端绑定层
+
+#### internal/agent/stream.go
+- `StreamHandler` 接口新增方法：
+  - `OnTaskDone()` - 处理任务完成，当整个任务（包括所有迭代）完成后调用
+  - 与 `OnComplete` 的区别：OnComplete 是单次推理完成，OnTaskDone 是整个任务完成
+- `StreamHandlerFunc` 新增字段和方法：
+  - `onTaskDone func()` - 任务完成回调函数字段
+  - `OnTaskDone(fn func()) *StreamHandlerFunc` - 设置任务完成处理函数（链式调用）
+- `streamHandlerFuncImpl` 新增字段和方法：
+  - `onTaskDone func()` - 任务完成回调函数字段
+  - `OnTaskDone()` - 实现StreamHandler接口，调用onTaskDone回调
+
+#### internal/agent/core.go
+- `SendMessage()` 方法修改：
+  - 将 `handler.OnError(nil)` 改为 `handler.OnTaskDone()`
+  - 使用语义更明确的OnTaskDone通知GUI推理已完全结束，替代之前用OnError(nil)的hack方式
+
+#### internal/gui/app.go - 新增文件
+- `Conversation` - 对话信息结构体（暴露给前端的JSON结构）
+  - ID, Title, CreatedAt, Status, TokenUsage, MessageCount
+- `Message` - 消息信息结构体（暴露给前端的JSON结构）
+  - Role, Content, Thinking, ToolCalls, TokenUsage, IsStreaming, StreamingType, Timestamp
+- `ToolCall` - 工具调用信息结构体（暴露给前端的JSON结构）
+  - ID, Name, Arguments, IsComplete, Result, ResultError
+- `TokenStats` - Token使用统计结构体
+  - TotalTokens, InferenceCount
+- `App` - Wails应用绑定层，作为前端与后端Agent之间的桥梁
+  - 管理对话状态和消息流
+  - 内部使用conversation和message结构管理对话数据
+- `NewApp()` - 创建新的App实例
+- `startup(ctx)` - Wails生命周期回调
+- `SetAgent(ag)` - 设置Agent实例
+- `SetCurrentDir(dir)` - 设置当前工作目录
+- `SendMessage(content)` - 发送用户消息并启动推理（前端主要入口）
+- `GetConversations()` - 获取所有对话列表
+- `GetConversationData()` - 获取当前活跃对话的完整数据
+- `SetWorkDir(path)` - 设置工作目录并通知前端
+- `GetWorkDir()` - 获取当前工作目录
+- `GetTokenStats()` - 获取Token使用统计
+- `InterruptInference()` - 中断当前推理
+- `ClearConversation()` - 清空当前对话的消息
+
+#### internal/gui/stream_bridge.go - 新增文件
+- `StreamBridge` - StreamHandler到Wails事件系统的桥接器
+  - 实现agent.StreamHandler接口
+  - 将所有流式事件转发为Wails前端事件
+  - 同时更新App中的对话状态
+- `NewStreamBridge(app)` - 创建新的StreamBridge实例
+- `SetContext(ctx)` - 设置Wails上下文
+- `OnThinking(chunk)` - 处理思考内容块，发射stream:thinking事件
+- `OnContent(chunk)` - 处理正文内容块，发射stream:content事件
+- `OnToolCall(call, isComplete)` - 处理工具调用，发射stream:toolcall事件
+- `OnToolResult(result)` - 处理工具执行结果，发射stream:toolresult事件
+- `OnComplete(usage)` - 处理推理完成，发射stream:complete和tokenstats:updated事件
+- `OnError(err)` - 处理错误，发射stream:error事件
+- `OnTaskDone()` - 处理任务完成，发射stream:done事件
+
+#### Wails事件列表
+| 事件名 | 数据 | 说明 |
+|--------|------|------|
+| stream:thinking | string | 思考内容块 |
+| stream:content | string | 正文内容块 |
+| stream:toolcall | map | 工具调用信息 |
+| stream:toolresult | map | 工具执行结果 |
+| stream:complete | map{usage} | 单次推理完成 |
+| stream:error | string | 错误信息 |
+| stream:done | - | 整个任务完成 |
+| stream:interrupted | - | 用户中断推理 |
+| conversation:updated | map | 对话数据更新 |
+| tokenstats:updated | TokenStats | Token统计更新 |
+| workdir:changed | string | 工作目录变更 |
+
+#### internal/agent/stream_test.go
+- 更新 `TestStreamHandlerFunc` 测试用例，增加OnTaskDone测试
+- 更新 `TestStreamHandlerFuncWithNilFunctions` 测试用例，增加OnTaskDone空函数安全调用测试
+
 ### 2026-04-08 Task 20 新增：集成测试与优化
 
 #### internal/tui/performance_test.go

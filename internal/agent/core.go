@@ -337,22 +337,22 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 				}
 
 				// 添加工具结果到历史
-			a.history.AddMessages(toolResults)
+				a.history.AddMessages(toolResults)
 
-			// 检查是否有end_exploration工具调用
-			for _, tc := range response.ToolCalls {
-				if tc.Function.Name == "end_exploration" {
-					// 声明探索阶段结束
-					a.reviewer.EndExploration()
-					if a.logger != nil {
-						a.logger.LogMessage("system", "探索阶段已结束，开始严格监控任务进度")
+				// 检查是否有end_exploration工具调用
+				for _, tc := range response.ToolCalls {
+					if tc.Function.Name == "end_exploration" {
+						// 声明探索阶段结束
+						a.reviewer.EndExploration()
+						if a.logger != nil {
+							a.logger.LogMessage("system", "探索阶段已结束，开始严格监控任务进度")
+						}
 					}
 				}
-			}
 
-			// 检查是否有任务完成/失败的工具调用
-			for _, tc := range response.ToolCalls {
-				if tc.Function.Name == "complete_task" {
+				// 检查是否有任务完成/失败的工具调用
+				for _, tc := range response.ToolCalls {
+					if tc.Function.Name == "complete_task" {
 						// 在完成任务前进行校验
 						verifyResult := a.verifyTaskCompletion(runCtx, taskGoal)
 
@@ -624,11 +624,18 @@ func (a *Agent) callModel(ctx context.Context) (*modelResponse, error) {
 			continue
 		}
 
+		// 处理思考内容（通过 reasoning_content 字段，如 Qwen3.5）
+		if choice.Delta.ReasoningContent != "" {
+			if handler != nil {
+				handler.OnThinking(choice.Delta.ReasoningContent)
+			}
+		}
+
 		// 处理内容
 		if choice.Delta.Content != "" {
 			contentBuilder.WriteString(choice.Delta.Content)
 
-			// 使用思考标签处理器处理内容
+			// 使用思考标签处理器处理内容（兼容 <thinking> 标签模式）
 			thinking, content := thinkingProcessor.Process(choice.Delta.Content)
 
 			// 调用流式处理器回调
@@ -912,6 +919,37 @@ func (a *Agent) SetStreamHandler(handler StreamHandler) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.streamHandler = handler
+}
+
+// SendMessage 发送用户消息并启动推理
+// 这是一个异步方法，会在后台启动推理过程
+func (a *Agent) SendMessage(content string) error {
+	// 检查是否已在运行
+	a.mu.RLock()
+	if a.running {
+		a.mu.RUnlock()
+		return fmt.Errorf("agent is already running")
+	}
+	a.mu.RUnlock()
+
+	// 在后台启动推理
+	go func() {
+		ctx := context.Background()
+		_, err := a.Run(ctx, content)
+		if err != nil {
+			// 如果有流式处理器，发送错误消息
+			if handler := a.GetStreamHandler(); handler != nil {
+				handler.OnError(err)
+			}
+		}
+		// 无论成功还是失败，都发送一个任务完成信号
+		// 使用 OnTaskDone 通知 GUI 推理已完全结束
+		if handler := a.GetStreamHandler(); handler != nil {
+			handler.OnTaskDone()
+		}
+	}()
+
+	return nil
 }
 
 // GetStreamHandler 获取流式消息处理器
