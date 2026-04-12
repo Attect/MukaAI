@@ -492,3 +492,375 @@ func TestFeedbackLevels(t *testing.T) {
 		}
 	}
 }
+
+// === 以下是新增的测试用例，提升覆盖率 ===
+
+// TestFeedbackMessage_无建议 测试不含建议的反馈消息
+func TestFeedbackMessage_无建议(t *testing.T) {
+	feedback := &FeedbackMessage{
+		Level:       FeedbackLevelInfo,
+		Title:       "提示",
+		Content:     "这是一条提示信息",
+		Suggestions: nil,
+	}
+
+	msg := feedback.ToUserMessage()
+	if !strings.Contains(msg.Content, "根据以上反馈调整") {
+		t.Error("消息应包含结尾提示语")
+	}
+}
+
+// TestFeedbackMessage_空内容 测试空内容的反馈消息
+func TestFeedbackMessage_空内容(t *testing.T) {
+	feedback := &FeedbackMessage{
+		Level:   FeedbackLevelError,
+		Title:   "错误",
+		Content: "",
+	}
+
+	msg := feedback.ToUserMessage()
+	if msg.Role != model.RoleUser {
+		t.Errorf("期望角色为 user, 实际 '%s'", msg.Role)
+	}
+	if !strings.Contains(msg.Content, "[ERROR]") {
+		t.Error("应包含ERROR级别标记")
+	}
+}
+
+// TestNewFeedbackInjector_零MaxFeedbackLength 测试MaxFeedbackLength为零时使用默认值
+func TestNewFeedbackInjector_零MaxFeedbackLength(t *testing.T) {
+	config := &FeedbackInjectorConfig{
+		MaxFeedbackLength: 0,
+	}
+	injector := NewFeedbackInjector(config)
+	if injector.maxFeedbackLength != 500 {
+		t.Errorf("期望默认值500, 实际 %d", injector.maxFeedbackLength)
+	}
+}
+
+// TestNewFeedbackInjector_负数MaxFeedbackLength 测试负数MaxFeedbackLength
+func TestNewFeedbackInjector_负数MaxFeedbackLength(t *testing.T) {
+	config := &FeedbackInjectorConfig{
+		MaxFeedbackLength: -100,
+	}
+	injector := NewFeedbackInjector(config)
+	if injector.maxFeedbackLength != 500 {
+		t.Errorf("期望默认值500, 实际 %d", injector.maxFeedbackLength)
+	}
+}
+
+// TestInjectBlockingFeedback_含证据 测试阻断反馈包含证据
+func TestInjectBlockingFeedback_含证据(t *testing.T) {
+	config := &FeedbackInjectorConfig{IncludeEvidence: true}
+	injector := NewFeedbackInjector(config)
+
+	result := &ReviewResult{
+		Status: ReviewStatusBlock,
+		Issues: []ReviewIssue{
+			{
+				Type:        IssueTypeInfiniteLoop,
+				Severity:    "critical",
+				Description: "无限循环",
+				Evidence:    "重复了5次",
+				Suggestion:  "修改参数",
+			},
+		},
+	}
+
+	msg := injector.InjectBlockingFeedback(result)
+	if !strings.Contains(msg.Content, "证据") {
+		t.Error("启用证据时消息应包含证据")
+	}
+	if !strings.Contains(msg.Content, "重复了5次") {
+		t.Error("消息应包含具体证据内容")
+	}
+}
+
+// TestInjectBlockingFeedback_不含证据 测试阻断反馈不包含证据
+func TestInjectBlockingFeedback_不含证据(t *testing.T) {
+	config := &FeedbackInjectorConfig{IncludeEvidence: false}
+	injector := NewFeedbackInjector(config)
+
+	result := &ReviewResult{
+		Status: ReviewStatusBlock,
+		Issues: []ReviewIssue{
+			{
+				Type:        IssueTypeInfiniteLoop,
+				Severity:    "critical",
+				Description: "无限循环",
+				Evidence:    "重复了5次",
+				Suggestion:  "修改参数",
+			},
+		},
+	}
+
+	msg := injector.InjectBlockingFeedback(result)
+	if strings.Contains(msg.Content, "证据") && strings.Contains(msg.Content, "重复了5次") {
+		t.Error("禁用证据时消息不应包含证据")
+	}
+}
+
+// TestInjectWarningFeedback_含建议 测试警告反馈包含建议
+func TestInjectWarningFeedback_含建议(t *testing.T) {
+	injector := NewFeedbackInjector(nil)
+
+	result := &ReviewResult{
+		Status: ReviewStatusWarning,
+		Issues: []ReviewIssue{
+			{
+				Type:        IssueTypeDirection,
+				Severity:    "medium",
+				Description: "方向偏离",
+				Suggestion:  "请调整方向",
+			},
+		},
+	}
+
+	msg := injector.InjectWarningFeedback(result)
+	if !strings.Contains(msg.Content, "请调整方向") {
+		t.Error("消息应包含建议")
+	}
+}
+
+// TestInjectProgressFeedback_等于一半 测试迭代次数恰好等于一半
+func TestInjectProgressFeedback_等于一半(t *testing.T) {
+	injector := NewFeedbackInjector(nil)
+
+	// 恰好一半 - 26 > 50/2 = 25
+	msg := injector.InjectProgressFeedback(26, 50)
+	if !strings.Contains(msg.Content, "超过最大迭代次数的一半") {
+		t.Error("迭代超过一半时应包含警告")
+	}
+}
+
+// TestInjectLoopDetectedFeedback_基本内容 测试循环检测反馈包含所有必要信息
+func TestInjectLoopDetectedFeedback_基本内容(t *testing.T) {
+	injector := NewFeedbackInjector(nil)
+
+	msg := injector.InjectLoopDetectedFeedback("search", `{"q": "test"}`, 5)
+
+	// 验证包含建议
+	if !strings.Contains(msg.Content, "建议") {
+		t.Error("应包含建议")
+	}
+	if !strings.Contains(msg.Content, "5 次") {
+		t.Error("应包含重复次数")
+	}
+}
+
+// TestInjectFailureFeedback_基本内容 测试失败反馈包含所有必要信息
+func TestInjectFailureFeedback_基本内容(t *testing.T) {
+	injector := NewFeedbackInjector(nil)
+
+	msg := injector.InjectFailureFeedback("create_file", 2, "disk full")
+
+	if !strings.Contains(msg.Content, "连续失败") {
+		t.Error("应包含连续失败标题")
+	}
+	if !strings.Contains(msg.Content, "create_file") {
+		t.Error("应包含工具名称")
+	}
+	if !strings.Contains(msg.Content, "disk full") {
+		t.Error("应包含最后错误")
+	}
+	if !strings.Contains(msg.Content, "建议") {
+		t.Error("应包含建议")
+	}
+}
+
+// TestInjectDirectionFeedback_长输出 测试方向偏离反馈截断长输出
+func TestInjectDirectionFeedback_长输出(t *testing.T) {
+	injector := NewFeedbackInjector(nil)
+
+	longOutput := ""
+	for i := 0; i < 1000; i++ {
+		longOutput += "这是一段很长的输出内容"
+	}
+
+	msg := injector.InjectDirectionFeedback("任务目标", longOutput)
+
+	if !strings.Contains(msg.Content, "任务目标") {
+		t.Error("应包含任务目标")
+	}
+	// 输出应被截断
+	if strings.Contains(msg.Content, longOutput) {
+		t.Error("长输出应被截断")
+	}
+}
+
+// TestBatchInjectFeedback_全部为空 测试全部为空结果的批量注入
+func TestBatchInjectFeedback_全部为空(t *testing.T) {
+	injector := NewFeedbackInjector(nil)
+
+	results := []*ReviewResult{nil, nil, nil}
+	messages := injector.BatchInjectFeedback(results)
+
+	if len(messages) != 0 {
+		t.Errorf("期望0条消息, 实际 %d", len(messages))
+	}
+}
+
+// TestBatchInjectFeedback_混合结果 测试混合结果的批量注入
+func TestBatchInjectFeedback_混合结果(t *testing.T) {
+	injector := NewFeedbackInjector(nil)
+
+	results := []*ReviewResult{
+		{
+			Status: ReviewStatusWarning,
+			Issues: []ReviewIssue{
+				{Type: IssueTypeDirection, Severity: "medium", Description: "偏离", Suggestion: "调整"},
+			},
+		},
+		{
+			Status: ReviewStatusBlock,
+			Issues: []ReviewIssue{
+				{Type: IssueTypeInfiniteLoop, Severity: "critical", Description: "循环"},
+			},
+		},
+		nil,
+		{Status: ReviewStatusPass, Issues: []ReviewIssue{}},
+		{Status: ReviewStatusPass, Issues: nil},
+	}
+
+	messages := injector.BatchInjectFeedback(results)
+	if len(messages) != 2 {
+		t.Errorf("期望2条消息(只有有问题的结果), 实际 %d", len(messages))
+	}
+}
+
+// TestFormatFeedbackForLog_多问题 测试多问题的日志格式化
+func TestFormatFeedbackForLog_多问题(t *testing.T) {
+	result := &ReviewResult{
+		Status:  ReviewStatusBlock,
+		Summary: "多个问题",
+		Issues: []ReviewIssue{
+			{Type: IssueTypeDirection, Severity: "high", Description: "偏离目标"},
+			{Type: IssueTypeInfiniteLoop, Severity: "critical", Description: "循环"},
+		},
+	}
+
+	output := FormatFeedbackForLog(result)
+
+	if !strings.Contains(output, "direction") {
+		t.Error("应包含第一个问题类型")
+	}
+	if !strings.Contains(output, "infinite_loop") {
+		t.Error("应包含第二个问题类型")
+	}
+}
+
+// TestGetTitle_各种状态 测试各种审查状态的标题
+func TestGetTitle_各种状态(t *testing.T) {
+	injector := NewFeedbackInjector(nil)
+
+	tests := []struct {
+		status   ReviewStatus
+		expected string
+	}{
+		{ReviewStatusBlock, "执行被阻断，需要修正"},
+		{ReviewStatusWarning, "检测到潜在问题"},
+		{ReviewStatusPass, "审查反馈"},
+	}
+
+	for _, tt := range tests {
+		result := &ReviewResult{Status: tt.status}
+		title := injector.getTitle(result)
+		if title != tt.expected {
+			t.Errorf("状态 %s: 期望标题 '%s', 实际 '%s'", tt.status, tt.expected, title)
+		}
+	}
+}
+
+// TestIssueSeverityToFeedbackLevel_所有级别 测试所有严重度到反馈级别的映射
+func TestIssueSeverityToFeedbackLevel_所有级别(t *testing.T) {
+	injector := NewFeedbackInjector(nil)
+
+	tests := []struct {
+		severity string
+		expected FeedbackLevel
+	}{
+		{"critical", FeedbackLevelCritical},
+		{"high", FeedbackLevelError},
+		{"medium", FeedbackLevelWarning},
+		{"low", FeedbackLevelInfo},
+		{"", FeedbackLevelInfo},
+		{"unknown", FeedbackLevelInfo},
+	}
+
+	for _, tt := range tests {
+		level := injector.issueSeverityToFeedbackLevel(tt.severity)
+		if level != tt.expected {
+			t.Errorf("严重度 '%s': 期望 %s, 实际 %s", tt.severity, tt.expected, level)
+		}
+	}
+}
+
+// TestBuildIssueContent_不含证据 测试禁用证据时的内容构建
+func TestBuildIssueContent_不含证据(t *testing.T) {
+	config := &FeedbackInjectorConfig{IncludeEvidence: false}
+	injector := NewFeedbackInjector(config)
+
+	issue := ReviewIssue{
+		Description: "问题描述",
+		Evidence:    "证据内容",
+	}
+
+	content := injector.buildIssueContent(issue)
+	if strings.Contains(content, "证据内容") {
+		t.Error("禁用证据时不应包含证据内容")
+	}
+	if !strings.Contains(content, "问题描述") {
+		t.Error("应包含问题描述")
+	}
+}
+
+// TestBuildIssueContent_含证据 测试启用证据时的内容构建
+func TestBuildIssueContent_含证据(t *testing.T) {
+	config := &FeedbackInjectorConfig{IncludeEvidence: true}
+	injector := NewFeedbackInjector(config)
+
+	issue := ReviewIssue{
+		Description: "问题描述",
+		Evidence:    "证据内容",
+	}
+
+	content := injector.buildIssueContent(issue)
+	if !strings.Contains(content, "证据内容") {
+		t.Error("启用证据时应包含证据内容")
+	}
+}
+
+// TestBuildIssueContent_无证据 测试无证据时的内容构建
+func TestBuildIssueContent_无证据(t *testing.T) {
+	config := &FeedbackInjectorConfig{IncludeEvidence: true}
+	injector := NewFeedbackInjector(config)
+
+	issue := ReviewIssue{
+		Description: "问题描述",
+		Evidence:    "",
+	}
+
+	content := injector.buildIssueContent(issue)
+	if !strings.Contains(content, "问题描述") {
+		t.Error("应包含问题描述")
+	}
+}
+
+// TestInjectFeedbackForIssue_不含证据 测试单问题反馈不含证据
+func TestInjectFeedbackForIssue_不含证据(t *testing.T) {
+	config := &FeedbackInjectorConfig{IncludeEvidence: false}
+	injector := NewFeedbackInjector(config)
+
+	issue := ReviewIssue{
+		Type:        IssueTypeDirection,
+		Severity:    "medium",
+		Description: "偏离",
+		Evidence:    "证据",
+		Suggestion:  "建议",
+	}
+
+	msg := injector.InjectFeedbackForIssue(issue)
+	if strings.Contains(msg.Content, "证据") {
+		t.Error("禁用证据时不应包含证据")
+	}
+}
