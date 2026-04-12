@@ -18,8 +18,8 @@ vendor/
 go.work
 
 # Build output
-agentplus
-agentplus.exe
+/agentplus
+/agentplus.exe
 
 # IDE
 .idea/
