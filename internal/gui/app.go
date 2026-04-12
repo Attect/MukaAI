@@ -64,6 +64,7 @@ type App struct {
 	totalTokens    int
 	inferenceCount int
 	isStreaming    bool
+	convStore      *ConversationStore // 对话持久化存储
 }
 
 // conversation 内部对话结构，包含消息列表和当前流式消息
@@ -99,8 +100,30 @@ func NewApp() *App {
 
 // Startup Wails生命周期回调，在应用启动时调用
 // 必须为导出方法，以便外部包（如cmd/agentplus）在OnStartup回调中调用
+// 初始化对话持久化存储并加载历史对话
 func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
+
+	// 初始化对话持久化存储
+	convDir := filepath.Join(a.currentDir, "state", "conversations")
+	store, err := NewConversationStore(convDir)
+	if err != nil {
+		fmt.Printf("[App] 初始化对话存储失败: %v\n", err)
+		return
+	}
+	a.convStore = store
+
+	// 加载历史对话
+	conversations, err := store.LoadAllConversations()
+	if err != nil {
+		fmt.Printf("[App] 加载历史对话失败: %v\n", err)
+		return
+	}
+	if len(conversations) > 0 {
+		a.conversations = conversations
+		// 激活最后一个（最新的）对话
+		a.activeConvID = conversations[len(conversations)-1].id
+	}
 }
 
 // SetAgent 设置Agent实例
@@ -112,6 +135,64 @@ func (a *App) SetAgent(ag *agent.Agent) {
 // SetCurrentDir 设置当前工作目录
 func (a *App) SetCurrentDir(dir string) {
 	a.currentDir = dir
+}
+
+// Shutdown 关闭应用资源
+// 应在应用退出时调用，确保所有对话数据完整落盘
+func (a *App) Shutdown() {
+	if a.convStore != nil {
+		a.convStore.Close()
+	}
+}
+
+// saveConv 触发异步保存指定对话到磁盘
+// 必须在持有a.mu锁的情况下调用，以保证快照数据一致性
+func (a *App) saveConv(conv *conversation) {
+	if a.convStore != nil && conv != nil {
+		a.convStore.SaveConversation(conv)
+	}
+}
+
+// DeleteConversation 删除指定对话
+// 同时从内存和磁盘删除，如果删除的是当前活跃对话则切换到最后一个
+func (a *App) DeleteConversation(id string) error {
+	a.mu.Lock()
+	if a.isStreaming {
+		a.mu.Unlock()
+		return fmt.Errorf("cannot delete conversation while streaming")
+	}
+
+	// 从内存切片中移除
+	idx := -1
+	for i, conv := range a.conversations {
+		if conv.id == id {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		a.mu.Unlock()
+		return fmt.Errorf("conversation not found: %s", id)
+	}
+	a.conversations = append(a.conversations[:idx], a.conversations[idx+1:]...)
+
+	// 从磁盘删除
+	if a.convStore != nil {
+		a.convStore.DeleteConversation(id)
+	}
+
+	// 如果删除的是活跃对话，切换到剩余的最后一个
+	if a.activeConvID == id {
+		if len(a.conversations) > 0 {
+			a.activeConvID = a.conversations[len(a.conversations)-1].id
+		} else {
+			a.activeConvID = ""
+		}
+	}
+	a.mu.Unlock()
+
+	runtime.EventsEmit(a.ctx, "conversation:updated", a.GetConversationData())
+	return nil
 }
 
 // SendMessage 发送用户消息并启动推理
@@ -135,6 +216,7 @@ func (a *App) SendMessage(content string) error {
 	})
 	conv.currentMessage = nil
 	a.isStreaming = true
+	a.saveConv(conv) // 持久化：保存用户消息
 	a.mu.Unlock()
 
 	runtime.EventsEmit(a.ctx, "conversation:updated", a.GetConversationData())
@@ -289,6 +371,7 @@ func (a *App) InterruptInference() {
 		conv.currentMessage.content += "\n\n[用户打断]"
 		conv.messages = append(conv.messages, conv.currentMessage)
 		conv.currentMessage = nil
+		a.saveConv(conv) // 持久化：保存打断时的消息
 	}
 	a.mu.Unlock()
 	runtime.EventsEmit(a.ctx, "stream:interrupted")
@@ -332,6 +415,7 @@ func (a *App) ClearConversation() {
 	if conv != nil {
 		conv.messages = nil
 		conv.currentMessage = nil
+		a.saveConv(conv) // 持久化：保存清空后的状态
 	}
 	a.mu.Unlock()
 	runtime.EventsEmit(a.ctx, "conversation:updated", a.GetConversationData())

@@ -161,6 +161,7 @@ func (b *StreamBridge) OnComplete(usage int) {
 		conv.tokenUsage += usage
 		b.app.totalTokens += usage
 		b.app.inferenceCount++
+		b.app.saveConv(conv) // 持久化：保存token统计
 	}
 	b.app.mu.Unlock()
 
@@ -182,6 +183,7 @@ func (b *StreamBridge) OnError(err error) {
 			// 只有当消息有实际内容时才保存，避免保存空消息
 			if conv.currentMessage.content != "" || conv.currentMessage.thinking != "" || len(conv.currentMessage.toolCalls) > 0 {
 				conv.messages = append(conv.messages, conv.currentMessage)
+				b.app.saveConv(conv) // 持久化：保存错误时固化的消息
 			}
 			conv.currentMessage = nil
 		}
@@ -206,6 +208,7 @@ func (b *StreamBridge) OnTaskDone() {
 		conv.currentMessage.isStreaming = false
 		conv.messages = append(conv.messages, conv.currentMessage)
 		conv.currentMessage = nil
+		b.app.saveConv(conv) // 持久化：保存完成的assistant消息
 	}
 	b.app.isStreaming = false
 	b.app.mu.Unlock()
