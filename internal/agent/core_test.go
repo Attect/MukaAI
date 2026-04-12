@@ -605,7 +605,7 @@ func TestPrompts(t *testing.T) {
 	}
 
 	// 测试构建任务提示词
-	taskPrompt := BuildTaskPrompt("test goal", "test state")
+	taskPrompt := BuildTaskPrompt("test goal", "test state", "")
 	if taskPrompt == "" {
 		t.Error("expected non-empty task prompt")
 	}

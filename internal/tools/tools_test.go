@@ -1474,3 +1474,225 @@ func TestFileInfo_ToJSON(t *testing.T) {
 		t.Error("JSON should contain path")
 	}
 }
+
+// ==================== 路径校验 Tests ====================
+
+func TestValidatePath(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// workDir为空时允许所有路径
+	_, err := validatePath("/etc/passwd", "")
+	if err != nil {
+		t.Error("should allow any path when workDir is empty")
+	}
+
+	// 路径在workDir范围内应通过
+	testFile := filepath.Join(tmpDir, "test.txt")
+	validated, err := validatePath(testFile, tmpDir)
+	if err != nil {
+		t.Errorf("should allow path within workDir: %v", err)
+	}
+	if validated != filepath.Clean(testFile) {
+		t.Errorf("expected cleaned path %s, got %s", filepath.Clean(testFile), validated)
+	}
+
+	// 路径在workDir范围外应拒绝
+	_, err = validatePath("/etc/passwd", tmpDir)
+	if err == nil {
+		t.Error("should reject path outside workDir")
+	}
+
+	// ..遍历应被阻止
+	_, err = validatePath(filepath.Join(tmpDir, "..", "etc", "passwd"), tmpDir)
+	if err == nil {
+		t.Error("should reject path traversal with ..")
+	}
+
+	// 子目录路径应通过
+	subFile := filepath.Join(tmpDir, "sub", "dir", "file.txt")
+	_, err = validatePath(subFile, tmpDir)
+	if err != nil {
+		t.Errorf("should allow subdirectory path: %v", err)
+	}
+
+	// 精确匹配workDir本身应通过
+	_, err = validatePath(tmpDir, tmpDir)
+	if err != nil {
+		t.Errorf("should allow exact workDir path: %v", err)
+	}
+
+	// 清理后的路径应正确
+	_, err = validatePath(filepath.Join(tmpDir, "a", ".", "b"), tmpDir)
+	if err != nil {
+		t.Errorf("should allow cleaned path: %v", err)
+	}
+}
+
+func TestValidatePath_SymlinkProtection(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// 创建一个指向外部目录的符号链接
+	linkDir := filepath.Join(tmpDir, "link")
+	// 注意：符号链接测试在不同系统上行为可能不同，这里仅测试基本功能
+	// 如果无法创建符号链接则跳过
+	if err := os.Symlink(tmpDir, linkDir); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+
+	// 通过符号链接指向的路径应在范围内
+	linkFile := filepath.Join(linkDir, "test.txt")
+	_, err := validatePath(linkFile, tmpDir)
+	if err != nil {
+		t.Errorf("should allow path through symlink within workDir: %v", err)
+	}
+}
+
+func TestReadFileTool_WithWorkDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	tool := NewReadFileToolWithWorkDir(tmpDir)
+
+	// 在workDir内创建文件
+	testFile := filepath.Join(tmpDir, "test.txt")
+	os.WriteFile(testFile, []byte("hello"), 0644)
+
+	// 应该能读取workDir内的文件
+	result, _ := tool.Execute(context.Background(), map[string]interface{}{
+		"path": testFile,
+	})
+	if !result.Success {
+		t.Errorf("should read file in workDir: %s", result.Error)
+	}
+
+	// 应该拒绝读取workDir外的文件
+	result, _ = tool.Execute(context.Background(), map[string]interface{}{
+		"path": "/etc/passwd",
+	})
+	if result.Success {
+		t.Error("should reject file outside workDir")
+	}
+
+	// 路径遍历应被拒绝
+	result, _ = tool.Execute(context.Background(), map[string]interface{}{
+		"path": filepath.Join(tmpDir, "..", "etc", "passwd"),
+	})
+	if result.Success {
+		t.Error("should reject path traversal")
+	}
+}
+
+func TestWriteFileTool_WithWorkDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	tool := NewWriteFileToolWithWorkDir(tmpDir)
+
+	// 应该能在workDir内写入文件
+	testFile := filepath.Join(tmpDir, "test.txt")
+	result, _ := tool.Execute(context.Background(), map[string]interface{}{
+		"path":    testFile,
+		"content": "hello",
+	})
+	if !result.Success {
+		t.Errorf("should write file in workDir: %s", result.Error)
+	}
+
+	// 应该拒绝写入workDir外
+	result, _ = tool.Execute(context.Background(), map[string]interface{}{
+		"path":    "/tmp/outside_test.txt",
+		"content": "evil",
+	})
+	if result.Success {
+		t.Error("should reject write outside workDir")
+	}
+}
+
+func TestListDirectoryTool_WithWorkDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	tool := NewListDirectoryToolWithWorkDir(tmpDir)
+
+	// 创建一些文件
+	os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte("hello"), 0644)
+
+	// 应该能列出workDir内的目录
+	result, _ := tool.Execute(context.Background(), map[string]interface{}{
+		"path": tmpDir,
+	})
+	if !result.Success {
+		t.Errorf("should list directory in workDir: %s", result.Error)
+	}
+
+	// 应该拒绝列出workDir外的目录
+	result, _ = tool.Execute(context.Background(), map[string]interface{}{
+		"path": "/etc",
+	})
+	if result.Success {
+		t.Error("should reject directory outside workDir")
+	}
+}
+
+func TestDeleteFileTool_WithWorkDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	tool := NewDeleteFileToolWithWorkDir(tmpDir)
+
+	// 在workDir内创建文件
+	testFile := filepath.Join(tmpDir, "test.txt")
+	os.WriteFile(testFile, []byte("hello"), 0644)
+
+	// 应该能删除workDir内的文件
+	result, _ := tool.Execute(context.Background(), map[string]interface{}{
+		"path": testFile,
+	})
+	if !result.Success {
+		t.Errorf("should delete file in workDir: %s", result.Error)
+	}
+
+	// 应该拒绝删除workDir外的文件
+	result, _ = tool.Execute(context.Background(), map[string]interface{}{
+		"path": "/etc/passwd",
+	})
+	if result.Success {
+		t.Error("should reject delete outside workDir")
+	}
+}
+
+func TestCreateDirectoryTool_WithWorkDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	tool := NewCreateDirectoryToolWithWorkDir(tmpDir)
+
+	// 应该能在workDir内创建目录
+	newDir := filepath.Join(tmpDir, "newdir")
+	result, _ := tool.Execute(context.Background(), map[string]interface{}{
+		"path": newDir,
+	})
+	if !result.Success {
+		t.Errorf("should create directory in workDir: %s", result.Error)
+	}
+
+	// 应该拒绝在workDir外创建目录
+	result, _ = tool.Execute(context.Background(), map[string]interface{}{
+		"path": "/tmp/outside_test_dir",
+	})
+	if result.Success {
+		t.Error("should reject create directory outside workDir")
+	}
+}
+
+func TestRegisterFilesystemToolsWithWorkDir(t *testing.T) {
+	registry := NewToolRegistry()
+
+	tmpDir := t.TempDir()
+	err := RegisterFilesystemToolsWithWorkDir(registry, tmpDir)
+	if err != nil {
+		t.Fatalf("failed to register filesystem tools with workDir: %v", err)
+	}
+
+	if registry.ToolCount() != 5 {
+		t.Errorf("expected 5 tools, got %d", registry.ToolCount())
+	}
+
+	// 验证工具已注册
+	expectedTools := []string{"read_file", "write_file", "list_directory", "delete_file", "create_directory"}
+	for _, name := range expectedTools {
+		if _, exists := registry.GetTool(name); !exists {
+			t.Errorf("tool %s should be registered", name)
+		}
+	}
+}
