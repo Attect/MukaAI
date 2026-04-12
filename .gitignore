@@ -35,3 +35,22 @@ Thumbs.db
 state/
 *.yaml
 !configs/config.yaml
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# AI working docs (tracked selectively)
+# ai/ directory is tracked for documentation
+
+# Trae IDE specs
+.trae/
+
+# Test workspace
+test_workspace/
+
+# Windows artifacts
+nul
+
+# Temporary test files
+test_fuzzy_requirement.go
