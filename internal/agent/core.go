@@ -42,12 +42,21 @@ type Agent struct {
 	cancelFunc context.CancelFunc
 
 	// 校验状态
-	verificationPassed bool // 是否通过强制校验
+	verificationPassed     bool // 是否通过强制校验
+	consecutiveNoToolCalls int  // 连续无工具调用计数
 
 	// 回调
-	onStreamChunk func(chunk string)      // 流式输出回调
-	onToolCall    func(name, args string) // 工具调用回调
-	onIteration   func(iteration int)     // 迭代回调
+	onStreamChunk  func(chunk string)                  // 流式输出回调
+	onToolCall     func(name, args string)             // 工具调用回调（即将废弃）
+	onToolResult   func(name, resultJSON string)       // 工具执行结果回调
+	onToolCallFull func(toolCallID, name, args string) // 工具调用完整回调
+	onReview       func(status string, summary string) // 审查结果回调
+	onVerify       func(status string, summary string) // 校验结果回调
+	onCorrection   func(instruction string)            // 修正指令回调
+	onNoToolCall   func(count int, response string)    // 无工具调用回调
+	onHistoryAdd   func(role, content string)          // 消息历史添加回调
+	onIteration    func(iteration int)                 // 迭代回调
+	onThinking     func(thinking string)               // 思考内容回调
 
 	// 流式处理器
 	streamHandler StreamHandler // 流式消息处理器
@@ -156,6 +165,8 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 		return nil, fmt.Errorf("agent is already running")
 	}
 	a.running = true
+	a.verificationPassed = false
+	a.consecutiveNoToolCalls = 0
 	a.mu.Unlock()
 
 	// 确保运行状态被重置
@@ -215,35 +226,52 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 		Iterations: 0,
 	}
 
+	// 使用全局迭代计数器，避免内外层循环迭代计数不共享导致总调用次数远超maxIterations
+	totalIterations := 0
+	maxTotalIterations := a.maxIterations
+
 	// 使用外层循环支持强制校验后的重试
-	outerIteration := 0
-	maxOuterIterations := a.maxIterations + 10 // 额外的迭代用于强制校验重试
-
-	for outerIteration < maxOuterIterations {
-		outerIteration++
-
+	for {
 		// 内层主循环
-		for iteration := 1; iteration <= a.maxIterations; iteration++ {
+		for {
+			// 递增全局迭代计数器
+			totalIterations++
+			if totalIterations > maxTotalIterations {
+				// 达到最大迭代次数
+				result.Status = "max_iterations"
+				result.EndTime = time.Now()
+				result.Iterations = totalIterations - 1
+				a.stateManager.UpdateTaskStatus(a.taskID, "failed")
+				if a.logger != nil {
+					a.logger.LogError(fmt.Sprintf("达到最大迭代次数 (%d)", maxTotalIterations))
+					a.logger.LogTaskEnd("max_iterations", result.Iterations, result.EndTime.Sub(result.StartTime))
+				}
+				a.finalizeResult(result)
+				return result, fmt.Errorf("reached maximum iterations (%d)", maxTotalIterations)
+			}
+
 			// 检查上下文是否已取消
 			select {
 			case <-runCtx.Done():
 				result.Status = "cancelled"
 				result.EndTime = time.Now()
+				result.Iterations = totalIterations - 1
 				if a.logger != nil {
-					a.logger.LogTaskEnd("cancelled", iteration, result.EndTime.Sub(result.StartTime))
+					a.logger.LogTaskEnd("cancelled", result.Iterations, result.EndTime.Sub(result.StartTime))
 				}
+				a.finalizeResult(result)
 				return result, runCtx.Err()
 			default:
 			}
 
 			// 迭代回调
 			if a.onIteration != nil {
-				a.onIteration(iteration)
+				a.onIteration(totalIterations)
 			}
 
 			// 记录迭代日志
 			if a.logger != nil {
-				a.logger.LogIteration(iteration, "processing")
+				a.logger.LogIteration(totalIterations, "processing")
 			}
 
 			// 检查上下文是否超出限制
@@ -262,8 +290,9 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 				a.stateManager.UpdateTaskStatus(a.taskID, "failed")
 				if a.logger != nil {
 					a.logger.LogError(fmt.Sprintf("模型调用失败: %s", err.Error()))
-					a.logger.LogTaskEnd("failed", iteration, result.EndTime.Sub(result.StartTime))
+					a.logger.LogTaskEnd("failed", totalIterations, result.EndTime.Sub(result.StartTime))
 				}
+				a.finalizeResult(result)
 				return result, fmt.Errorf("model call failed: %w", err)
 			}
 
@@ -275,6 +304,11 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 			}
 			a.history.AddMessage(assistantMsg)
 
+			// 消息历史添加回调
+			if a.onHistoryAdd != nil {
+				a.onHistoryAdd("assistant", response.Content)
+			}
+
 			// 记录助手消息
 			if a.logger != nil {
 				a.logger.LogMessage("assistant", response.Content)
@@ -283,6 +317,11 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 			// 审查模型输出（在工具调用前）
 			taskState, _ := a.stateManager.GetState(a.taskID)
 			reviewResult := a.reviewer.ReviewOutput(response.Content, response.ToolCalls, taskState)
+
+			// 审查结果回调
+			if a.onReview != nil {
+				a.onReview(string(reviewResult.Status), reviewResult.Summary)
+			}
 
 			// 记录审查结果
 			if a.logger != nil {
@@ -309,19 +348,29 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 					a.stateManager.UpdateTaskStatus(a.taskID, "failed")
 					if a.logger != nil {
 						a.logger.LogError(result.Error)
-						a.logger.LogTaskEnd("failed", iteration, result.EndTime.Sub(result.StartTime))
+						a.logger.LogTaskEnd("failed", totalIterations, result.EndTime.Sub(result.StartTime))
 					}
+					a.finalizeResult(result)
 					return result, fmt.Errorf("review blocked and retries exhausted: %s", reviewResult.Summary)
 				}
 
 				// 注入修正指令到历史
+				if a.onCorrection != nil {
+					a.onCorrection(correctionInstruction)
+				}
+				if a.onHistoryAdd != nil {
+					a.onHistoryAdd("user", correctionInstruction)
+				}
 				a.history.AddMessage(model.NewUserMessage(correctionInstruction))
-				result.Iterations = iteration
+				result.Iterations = totalIterations
 				continue
 			}
 
 			// 检查是否有工具调用
 			if len(response.ToolCalls) > 0 {
+				// 有工具调用，重置连续无工具调用计数器
+				a.consecutiveNoToolCalls = 0
+
 				// 执行工具调用
 				toolResults, err := a.executeTools(runCtx, response.ToolCalls)
 				if err != nil {
@@ -331,8 +380,9 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 					a.stateManager.UpdateTaskStatus(a.taskID, "failed")
 					if a.logger != nil {
 						a.logger.LogError(fmt.Sprintf("工具执行失败: %s", err.Error()))
-						a.logger.LogTaskEnd("failed", iteration, result.EndTime.Sub(result.StartTime))
+						a.logger.LogTaskEnd("failed", totalIterations, result.EndTime.Sub(result.StartTime))
 					}
+					a.finalizeResult(result)
 					return result, fmt.Errorf("tool execution failed: %w", err)
 				}
 
@@ -361,6 +411,11 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 							a.logger.LogVerification(verifyResult)
 						}
 
+						// 校验结果回调
+						if a.onVerify != nil {
+							a.onVerify(string(verifyResult.Status), verifyResult.Summary)
+						}
+
 						if verifyResult != nil && verifyResult.IsFailed() {
 							// 校验失败，记录失败并生成修正指令
 							correctionResult := a.corrector.AnalyzeFailure(verifyResult, nil)
@@ -380,21 +435,28 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 								a.stateManager.UpdateTaskStatus(a.taskID, "failed")
 								if a.logger != nil {
 									a.logger.LogError(result.Error)
-									a.logger.LogTaskEnd("failed", iteration, result.EndTime.Sub(result.StartTime))
+									a.logger.LogTaskEnd("failed", totalIterations, result.EndTime.Sub(result.StartTime))
 								}
+								a.finalizeResult(result)
 								return result, fmt.Errorf("verification failed and retries exhausted: %s", verifyResult.Summary)
 							}
 
 							// 注入修正指令到历史，继续执行
+							if a.onCorrection != nil {
+								a.onCorrection(correctionInstruction)
+							}
+							if a.onHistoryAdd != nil {
+								a.onHistoryAdd("user", correctionInstruction)
+							}
 							a.history.AddMessage(model.NewUserMessage(correctionInstruction))
-							result.Iterations = iteration
+							result.Iterations = totalIterations
 							continue
 						}
 
 						// 校验通过，标记任务完成（但不立即返回）
 						result.Status = "completed"
 						result.EndTime = time.Now()
-						result.Iterations = iteration
+						result.Iterations = totalIterations
 						// 不设置verificationPassed，让外层循环执行强制校验
 						// 跳出内层循环，进入外层循环的强制校验阶段
 						break
@@ -402,11 +464,12 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 					if tc.Function.Name == "fail_task" {
 						result.Status = "failed"
 						result.EndTime = time.Now()
-						result.Iterations = iteration
+						result.Iterations = totalIterations
 						a.stateManager.UpdateTaskStatus(a.taskID, "failed")
 						if a.logger != nil {
-							a.logger.LogTaskEnd("failed", iteration, result.EndTime.Sub(result.StartTime))
+							a.logger.LogTaskEnd("failed", result.Iterations, result.EndTime.Sub(result.StartTime))
 						}
+						a.finalizeResult(result)
 						return result, nil
 					}
 				}
@@ -416,12 +479,19 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 					break
 				}
 
-				result.Iterations = iteration
+				result.Iterations = totalIterations
 				continue
 			}
 
-			// 没有工具调用，检查是否完成
-			// 如果响应中包含完成标志，则结束
+			// 没有工具调用，递增连续无工具调用计数器
+			a.consecutiveNoToolCalls++
+
+			// 无工具调用回调
+			if a.onNoToolCall != nil {
+				a.onNoToolCall(a.consecutiveNoToolCalls, response.Content)
+			}
+
+			// 检查是否完成（通过文本内容判断）
 			if a.isTaskComplete(response.Content) {
 				// 在完成任务前进行校验
 				verifyResult := a.verifyTaskCompletion(runCtx, taskGoal)
@@ -429,6 +499,11 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 				// 记录校验结果
 				if a.logger != nil {
 					a.logger.LogVerification(verifyResult)
+				}
+
+				// 校验结果回调
+				if a.onVerify != nil {
+					a.onVerify(string(verifyResult.Status), verifyResult.Summary)
 				}
 
 				if verifyResult != nil && verifyResult.IsFailed() {
@@ -450,14 +525,21 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 						a.stateManager.UpdateTaskStatus(a.taskID, "failed")
 						if a.logger != nil {
 							a.logger.LogError(result.Error)
-							a.logger.LogTaskEnd("failed", iteration, result.EndTime.Sub(result.StartTime))
+							a.logger.LogTaskEnd("failed", totalIterations, result.EndTime.Sub(result.StartTime))
 						}
+						a.finalizeResult(result)
 						return result, fmt.Errorf("verification failed and retries exhausted: %s", verifyResult.Summary)
 					}
 
 					// 注入修正指令到历史，继续执行
+					if a.onCorrection != nil {
+						a.onCorrection(correctionInstruction)
+					}
+					if a.onHistoryAdd != nil {
+						a.onHistoryAdd("user", correctionInstruction)
+					}
 					a.history.AddMessage(model.NewUserMessage(correctionInstruction))
-					result.Iterations = iteration
+					result.Iterations = totalIterations
 					continue
 				}
 
@@ -465,17 +547,29 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 				result.Status = "completed"
 				result.EndTime = time.Now()
 				result.FinalResponse = response.Content
-				result.Iterations = iteration
+				result.Iterations = totalIterations
 				// 不设置verificationPassed，让外层循环执行强制校验
 				// 跳出内层循环，进入外层循环的强制校验阶段
 				break
 			}
 
-			// 如果没有工具调用且没有完成标志，可能是模型在等待更多输入
-			// 添加一个提示让模型继续
-			a.history.AddMessage(model.NewUserMessage("请继续执行任务。如果任务已完成，请使用complete_task工具标记完成。"))
+			// 连续无工具调用超过阈值，视为纯对话，直接完成
+			if a.consecutiveNoToolCalls >= 3 {
+				result.Status = "completed"
+				result.EndTime = time.Now()
+				result.FinalResponse = response.Content
+				result.Iterations = totalIterations
+				a.finalizeResult(result)
+				break
+			}
 
-			result.Iterations = iteration
+			// 前几次尝试时，给模型一个温和的提示
+			promptMsg := "请根据上述内容继续执行。如果已经完成，请调用complete_task工具。"
+			if a.onHistoryAdd != nil {
+				a.onHistoryAdd("user", promptMsg)
+			}
+			a.history.AddMessage(model.NewUserMessage(promptMsg))
+			result.Iterations = totalIterations
 		}
 
 		// 检查任务状态
@@ -488,6 +582,11 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 				// 记录强制校验结果
 				if a.logger != nil {
 					a.logger.LogVerification(verifyResult)
+				}
+
+				// 校验结果回调
+				if a.onVerify != nil {
+					a.onVerify(string(verifyResult.Status), verifyResult.Summary)
 				}
 
 				if verifyResult != nil && verifyResult.IsFailed() {
@@ -511,12 +610,19 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 							a.logger.LogError(result.Error)
 							a.logger.LogTaskEnd("failed", result.Iterations, result.EndTime.Sub(result.StartTime))
 						}
+						a.finalizeResult(result)
 						return result, fmt.Errorf("forced verification failed and retries exhausted: %s", verifyResult.Summary)
 					}
 
 					// 重置状态为进行中，注入修正指令，继续外层循环
 					result.Status = "in_progress"
 					a.stateManager.UpdateTaskStatus(a.taskID, "in_progress")
+					if a.onCorrection != nil {
+						a.onCorrection(correctionInstruction)
+					}
+					if a.onHistoryAdd != nil {
+						a.onHistoryAdd("user", correctionInstruction)
+					}
 					a.history.AddMessage(model.NewUserMessage(correctionInstruction))
 					continue
 				}
@@ -530,11 +636,13 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 			if a.logger != nil {
 				a.logger.LogTaskEnd("completed", result.Iterations, result.EndTime.Sub(result.StartTime))
 			}
+			a.finalizeResult(result)
 			return result, nil
 		}
 
 		// 如果任务失败或达到最大迭代次数，直接返回
 		if result.Status == "failed" || result.Status == "cancelled" {
+			a.finalizeResult(result)
 			return result, nil
 		}
 
@@ -545,22 +653,13 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 			result.EndTime = time.Now()
 			a.stateManager.UpdateTaskStatus(a.taskID, "failed")
 			if a.logger != nil {
-				a.logger.LogError(fmt.Sprintf("达到最大迭代次数 (%d)", a.maxIterations))
+				a.logger.LogError(fmt.Sprintf("达到最大迭代次数 (%d)", maxTotalIterations))
 				a.logger.LogTaskEnd("max_iterations", result.Iterations, result.EndTime.Sub(result.StartTime))
 			}
-			return result, fmt.Errorf("reached maximum iterations (%d)", a.maxIterations)
+			a.finalizeResult(result)
+			return result, fmt.Errorf("reached maximum iterations (%d)", maxTotalIterations)
 		}
 	}
-
-	// 达到最大外层迭代次数
-	result.Status = "max_iterations"
-	result.EndTime = time.Now()
-	a.stateManager.UpdateTaskStatus(a.taskID, "failed")
-	if a.logger != nil {
-		a.logger.LogError(fmt.Sprintf("达到最大外层迭代次数 (%d)", maxOuterIterations))
-		a.logger.LogTaskEnd("max_iterations", result.Iterations, result.EndTime.Sub(result.StartTime))
-	}
-	return result, fmt.Errorf("reached maximum outer iterations (%d)", maxOuterIterations)
 }
 
 // RunResult 运行结果
@@ -629,14 +728,22 @@ func (a *Agent) callModel(ctx context.Context) (*modelResponse, error) {
 			if handler != nil {
 				handler.OnThinking(choice.Delta.ReasoningContent)
 			}
+			// 通过回调传递思考内容
+			if a.onThinking != nil {
+				a.onThinking(choice.Delta.ReasoningContent)
+			}
 		}
 
 		// 处理内容
 		if choice.Delta.Content != "" {
-			contentBuilder.WriteString(choice.Delta.Content)
-
 			// 使用思考标签处理器处理内容（兼容 <thinking> 标签模式）
 			thinking, content := thinkingProcessor.Process(choice.Delta.Content)
+
+			// 只将非思考内容写入内容构建器
+			// 这确保响应消息中不包含 <thinking> 标签
+			if content != "" {
+				contentBuilder.WriteString(content)
+			}
 
 			// 调用流式处理器回调
 			if handler != nil {
@@ -648,9 +755,16 @@ func (a *Agent) callModel(ctx context.Context) (*modelResponse, error) {
 				}
 			}
 
+			// 通过回调传递thinking标签中的思考内容
+			if thinking != "" {
+				if a.onThinking != nil {
+					a.onThinking(thinking)
+				}
+			}
+
 			// 兼容旧的回调
 			if a.onStreamChunk != nil {
-				a.onStreamChunk(choice.Delta.Content)
+				a.onStreamChunk(content)
 			}
 		}
 
@@ -700,12 +814,18 @@ func (a *Agent) callModel(ctx context.Context) (*modelResponse, error) {
 	}
 
 	// 刷新思考标签处理器的缓冲区
-	if handler != nil {
-		thinking, content := thinkingProcessor.Flush()
-		if thinking != "" {
+	thinking, content := thinkingProcessor.Flush()
+	if thinking != "" {
+		if handler != nil {
 			handler.OnThinking(thinking)
 		}
-		if content != "" {
+		if a.onThinking != nil {
+			a.onThinking(thinking)
+		}
+	}
+	if content != "" {
+		contentBuilder.WriteString(content)
+		if handler != nil {
 			handler.OnContent(content)
 		}
 	}
@@ -752,6 +872,11 @@ func (a *Agent) executeTools(ctx context.Context, toolCalls []model.ToolCall) ([
 			a.logger.LogToolCall(tc.Function.Name, tc.Function.Arguments)
 		}
 
+		// 工具调用完整回调
+		if a.onToolCallFull != nil {
+			a.onToolCallFull(tc.ID, tc.Function.Name, tc.Function.Arguments)
+		}
+
 		// 工具调用回调
 		if a.onToolCall != nil {
 			a.onToolCall(tc.Function.Name, tc.Function.Arguments)
@@ -792,6 +917,11 @@ func (a *Agent) executeTools(ctx context.Context, toolCalls []model.ToolCall) ([
 				resultContent = result[0].Content
 			}
 			handler.OnToolResult(ConvertToolCallWithResult(tc, resultContent, ""))
+		}
+
+		// 工具结果回调（新回调）
+		if a.onToolResult != nil && len(result) > 0 {
+			a.onToolResult(tc.Function.Name, result[0].Content)
 		}
 
 		results = append(results, result...)
@@ -842,6 +972,13 @@ func (a *Agent) handleSpecialTools(ctx context.Context, tc model.ToolCall) error
 	return nil
 }
 
+// finalizeResult 计算并填充RunResult的Duration字段
+func (a *Agent) finalizeResult(result *RunResult) {
+	if !result.EndTime.IsZero() && !result.StartTime.IsZero() {
+		result.Duration = result.EndTime.Sub(result.StartTime)
+	}
+}
+
 // isTaskComplete 检查任务是否完成
 func (a *Agent) isTaskComplete(content string) bool {
 	// 检查是否包含完成标志
@@ -851,6 +988,11 @@ func (a *Agent) isTaskComplete(content string) bool {
 		"task completed",
 		"任务完成",
 		"all done",
+		"已经完成",
+		"完成了",
+		"finished",
+		"done",
+		"任务结束",
 	}
 
 	for _, marker := range completeMarkers {
@@ -914,6 +1056,62 @@ func (a *Agent) SetOnIteration(callback func(iteration int)) {
 	a.onIteration = callback
 }
 
+// SetOnToolResult 设置工具执行结果回调
+func (a *Agent) SetOnToolResult(callback func(name, resultJSON string)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.onToolResult = callback
+}
+
+// SetOnToolCallFull 设置工具调用完整回调
+func (a *Agent) SetOnToolCallFull(callback func(toolCallID, name, args string)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.onToolCallFull = callback
+}
+
+// SetOnReview 设置审查结果回调
+func (a *Agent) SetOnReview(callback func(status, summary string)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.onReview = callback
+}
+
+// SetOnVerify 设置校验结果回调
+func (a *Agent) SetOnVerify(callback func(status, summary string)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.onVerify = callback
+}
+
+// SetOnCorrection 设置修正指令回调
+func (a *Agent) SetOnCorrection(callback func(instruction string)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.onCorrection = callback
+}
+
+// SetOnNoToolCall 设置无工具调用回调
+func (a *Agent) SetOnNoToolCall(callback func(count int, response string)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.onNoToolCall = callback
+}
+
+// SetOnHistoryAdd 设置消息历史添加回调
+func (a *Agent) SetOnHistoryAdd(callback func(role, content string)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.onHistoryAdd = callback
+}
+
+// SetOnThinking 设置思考内容回调
+func (a *Agent) SetOnThinking(callback func(thinking string)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.onThinking = callback
+}
+
 // SetStreamHandler 设置流式消息处理器
 func (a *Agent) SetStreamHandler(handler StreamHandler) {
 	a.mu.Lock()
@@ -924,13 +1122,13 @@ func (a *Agent) SetStreamHandler(handler StreamHandler) {
 // SendMessage 发送用户消息并启动推理
 // 这是一个异步方法，会在后台启动推理过程
 func (a *Agent) SendMessage(content string) error {
-	// 检查是否已在运行
-	a.mu.RLock()
+	// 检查是否已在运行（使用写锁消除TOCTOU竞态）
+	a.mu.Lock()
 	if a.running {
-		a.mu.RUnlock()
+		a.mu.Unlock()
 		return fmt.Errorf("agent is already running")
 	}
-	a.mu.RUnlock()
+	a.mu.Unlock()
 
 	// 在后台启动推理
 	go func() {

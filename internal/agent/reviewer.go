@@ -46,21 +46,21 @@ const (
 
 // ReviewIssue 审查发现的问题
 type ReviewIssue struct {
-	Type        IssueType `json:"type"`         // 问题类型
-	Severity    string    `json:"severity"`     // 严重程度：low, medium, high, critical
-	Description string    `json:"description"`  // 问题描述
-	Evidence    string    `json:"evidence"`     // 证据/示例
-	Suggestion  string    `json:"suggestion"`   // 修正建议
-	ToolName    string    `json:"tool_name"`    // 相关工具名称（如果有）
-	Timestamp   time.Time `json:"timestamp"`    // 发现时间
+	Type        IssueType `json:"type"`        // 问题类型
+	Severity    string    `json:"severity"`    // 严重程度：low, medium, high, critical
+	Description string    `json:"description"` // 问题描述
+	Evidence    string    `json:"evidence"`    // 证据/示例
+	Suggestion  string    `json:"suggestion"`  // 修正建议
+	ToolName    string    `json:"tool_name"`   // 相关工具名称（如果有）
+	Timestamp   time.Time `json:"timestamp"`   // 发现时间
 }
 
 // ReviewResult 审查结果
 type ReviewResult struct {
-	Status    ReviewStatus  `json:"status"`     // 审查状态
-	Issues    []ReviewIssue `json:"issues"`     // 发现的问题列表
-	Timestamp time.Time     `json:"timestamp"`  // 审查时间
-	Summary   string        `json:"summary"`    // 审查摘要
+	Status    ReviewStatus  `json:"status"`    // 审查状态
+	Issues    []ReviewIssue `json:"issues"`    // 发现的问题列表
+	Timestamp time.Time     `json:"timestamp"` // 审查时间
+	Summary   string        `json:"summary"`   // 审查摘要
 }
 
 // IsBlocked 检查是否被阻断
@@ -108,8 +108,8 @@ type ReviewConfig struct {
 	MaxFileChecksPerReview int `json:"max_file_checks_per_review"` // 每次审查最大文件检查数
 
 	// 探索期配置
-	ExplorationPeriodIterations int `json:"exploration_period_iterations"` // 探索期迭代次数（此期间内跳过no_progress检查）
-	MaxExplorationDuration      int `json:"max_exploration_duration"`      // 最大探索持续时间（秒）
+	ExplorationPeriodIterations int  `json:"exploration_period_iterations"`  // 探索期迭代次数（此期间内跳过no_progress检查）
+	MaxExplorationDuration      int  `json:"max_exploration_duration"`       // 最大探索持续时间（秒）
 	EnableSmartExplorationCheck bool `json:"enable_smart_exploration_check"` // 是否启用智能探索检测
 }
 
@@ -152,7 +152,7 @@ type Reviewer struct {
 	explorationStartTime time.Time
 	explorationActions   []ExplorationAction
 	totalExplorationTime time.Duration
-	
+
 	// 探索结束声明
 	explorationEnded bool
 }
@@ -162,8 +162,8 @@ type ExplorationAction struct {
 	ToolName    string    `json:"tool_name"`
 	Arguments   string    `json:"arguments"`
 	Timestamp   time.Time `json:"timestamp"`
-	IsRelevant  bool      `json:"is_relevant"`  // 是否与任务相关
-	Exploration string    `json:"exploration"`  // 探索类型：environment, file, command
+	IsRelevant  bool      `json:"is_relevant"` // 是否与任务相关
+	Exploration string    `json:"exploration"` // 探索类型：environment, file, command
 }
 
 // ActionRecord 操作记录
@@ -182,8 +182,8 @@ func NewReviewer(config *ReviewConfig) *Reviewer {
 	}
 
 	return &Reviewer{
-		config:            config,
-		actionHistory:     make([]ActionRecord, 0),
+		config:             config,
+		actionHistory:      make([]ActionRecord, 0),
 		explorationActions: make([]ExplorationAction, 0),
 	}
 }
@@ -200,17 +200,11 @@ func (r *Reviewer) ReviewOutput(output string, toolCalls []model.ToolCall, taskS
 	}
 
 	// 1. 方向偏离检测
-	// 改进：只有在输出不包含工具调用且输出过短时才检查
+	// 只有在没有工具调用时才检查方向
 	// 如果模型输出了工具调用，说明正在执行任务，不需要检查方向
 	if r.config.EnableDirectionCheck && taskState != nil {
-		// 检查是否有工具调用
 		hasToolCalls := len(toolCalls) > 0
-		// 检查输出长度
-		outputLen := len(strings.TrimSpace(output))
-		
-		// 只有在没有工具调用且输出过短时才检查方向
-		// 这避免了误报：模型输出工具调用是正确行为
-		if !hasToolCalls && outputLen < 50 {
+		if !hasToolCalls {
 			if issue := r.checkDirection(output, taskState); issue != nil {
 				result.Issues = append(result.Issues, *issue)
 			}
@@ -452,8 +446,25 @@ func (r *Reviewer) checkInfiniteLoop(tc model.ToolCall) *ReviewIssue {
 func (r *Reviewer) checkFabrication(output string, toolCalls []model.ToolCall) []ReviewIssue {
 	issues := make([]ReviewIssue, 0)
 
-	// 从输出中提取声称存在的文件路径
-	filePaths := extractFilePaths(output)
+	// 剥离thinking标签内容，只检查正文
+	// 模型的<thinking>标签中经常提到计划创建的文件名，这些是计划而非声称已存在的文件
+	checkOutput := output
+	for {
+		startIdx := strings.Index(checkOutput, "<thinking>")
+		if startIdx == -1 {
+			break
+		}
+		endIdx := strings.Index(checkOutput, "</thinking>")
+		if endIdx == -1 {
+			// 未闭合的thinking标签，移除从startIdx开始的所有内容
+			checkOutput = checkOutput[:startIdx]
+			break
+		}
+		checkOutput = checkOutput[:startIdx] + checkOutput[endIdx+len("</thinking>"):]
+	}
+
+	// 从正文中提取声称存在的文件路径
+	filePaths := extractFilePaths(checkOutput)
 
 	// 限制检查数量
 	checkCount := 0
@@ -484,7 +495,14 @@ func (r *Reviewer) checkFabrication(output string, toolCalls []model.ToolCall) [
 				continue
 			}
 
-			if filePath, ok := args["file_path"].(string); ok {
+			// 获取文件路径（兼容不同工具的参数名：file_path 或 path）
+			filePath := ""
+			if p, ok := args["file_path"].(string); ok {
+				filePath = p
+			} else if p, ok := args["path"].(string); ok {
+				filePath = p
+			}
+			if filePath != "" {
 				// 对于读取操作，检查文件是否存在
 				if tc.Function.Name == "read_file" {
 					if _, err := os.Stat(filePath); os.IsNotExist(err) {
@@ -524,13 +542,13 @@ func (r *Reviewer) checkProgress(taskState *state.TaskState, toolCalls []model.T
 	if currentStep == r.lastProgressStep {
 		// 检查是否是环境探索行为
 		isExploration := r.isExplorationAction(toolCalls)
-		
+
 		// 如果是探索行为，使用更高的阈值
 		threshold := r.config.MaxIterationsWithoutProgress
 		if isExploration {
 			threshold = r.config.MaxIterationsWithoutProgress * 2 // 探索行为允许更多迭代
 		}
-		
+
 		if currentIteration >= threshold {
 			return &ReviewIssue{
 				Type:        IssueTypeNoProgress,
@@ -558,12 +576,12 @@ func (r *Reviewer) checkProgress(taskState *state.TaskState, toolCalls []model.T
 func (r *Reviewer) isExplorationAction(toolCalls []model.ToolCall) bool {
 	for _, tc := range toolCalls {
 		action := r.analyzeToolCall(tc)
-		
+
 		// 记录探索行为
 		r.mu.Lock()
 		r.explorationActions = append(r.explorationActions, action)
 		r.mu.Unlock()
-		
+
 		// 如果发现不相关的探索，返回true
 		if !action.IsRelevant {
 			return true
@@ -586,31 +604,31 @@ func (r *Reviewer) analyzeToolCall(tc model.ToolCall) ExplorationAction {
 		action.Exploration = "environment"
 		// 分析路径是否与任务相关
 		action.IsRelevant = r.isPathRelevant(tc.Function.Arguments)
-		
+
 	case "read_file", "cat":
 		action.Exploration = "file"
 		// 分析文件是否与任务相关
 		action.IsRelevant = r.isFileRelevant(tc.Function.Arguments)
-		
+
 	case "execute_command", "shell_execute", "run_command":
 		action.Exploration = "command"
 		// 分析命令是否与任务相关
 		action.IsRelevant = r.isCommandRelevant(tc.Function.Arguments)
-		
+
 	case "getcwd", "pwd":
 		action.Exploration = "environment"
 		// 获取当前目录通常是有效的探索
 		action.IsRelevant = true
-		
+
 	case "write_file", "create_file":
 		action.Exploration = "creation"
 		// 写文件是生产性行为，不是探索
 		action.IsRelevant = true
-		
+
 	case "create_directory", "mkdir":
 		action.Exploration = "creation"
 		action.IsRelevant = true
-		
+
 	default:
 		// 其他工具调用默认认为是相关的
 		action.IsRelevant = true
@@ -634,7 +652,7 @@ func (r *Reviewer) isPathRelevant(arguments string) bool {
 		"project", "src", "work", "task", "output",
 		"internal", "pkg", "cmd", "api", "web",
 	}
-	
+
 	pathLower := strings.ToLower(args.Path)
 	for _, kw := range relevantKeywords {
 		if strings.Contains(pathLower, kw) {
@@ -671,7 +689,7 @@ func (r *Reviewer) isFileRelevant(arguments string) bool {
 		".html", ".css", ".json", ".yaml", ".yml",
 		".md", ".txt", ".xml", ".toml",
 	}
-	
+
 	pathLower := strings.ToLower(args.Path)
 	for _, ext := range relevantExtensions {
 		if strings.HasSuffix(pathLower, ext) {
@@ -752,17 +770,17 @@ func (r *Reviewer) isCommandRelevant(arguments string) bool {
 func (r *Reviewer) isInExplorationPeriod() bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	// 如果Agent已声明探索结束，则不在探索期
 	if r.explorationEnded {
 		return false
 	}
-	
+
 	// 检查迭代次数是否在探索期内
 	if r.iterationCount <= r.config.ExplorationPeriodIterations {
 		return true
 	}
-	
+
 	// 检查探索时间是否超过限制
 	if r.config.MaxExplorationDuration > 0 && !r.explorationStartTime.IsZero() {
 		elapsed := time.Since(r.explorationStartTime)
@@ -770,7 +788,7 @@ func (r *Reviewer) isInExplorationPeriod() bool {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
@@ -978,9 +996,9 @@ func extractFilePaths(text string) []string {
 
 	// 匹配常见文件路径模式
 	patterns := []string{
-		`[a-zA-Z]:\\[\\\w\s\-\.]+`,           // Windows路径
-		`/[\w/\-\.]+`,                         // Unix路径
-		`[\w\-\.]+\.(go|py|js|ts|java|md|txt)`, // 文件名
+		`[a-zA-Z]:\\[\\\w\s\-\.]+`,                                        // Windows路径
+		`(?:^|[\s'"(])/[\w/\-\.]+`,                                        // Unix路径（前需空白或引号）
+		`[\w\-\.]+\.(go|py|js|ts|java|md|txt|html|css|json|yaml|yml|xml)`, // 文件名
 	}
 
 	for _, pattern := range patterns {
@@ -1004,10 +1022,11 @@ func extractFilePaths(text string) []string {
 
 // truncateString 截断字符串
 func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "..."
+	return string(runes[:maxLen]) + "..."
 }
 
 // parseToolArgs 解析工具参数

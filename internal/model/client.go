@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Client OpenAI API兼容客户端
@@ -33,7 +34,7 @@ func NewClient(config *Config) (*Client, error) {
 	return &Client{
 		config: config,
 		httpClient: &http.Client{
-			Timeout: 300 * time.Minute, // 长时间推理的超时设置，适配慢速本地模型
+			Timeout: 10 * time.Minute, // 适配慢速模型的合理超时设置
 		},
 	}, nil
 }
@@ -105,8 +106,13 @@ func (c *Client) doChatCompletion(ctx context.Context, req *ChatCompletionReques
 		return nil, &RequestError{Operation: "decode_response", Err: err}
 	}
 
-	// 处理思考标签
-	c.processThinkingTags(&result)
+	// 处理thinking内容：
+	// 1. reasoning_content 已通过 Message.ReasoningContent 字段自动解析
+	// 2. 清理content中的<thinking>标签（非流式响应需要在此处理，流式由ThinkingTagProcessor负责）
+	for i := range result.Choices {
+		msg := &result.Choices[i].Message
+		msg.Content = cleanThinkingTags(msg.Content)
+	}
 
 	return &result, nil
 }
@@ -181,7 +187,7 @@ func (c *Client) processSSEStream(resp *http.Response, eventChan chan<- StreamEv
 	defer resp.Body.Close()
 
 	scanner := bufio.NewScanner(resp.Body)
-	var buffer bytes.Buffer
+	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024) // 10MB缓冲区，适配大型响应
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -191,9 +197,10 @@ func (c *Client) processSSEStream(resp *http.Response, eventChan chan<- StreamEv
 			continue
 		}
 
-		// 处理SSE数据行
-		if strings.HasPrefix(line, "data: ") {
-			data := strings.TrimPrefix(line, "data: ")
+		// 处理SSE数据行（兼容"data: "和"data:"两种格式）
+		if strings.HasPrefix(line, "data:") {
+			data := strings.TrimPrefix(line, "data:")
+			data = strings.TrimLeft(data, " ")
 
 			// 检查是否为结束标记
 			if data == "[DONE]" {
@@ -208,15 +215,11 @@ func (c *Client) processSSEStream(resp *http.Response, eventChan chan<- StreamEv
 				continue
 			}
 
-			// 处理思考标签
-			c.processStreamThinkingTags(&streamResp)
+			// 思考标签处理已由Agent核心模块的ThinkingTagProcessor负责
+			// 此处不再调用processStreamThinkingTags，避免重复处理
 
 			// 发送事件
 			eventChan <- StreamEvent{Response: &streamResp}
-		} else {
-			// 累积非data行（某些实现可能需要）
-			buffer.WriteString(line)
-			buffer.WriteString("\n")
 		}
 	}
 
@@ -252,12 +255,32 @@ func (c *Client) processStreamThinkingTags(resp *StreamResponse) {
 }
 
 // extractAndCleanThinking 提取并清理思考标签
-// 返回清理后的内容
-// 注意：此函数保留思考标签，由调用方决定如何处理
+// 此方法保留为空操作（pass-through），原因如下：
+// 1. Agent核心模块已通过ThinkingTagProcessor统一处理<thinking>标签的提取和清理
+// 2. 在模型客户端层重复处理会导致思考内容被提前剥离，Agent核心无法区分思考与正文
+// 3. 保留此方法是为了维持接口兼容性，未来如需在模型层预处理可扩展实现
 func (c *Client) extractAndCleanThinking(content string) string {
-	// 保留 <thinking> 标签，由 Agent 核心模块处理
-	// 这样可以在流式输出中区分思考内容和正文内容
 	return content
+}
+
+// cleanThinkingTags 清理content中的<thinking>标签及其内容
+// 仅用于非流式响应（doChatCompletion），流式响应由ThinkingTagProcessor处理
+func cleanThinkingTags(content string) string {
+	for {
+		startIdx := strings.Index(content, "<thinking>")
+		if startIdx == -1 {
+			break
+		}
+		endIdx := strings.Index(content, "</thinking>")
+		if endIdx == -1 {
+			// 未闭合的thinking标签，移除从startIdx开始的所有内容
+			content = content[:startIdx]
+			break
+		}
+		// 移除thinking块（包括标签本身）
+		content = content[:startIdx] + content[endIdx+len("</thinking>"):]
+	}
+	return strings.TrimSpace(content)
 }
 
 // GetConfig 获取客户端配置
@@ -266,14 +289,14 @@ func (c *Client) GetConfig() *Config {
 }
 
 // CountTokens 估算消息的token数量
-// 这是一个粗略估算，实际token数需要使用tokenizer
+// 使用UTF-8字符数（rune count）进行估算，正确处理中文等多字节字符
+// 粗略估算：平均每4个字符约1个token
 func (c *Client) CountTokens(messages []Message) int {
-	// 简单估算：平均每4个字符约1个token
 	totalChars := 0
 	for _, msg := range messages {
-		totalChars += len(msg.Content)
+		totalChars += utf8.RuneCountInString(msg.Content)
 		for _, tc := range msg.ToolCalls {
-			totalChars += len(tc.Function.Name) + len(tc.Function.Arguments)
+			totalChars += utf8.RuneCountInString(tc.Function.Name) + utf8.RuneCountInString(tc.Function.Arguments)
 		}
 	}
 	return totalChars / 4

@@ -15,11 +15,12 @@ const (
 // Message 聊天消息结构
 // 兼容OpenAI Chat Completion API的消息格式
 type Message struct {
-	Role       Role       `json:"role"`                   // 消息角色
-	Content    string     `json:"content,omitempty"`      // 消息内容
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`   // 工具调用请求（assistant消息）
-	ToolCallID string     `json:"tool_call_id,omitempty"` // 工具调用ID（tool消息）
-	Name       string     `json:"name,omitempty"`         // 工具名称（tool消息）
+	Role             Role       `json:"role"`                        // 消息角色
+	Content          string     `json:"content,omitempty"`           // 消息内容
+	ReasoningContent string     `json:"reasoning_content,omitempty"` // 思考内容（Qwen3.5等模型通过独立字段传递）
+	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`        // 工具调用请求（assistant消息）
+	ToolCallID       string     `json:"tool_call_id,omitempty"`      // 工具调用ID（tool消息）
+	Name             string     `json:"name,omitempty"`              // 工具名称（tool消息）
 }
 
 // ToolCall 工具调用请求
@@ -82,9 +83,10 @@ type Choice struct {
 
 // Delta 流式响应增量内容
 type Delta struct {
-	Role      string     `json:"role,omitempty"`       // 角色
-	Content   string     `json:"content,omitempty"`    // 内容片段
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"` // 工具调用
+	Role             string     `json:"role,omitempty"`              // 角色
+	Content          string     `json:"content,omitempty"`           // 内容片段
+	ReasoningContent string     `json:"reasoning_content,omitempty"` // 思考内容片段（Qwen3.5等模型）
+	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`        // 工具调用
 }
 
 // Usage token使用统计

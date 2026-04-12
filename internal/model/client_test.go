@@ -305,6 +305,8 @@ func TestStreamChatCompletion(t *testing.T) {
 }
 
 // TestThinkingTags 测试思考标签处理
+// 注意：客户端现在保留思考标签，由 Agent 核心模块处理
+// 这样可以在流式输出中区分思考内容和正文内容
 func TestThinkingTags(t *testing.T) {
 	// 创建测试服务器
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -353,8 +355,8 @@ func TestThinkingTags(t *testing.T) {
 		t.Fatalf("聊天补全失败: %v", err)
 	}
 
-	// 验证思考标签已被移除
-	expected := "这是思考过程这是实际回复"
+	// 验证非流式响应中思考标签已被清理（仅保留正文内容）
+	expected := "这是实际回复"
 	if resp.Choices[0].Message.Content != expected {
 		t.Errorf("思考标签处理错误，预期: %s, 得到: %s", expected, resp.Choices[0].Message.Content)
 	}

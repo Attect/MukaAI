@@ -51,24 +51,24 @@ const (
 
 // VerifyIssue 校验发现的问题
 type VerifyIssue struct {
-	Type        VerifyIssueType `json:"type"`         // 问题类型
-	Severity    string          `json:"severity"`     // 严重程度：low, medium, high, critical
-	Description string          `json:"description"`  // 问题描述
-	Evidence    string          `json:"evidence"`     // 证据/示例
-	Suggestion  string          `json:"suggestion"`   // 修正建议
-	FilePath    string          `json:"file_path"`    // 相关文件路径（如果有）
-	RuleName    string          `json:"rule_name"`    // 相关规则名称（如果是自定义规则）
-	Timestamp   time.Time       `json:"timestamp"`    // 发现时间
+	Type        VerifyIssueType `json:"type"`        // 问题类型
+	Severity    string          `json:"severity"`    // 严重程度：low, medium, high, critical
+	Description string          `json:"description"` // 问题描述
+	Evidence    string          `json:"evidence"`    // 证据/示例
+	Suggestion  string          `json:"suggestion"`  // 修正建议
+	FilePath    string          `json:"file_path"`   // 相关文件路径（如果有）
+	RuleName    string          `json:"rule_name"`   // 相关规则名称（如果是自定义规则）
+	Timestamp   time.Time       `json:"timestamp"`   // 发现时间
 }
 
 // VerifyResult 校验结果
 type VerifyResult struct {
-	Status    VerifyStatus  `json:"status"`     // 校验状态
-	Issues    []VerifyIssue `json:"issues"`     // 发现的问题列表
-	Timestamp time.Time     `json:"timestamp"`  // 校验时间
-	Summary   string        `json:"summary"`    // 校验摘要
-	Passed    int           `json:"passed"`     // 通过的检查项数量
-	Failed    int           `json:"failed"`     // 失败的检查项数量
+	Status    VerifyStatus  `json:"status"`    // 校验状态
+	Issues    []VerifyIssue `json:"issues"`    // 发现的问题列表
+	Timestamp time.Time     `json:"timestamp"` // 校验时间
+	Summary   string        `json:"summary"`   // 校验摘要
+	Passed    int           `json:"passed"`    // 通过的检查项数量
+	Failed    int           `json:"failed"`    // 失败的检查项数量
 }
 
 // IsFailed 检查是否失败
@@ -95,17 +95,17 @@ func (r *VerifyResult) GetCriticalIssues() []VerifyIssue {
 // VerifyConfig 校验器配置
 type VerifyConfig struct {
 	// 文件检查配置
-	CheckFileExists    bool `json:"check_file_exists"`     // 是否检查文件存在
-	CheckFileNonEmpty  bool `json:"check_file_non_empty"`  // 是否检查文件非空
+	CheckFileExists    bool `json:"check_file_exists"`      // 是否检查文件存在
+	CheckFileNonEmpty  bool `json:"check_file_non_empty"`   // 是否检查文件非空
 	MaxFileSizeToCheck int  `json:"max_file_size_to_check"` // 最大检查文件大小（字节），0表示无限制
 
 	// 内容检查配置
-	CheckKeywords      bool     `json:"check_keywords"`       // 是否检查关键词
-	RequiredKeywords   []string `json:"required_keywords"`    // 必需的关键词列表
-	KeywordMatchMode   string   `json:"keyword_match_mode"`   // 关键词匹配模式：any（任一匹配）, all（全部匹配）
+	CheckKeywords    bool     `json:"check_keywords"`     // 是否检查关键词
+	RequiredKeywords []string `json:"required_keywords"`  // 必需的关键词列表
+	KeywordMatchMode string   `json:"keyword_match_mode"` // 关键词匹配模式：any（任一匹配）, all（全部匹配）
 
 	// 语法检查配置
-	CheckJSSyntax     bool `json:"check_js_syntax"`      // 是否检查JavaScript语法
+	CheckJSSyntax      bool `json:"check_js_syntax"`      // 是否检查JavaScript语法
 	CheckHTMLStructure bool `json:"check_html_structure"` // 是否检查HTML结构
 
 	// 自定义规则配置
@@ -119,17 +119,17 @@ type VerifyConfig struct {
 // DefaultVerifierConfig 返回默认校验器配置
 func DefaultVerifierConfig() *VerifyConfig {
 	return &VerifyConfig{
-		CheckFileExists:     true,
-		CheckFileNonEmpty:   true,
-		MaxFileSizeToCheck:  10 * 1024 * 1024, // 10MB
-		CheckKeywords:       true,
-		RequiredKeywords:    []string{},
-		KeywordMatchMode:    "any",
-		CheckJSSyntax:       true,  // 默认启用JavaScript语法检查
-		CheckHTMLStructure:  true,  // 默认启用HTML结构检查
-		EnableCustomRules:   true,
-		StopOnFirstFailure:  false,
-		MaxIssuesToReport:   50,
+		CheckFileExists:    true,
+		CheckFileNonEmpty:  true,
+		MaxFileSizeToCheck: 10 * 1024 * 1024, // 10MB
+		CheckKeywords:      true,
+		RequiredKeywords:   []string{},
+		KeywordMatchMode:   "any",
+		CheckJSSyntax:      true, // 默认启用JavaScript语法检查
+		CheckHTMLStructure: true, // 默认启用HTML结构检查
+		EnableCustomRules:  true,
+		StopOnFirstFailure: false,
+		MaxIssuesToReport:  50,
 	}
 }
 
@@ -146,10 +146,10 @@ type VerifyRule interface {
 
 // VerifyContext 校验上下文
 type VerifyContext struct {
-	TaskState   *state.TaskState // 任务状态
-	Files       []string         // 待校验的文件列表
-	Content     string           // 待校验的内容
-	ExtraData   map[string]interface{} // 额外数据
+	TaskState *state.TaskState       // 任务状态
+	Files     []string               // 待校验的文件列表
+	Content   string                 // 待校验的内容
+	ExtraData map[string]interface{} // 额外数据
 }
 
 // Verifier 成果校验器
@@ -1228,8 +1228,9 @@ func (v *Verifier) removeStringContent(content string) string {
 
 // truncateString 截断字符串
 func (v *Verifier) truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "..."
+	return string(runes[:maxLen]) + "..."
 }

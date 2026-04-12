@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -96,8 +97,9 @@ func NewApp() *App {
 	}
 }
 
-// startup Wails生命周期回调，在应用启动时调用
-func (a *App) startup(ctx context.Context) {
+// Startup Wails生命周期回调，在应用启动时调用
+// 必须为导出方法，以便外部包（如cmd/agentplus）在OnStartup回调中调用
+func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
 }
 
@@ -118,11 +120,13 @@ func (a *App) SendMessage(content string) error {
 	if a.agent == nil {
 		return fmt.Errorf("agent not initialized")
 	}
+
+	a.mu.Lock()
 	if a.isStreaming {
+		a.mu.Unlock()
 		return fmt.Errorf("agent is already running")
 	}
 
-	a.mu.Lock()
 	conv := a.getOrCreateActiveConversation()
 	conv.messages = append(conv.messages, &message{
 		role:      "user",
@@ -136,6 +140,20 @@ func (a *App) SendMessage(content string) error {
 	runtime.EventsEmit(a.ctx, "conversation:updated", a.GetConversationData())
 
 	go func() {
+		// 使用defer作为最终保障
+		// StreamBridge.OnTaskDone会先执行重置，这里作为兜底防止isStreaming永久卡死
+		defer func() {
+			a.mu.Lock()
+			if a.isStreaming {
+				a.isStreaming = false
+				a.mu.Unlock()
+				runtime.EventsEmit(a.ctx, "stream:done")
+				runtime.EventsEmit(a.ctx, "conversation:updated", a.GetConversationData())
+			} else {
+				a.mu.Unlock()
+			}
+		}()
+
 		if err := a.agent.SendMessage(content); err != nil {
 			a.mu.Lock()
 			a.isStreaming = false
@@ -183,11 +201,15 @@ func (a *App) GetConversationData() map[string]interface{} {
 
 	messages := make([]Message, 0, len(conv.messages)+1)
 	for _, msg := range conv.messages {
+		toolCalls := msg.toolCalls
+		if toolCalls == nil {
+			toolCalls = make([]ToolCall, 0)
+		}
 		messages = append(messages, Message{
 			Role:          msg.role,
 			Content:       msg.content,
 			Thinking:      msg.thinking,
-			ToolCalls:     msg.toolCalls,
+			ToolCalls:     toolCalls,
 			TokenUsage:    msg.tokenUsage,
 			IsStreaming:   msg.isStreaming,
 			StreamingType: msg.streamingType,
@@ -195,13 +217,16 @@ func (a *App) GetConversationData() map[string]interface{} {
 		})
 	}
 
-	// 如果存在正在流式输出的消息，也包含在返回结果中
 	if conv.currentMessage != nil {
+		toolCalls := conv.currentMessage.toolCalls
+		if toolCalls == nil {
+			toolCalls = make([]ToolCall, 0)
+		}
 		messages = append(messages, Message{
 			Role:          conv.currentMessage.role,
 			Content:       conv.currentMessage.content,
 			Thinking:      conv.currentMessage.thinking,
-			ToolCalls:     conv.currentMessage.toolCalls,
+			ToolCalls:     toolCalls,
 			TokenUsage:    conv.currentMessage.tokenUsage,
 			IsStreaming:   conv.currentMessage.isStreaming,
 			StreamingType: conv.currentMessage.streamingType,
@@ -217,13 +242,23 @@ func (a *App) GetConversationData() map[string]interface{} {
 }
 
 // SetWorkDir 设置工作目录
-// 切换工作目录并通知前端
+// 仅更新App的currentDir字段，不调用os.Chdir以避免竞态条件
 func (a *App) SetWorkDir(path string) error {
-	if err := os.Chdir(path); err != nil {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
 		return err
 	}
-	absPath, _ := os.Getwd()
+	// 验证路径是否存在
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("path is not a directory: %s", absPath)
+	}
+	a.mu.Lock()
 	a.currentDir = absPath
+	a.mu.Unlock()
 	runtime.EventsEmit(a.ctx, "workdir:changed", absPath)
 	return nil
 }

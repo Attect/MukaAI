@@ -146,8 +146,9 @@ func (b *StreamBridge) OnToolResult(result agent.ToolCallInfo) {
 	runtime.EventsEmit(b.ctx, "conversation:updated", b.app.GetConversationData())
 }
 
-// OnComplete 处理推理完成
-// 将当前流式消息固化到消息列表，更新Token统计，并发射stream:complete事件
+// OnComplete 处理单次推理完成
+// 仅更新token统计和状态，不再固化消息到messages列表
+// 消息的固化改由OnTaskDone统一处理，避免多次迭代产生多条assistant消息
 func (b *StreamBridge) OnComplete(usage int) {
 	b.app.mu.Lock()
 	conv := b.app.getActiveConversation()
@@ -155,8 +156,8 @@ func (b *StreamBridge) OnComplete(usage int) {
 		conv.currentMessage.isStreaming = false
 		conv.currentMessage.tokenUsage = usage
 		conv.currentMessage.timestamp = time.Now()
-		conv.messages = append(conv.messages, conv.currentMessage)
-		conv.currentMessage = nil
+		// 不再固化消息到messages列表，由OnTaskDone处理
+		// 更新token统计
 		conv.tokenUsage += usage
 		b.app.totalTokens += usage
 		b.app.inferenceCount++
@@ -167,7 +168,7 @@ func (b *StreamBridge) OnComplete(usage int) {
 		"usage": usage,
 	})
 	runtime.EventsEmit(b.ctx, "tokenstats:updated", b.app.GetTokenStats())
-	runtime.EventsEmit(b.ctx, "conversation:updated", b.app.GetConversationData())
+	// 不再在这里发射conversation:updated，因为消息还没固化
 }
 
 // OnError 处理错误
@@ -196,9 +197,16 @@ func (b *StreamBridge) OnError(err error) {
 
 // OnTaskDone 处理任务完成
 // 当整个Agent任务（包括所有迭代）完成后调用
-// 重置流式状态并发射stream:done事件，通知前端任务已完全结束
+// 固化当前消息到消息列表，重置流式状态，并发射stream:done事件
 func (b *StreamBridge) OnTaskDone() {
 	b.app.mu.Lock()
+	// 固化当前消息到消息列表
+	conv := b.app.getActiveConversation()
+	if conv != nil && conv.currentMessage != nil {
+		conv.currentMessage.isStreaming = false
+		conv.messages = append(conv.messages, conv.currentMessage)
+		conv.currentMessage = nil
+	}
 	b.app.isStreaming = false
 	b.app.mu.Unlock()
 

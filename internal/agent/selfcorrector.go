@@ -38,44 +38,44 @@ const (
 
 // FailureRecord 失败记录
 type FailureRecord struct {
-	Type        FailureType `json:"type"`         // 失败类型
-	Timestamp   time.Time   `json:"timestamp"`    // 失败时间
-	Summary     string      `json:"summary"`      // 失败摘要
-	Details     string      `json:"details"`      // 详细信息
-	Issues      []string    `json:"issues"`       // 问题列表
-	RetryCount  int         `json:"retry_count"`  // 重试次数
-	Corrected   bool        `json:"corrected"`    // 是否已修正
+	Type       FailureType `json:"type"`        // 失败类型
+	Timestamp  time.Time   `json:"timestamp"`   // 失败时间
+	Summary    string      `json:"summary"`     // 失败摘要
+	Details    string      `json:"details"`     // 详细信息
+	Issues     []string    `json:"issues"`      // 问题列表
+	RetryCount int         `json:"retry_count"` // 重试次数
+	Corrected  bool        `json:"corrected"`   // 是否已修正
 }
 
 // CorrectionResult 修正结果
 type CorrectionResult struct {
-	Status           CorrectionStatus `json:"status"`             // 修正状态
-	NeedsCorrection  bool             `json:"needs_correction"`   // 是否需要修正
-	Instruction      string           `json:"instruction"`        // 修正指令内容
-	RemainingRetries int              `json:"remaining_retries"`  // 剩余重试次数
-	FailureSummary   string           `json:"failure_summary"`    // 失败原因摘要
-	Suggestions      []string         `json:"suggestions"`        // 修正建议列表
-	Priority         string           `json:"priority"`           // 优先级：low, medium, high, critical
-	Timestamp        time.Time        `json:"timestamp"`          // 时间戳
+	Status           CorrectionStatus `json:"status"`            // 修正状态
+	NeedsCorrection  bool             `json:"needs_correction"`  // 是否需要修正
+	Instruction      string           `json:"instruction"`       // 修正指令内容
+	RemainingRetries int              `json:"remaining_retries"` // 剩余重试次数
+	FailureSummary   string           `json:"failure_summary"`   // 失败原因摘要
+	Suggestions      []string         `json:"suggestions"`       // 修正建议列表
+	Priority         string           `json:"priority"`          // 优先级：low, medium, high, critical
+	Timestamp        time.Time        `json:"timestamp"`         // 时间戳
 }
 
 // SelfCorrectorConfig 自我修正器配置
 type SelfCorrectorConfig struct {
 	// 重试配置
-	MaxRetries          int `json:"max_retries"`           // 最大重试次数（通用，已废弃，建议使用MaxReviewRetries和MaxVerifyRetries）
-	RetryDelayMs       int `json:"retry_delay_ms"`        // 重试延迟（毫秒）
-	ExponentialBackoff bool `json:"exponential_backoff"`   // 是否启用指数退避
+	MaxRetries         int  `json:"max_retries"`         // 最大重试次数（通用，已废弃，建议使用MaxReviewRetries和MaxVerifyRetries）
+	RetryDelayMs       int  `json:"retry_delay_ms"`      // 重试延迟（毫秒）
+	ExponentialBackoff bool `json:"exponential_backoff"` // 是否启用指数退避
 
 	// 分离的重试配置
 	MaxReviewRetries int `json:"max_review_retries"` // 审查最大重试次数（默认3）
 	MaxVerifyRetries int `json:"max_verify_retries"` // 校验最大重试次数（默认5）
 
 	// 失败分析配置
-	MaxFailureHistory  int `json:"max_failure_history"`   // 最大失败历史记录数
+	MaxFailureHistory    int `json:"max_failure_history"`    // 最大失败历史记录数
 	FailurePatternWindow int `json:"failure_pattern_window"` // 失败模式检测窗口大小
 
 	// 修正指令配置
-	MaxInstructionLength int `json:"max_instruction_length"` // 修正指令最大长度
+	MaxInstructionLength int  `json:"max_instruction_length"` // 修正指令最大长度
 	IncludeEvidence      bool `json:"include_evidence"`       // 是否包含证据
 	IncludeSuggestions   bool `json:"include_suggestions"`    // 是否包含建议
 }
@@ -84,15 +84,15 @@ type SelfCorrectorConfig struct {
 func DefaultSelfCorrectorConfig() *SelfCorrectorConfig {
 	return &SelfCorrectorConfig{
 		MaxRetries:           3,
-		RetryDelayMs:        1000,
-		ExponentialBackoff:  true,
-		MaxReviewRetries:    3,
-		MaxVerifyRetries:    5,
-		MaxFailureHistory:   50,
+		RetryDelayMs:         1000,
+		ExponentialBackoff:   true,
+		MaxReviewRetries:     3,
+		MaxVerifyRetries:     5,
+		MaxFailureHistory:    50,
 		FailurePatternWindow: 5,
 		MaxInstructionLength: 2000,
-		IncludeEvidence:     true,
-		IncludeSuggestions:  true,
+		IncludeEvidence:      true,
+		IncludeSuggestions:   true,
 	}
 }
 
@@ -140,10 +140,20 @@ func (sc *SelfCorrector) AnalyzeFailure(verifyResult *VerifyResult, reviewResult
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 
+	// 根据失败类型确定剩余重试次数
+	var remainingRetries int
+	if verifyResult != nil && verifyResult.IsFailed() {
+		remainingRetries = sc.config.MaxVerifyRetries - sc.verifyRetryCount
+	} else if reviewResult != nil && reviewResult.IsBlocked() {
+		remainingRetries = sc.config.MaxReviewRetries - sc.reviewRetryCount
+	} else {
+		remainingRetries = sc.config.MaxRetries - sc.currentRetryCount
+	}
+
 	result := &CorrectionResult{
 		Status:           CorrectionStatusNeeded,
 		NeedsCorrection:  true,
-		RemainingRetries: sc.config.MaxRetries - sc.currentRetryCount,
+		RemainingRetries: remainingRetries,
 		Suggestions:      make([]string, 0),
 		Timestamp:        time.Now(),
 	}
@@ -461,11 +471,11 @@ func (sc *SelfCorrector) DetectFailurePattern() *FailurePattern {
 
 // FailurePattern 失败模式
 type FailurePattern struct {
-	DetectedAt      time.Time               `json:"detected_at"`       // 检测时间
-	FailureTypes    map[FailureType]int     `json:"failure_types"`     // 失败类型统计
-	RecurringIssues []string                `json:"recurring_issues"`  // 重复出现的问题
-	Severity        string                  `json:"severity"`          // 严重程度
-	Description     string                  `json:"description"`       // 模式描述
+	DetectedAt      time.Time           `json:"detected_at"`      // 检测时间
+	FailureTypes    map[FailureType]int `json:"failure_types"`    // 失败类型统计
+	RecurringIssues []string            `json:"recurring_issues"` // 重复出现的问题
+	Severity        string              `json:"severity"`         // 严重程度
+	Description     string              `json:"description"`      // 模式描述
 }
 
 // 辅助方法
@@ -592,19 +602,19 @@ func (sc *SelfCorrector) GetStatistics() *CorrectionStatistics {
 	defer sc.mu.RUnlock()
 
 	stats := &CorrectionStatistics{
-		CurrentRetryCount:  sc.currentRetryCount,
-		MaxRetries:         sc.config.MaxRetries,
-		RemainingRetries:   sc.config.MaxRetries - sc.currentRetryCount,
-		TotalFailures:      len(sc.failureHistory),
-		TotalCorrections:   len(sc.correctionHistory),
+		CurrentRetryCount: sc.currentRetryCount,
+		MaxRetries:        sc.config.MaxRetries,
+		RemainingRetries:  sc.config.MaxRetries - sc.currentRetryCount,
+		TotalFailures:     len(sc.failureHistory),
+		TotalCorrections:  len(sc.correctionHistory),
 
 		// 分离的重试统计
-		ReviewRetryCount:        sc.reviewRetryCount,
-		VerifyRetryCount:        sc.verifyRetryCount,
-		MaxReviewRetries:        sc.config.MaxReviewRetries,
-		MaxVerifyRetries:        sc.config.MaxVerifyRetries,
-		RemainingReviewRetries:  sc.config.MaxReviewRetries - sc.reviewRetryCount,
-		RemainingVerifyRetries:  sc.config.MaxVerifyRetries - sc.verifyRetryCount,
+		ReviewRetryCount:       sc.reviewRetryCount,
+		VerifyRetryCount:       sc.verifyRetryCount,
+		MaxReviewRetries:       sc.config.MaxReviewRetries,
+		MaxVerifyRetries:       sc.config.MaxVerifyRetries,
+		RemainingReviewRetries: sc.config.MaxReviewRetries - sc.reviewRetryCount,
+		RemainingVerifyRetries: sc.config.MaxVerifyRetries - sc.verifyRetryCount,
 	}
 
 	// 统计已修正的失败数
@@ -624,19 +634,19 @@ func (sc *SelfCorrector) GetStatistics() *CorrectionStatistics {
 
 // CorrectionStatistics 修正统计信息
 type CorrectionStatistics struct {
-	CurrentRetryCount    int     `json:"current_retry_count"`    // 当前重试次数（通用）
-	MaxRetries           int     `json:"max_retries"`            // 最大重试次数（通用）
-	RemainingRetries     int     `json:"remaining_retries"`      // 剩余重试次数（通用）
-	TotalFailures        int     `json:"total_failures"`         // 总失败次数
-	CorrectedFailures    int     `json:"corrected_failures"`     // 已修正的失败次数
-	TotalCorrections     int     `json:"total_corrections"`      // 总修正次数
+	CurrentRetryCount     int     `json:"current_retry_count"`     // 当前重试次数（通用）
+	MaxRetries            int     `json:"max_retries"`             // 最大重试次数（通用）
+	RemainingRetries      int     `json:"remaining_retries"`       // 剩余重试次数（通用）
+	TotalFailures         int     `json:"total_failures"`          // 总失败次数
+	CorrectedFailures     int     `json:"corrected_failures"`      // 已修正的失败次数
+	TotalCorrections      int     `json:"total_corrections"`       // 总修正次数
 	CorrectionSuccessRate float64 `json:"correction_success_rate"` // 修正成功率
 
 	// 分离的重试统计
-	ReviewRetryCount  int `json:"review_retry_count"`  // 审查重试次数
-	VerifyRetryCount  int `json:"verify_retry_count"`  // 校验重试次数
-	MaxReviewRetries  int `json:"max_review_retries"`  // 审查最大重试次数
-	MaxVerifyRetries  int `json:"max_verify_retries"`  // 校验最大重试次数
+	ReviewRetryCount       int `json:"review_retry_count"`       // 审查重试次数
+	VerifyRetryCount       int `json:"verify_retry_count"`       // 校验重试次数
+	MaxReviewRetries       int `json:"max_review_retries"`       // 审查最大重试次数
+	MaxVerifyRetries       int `json:"max_verify_retries"`       // 校验最大重试次数
 	RemainingReviewRetries int `json:"remaining_review_retries"` // 剩余审查重试次数
 	RemainingVerifyRetries int `json:"remaining_verify_retries"` // 剩余校验重试次数
 }

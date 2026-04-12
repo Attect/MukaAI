@@ -86,24 +86,24 @@ func (p *ThinkingTagProcessor) Process(chunk string) (thinking string, content s
 	}
 }
 
-// hasPartialTag 检查缓冲区末尾是否有部分标签
-func (p *ThinkingTagProcessor) hasPartialTag(tag string) bool {
-	// 检查缓冲区末尾是否匹配标签的前缀
-	for i := 1; i < len(tag); i++ {
-		if strings.HasSuffix(p.buffer, tag[:i]) {
-			return true
-		}
-	}
-	return false
-}
-
 // getPartialTagLen 获取部分标签的长度
+// 检查缓冲区末尾是否匹配标签的前缀（标签可能跨chunk传输不完整）
 func (p *ThinkingTagProcessor) getPartialTagLen(tag string) int {
 	// 检查缓冲区末尾是否匹配标签的前缀
 	for i := len(tag) - 1; i >= 1; i-- {
 		if strings.HasSuffix(p.buffer, tag[:i]) {
 			return i
 		}
+	}
+	// 补充检查：缓冲区本身是否是标签的前缀
+	// 这处理buffer恰好等于tag前缀的情况（如 "<thinking" 是 "<thinking>" 的前缀）
+	// 以及buffer等于tag本身的情况（不应该在这里发生，因为完整标签会被主逻辑匹配）
+	tagFull := tag
+	if !strings.HasSuffix(tagFull, ">") {
+		tagFull = tagFull + ">"
+	}
+	if strings.HasPrefix(tagFull, p.buffer) && len(p.buffer) < len(tagFull) {
+		return len(p.buffer)
 	}
 	return 0
 }
