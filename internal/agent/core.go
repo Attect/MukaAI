@@ -42,10 +42,6 @@ type Agent struct {
 	running    bool
 	cancelFunc context.CancelFunc
 
-	// 校验状态
-	verificationPassed     bool // 是否通过强制校验
-	consecutiveNoToolCalls int  // 连续无工具调用计数
-
 	// 回调
 	onStreamChunk  func(chunk string)                  // 流式输出回调
 	onToolCall     func(name, args string)             // 工具调用回调（即将废弃）
@@ -168,9 +164,11 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 		return nil, fmt.Errorf("agent is already running")
 	}
 	a.running = true
-	a.verificationPassed = false
-	a.consecutiveNoToolCalls = 0
 	a.mu.Unlock()
+
+	// 校验状态局部变量（仅在Run内使用，避免并发安全隐患）
+	verificationPassed := false
+	consecutiveNoToolCalls := 0
 
 	// 确保运行状态被重置
 	defer func() {
@@ -372,7 +370,7 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 			// 检查是否有工具调用
 			if len(response.ToolCalls) > 0 {
 				// 有工具调用，重置连续无工具调用计数器
-				a.consecutiveNoToolCalls = 0
+				consecutiveNoToolCalls = 0
 
 				// 执行工具调用
 				toolResults, err := a.executeTools(runCtx, response.ToolCalls)
@@ -487,11 +485,11 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 			}
 
 			// 没有工具调用，递增连续无工具调用计数器
-			a.consecutiveNoToolCalls++
+			consecutiveNoToolCalls++
 
 			// 无工具调用回调
 			if a.onNoToolCall != nil {
-				a.onNoToolCall(a.consecutiveNoToolCalls, response.Content)
+				a.onNoToolCall(consecutiveNoToolCalls, response.Content)
 			}
 
 			// 检查是否完成（通过文本内容判断）
@@ -557,7 +555,7 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 			}
 
 			// 连续无工具调用超过阈值，视为纯对话，直接完成
-			if a.consecutiveNoToolCalls >= 3 {
+			if consecutiveNoToolCalls >= 3 {
 				result.Status = "completed"
 				result.EndTime = time.Now()
 				result.FinalResponse = response.Content
@@ -578,7 +576,7 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 		// 检查任务状态
 		if result.Status == "completed" {
 			// 强制校验：即使之前通过了校验，也要再次确认
-			if !a.verificationPassed {
+			if !verificationPassed {
 				// 执行强制校验
 				verifyResult := a.verifyTaskCompletion(runCtx, taskGoal)
 
@@ -631,7 +629,7 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 				}
 
 				// 强制校验通过
-				a.verificationPassed = true
+				verificationPassed = true
 			}
 
 			// 强制校验通过，真正完成任务
