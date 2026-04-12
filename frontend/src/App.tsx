@@ -25,6 +25,7 @@ function App(): React.ReactElement {
     interruptInference,
     clearConv,
     changeWorkDir,
+    switchConv,
   } = useConversation();
 
   const [sidebarVisible, setSidebarVisible] = useState(false);
@@ -113,7 +114,12 @@ function App(): React.ReactElement {
         visible={sidebarVisible}
         conversations={conversations}
         activeId={conversationData.id}
-        onSelect={() => {}}
+        onSelect={(id) => {
+          if (id !== conversationData.id) {
+            switchConv(id);
+          }
+          setSidebarVisible(false);
+        }}
         onClose={() => setSidebarVisible(false)}
         onNew={clearConv}
       />

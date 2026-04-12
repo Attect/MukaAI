@@ -11,3 +11,4 @@ export function GetWorkDir(): Promise<string>;
 export function InterruptInference(): Promise<void>;
 export function SendMessage(arg1: string): Promise<void>;
 export function SetWorkDir(arg1: string): Promise<void>;
+export function SwitchConversation(arg1: string): Promise<void>;

@@ -33,3 +33,7 @@ export function SendMessage(arg1) {
 export function SetWorkDir(arg1) {
   return window['go']['gui']['App']['SetWorkDir'](arg1);
 }
+
+export function SwitchConversation(arg1) {
+  return window['go']['gui']['App']['SwitchConversation'](arg1);
+}

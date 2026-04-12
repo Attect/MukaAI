@@ -6,6 +6,7 @@ import {
   clearConversation as wailsClearConversation,
   setWorkDir as wailsSetWorkDir,
   getConversations as wailsGetConversations,
+  switchConversation as wailsSwitchConversation,
 } from "../wailsRuntime";
 
 export function useConversation() {
@@ -65,6 +66,15 @@ export function useConversation() {
     }
   }, []);
 
+  const switchConv = useCallback(async (id: string) => {
+    setError(null);
+    try {
+      await wailsSwitchConversation(id);
+    } catch (err: any) {
+      setError(err?.message || String(err));
+    }
+  }, []);
+
   return {
     conversationData,
     setConversationData,
@@ -80,5 +90,6 @@ export function useConversation() {
     interruptInference,
     clearConv,
     changeWorkDir,
+    switchConv,
   };
 }

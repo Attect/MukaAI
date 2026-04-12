@@ -295,6 +295,35 @@ func (a *App) InterruptInference() {
 	runtime.EventsEmit(a.ctx, "conversation:updated", a.GetConversationData())
 }
 
+// SwitchConversation 切换到指定ID的对话
+// 如果正在推理中则拒绝切换，切换成功后返回新的对话数据
+func (a *App) SwitchConversation(id string) error {
+	a.mu.Lock()
+	if a.isStreaming {
+		a.mu.Unlock()
+		return fmt.Errorf("cannot switch conversation while streaming")
+	}
+
+	// 查找目标对话
+	var target *conversation
+	for _, conv := range a.conversations {
+		if conv.id == id {
+			target = conv
+			break
+		}
+	}
+	if target == nil {
+		a.mu.Unlock()
+		return fmt.Errorf("conversation not found: %s", id)
+	}
+
+	a.activeConvID = id
+	a.mu.Unlock()
+
+	runtime.EventsEmit(a.ctx, "conversation:updated", a.GetConversationData())
+	return nil
+}
+
 // ClearConversation 清空当前对话的消息
 // 保留对话本身，仅清除消息列表
 func (a *App) ClearConversation() {

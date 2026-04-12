@@ -9,6 +9,7 @@ import {
   GetWorkDir as wailsGetWorkDir,
   InterruptInference as wailsInterruptInference,
   ClearConversation as wailsClearConversation,
+  SwitchConversation as wailsSwitchConversation,
 } from "../wailsjs/go/gui/App";
 
 import { EventsOn } from "../wailsjs/runtime/runtime";
@@ -53,6 +54,10 @@ export async function clearConversation(): Promise<void> {
 
 export async function getConversations(): Promise<Conversation[]> {
   return (await wailsGetConversations()) as unknown as Conversation[];
+}
+
+export async function switchConversation(id: string): Promise<void> {
+  await wailsSwitchConversation(id);
 }
 
 export function onEvent(event: string, callback: (...args: any[]) => void): void {
