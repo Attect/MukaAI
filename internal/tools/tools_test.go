@@ -530,8 +530,8 @@ func TestRegisterAllTools(t *testing.T) {
 
 	// 验证工具数量
 	count := registry.ToolCount()
-	if count != 7 { // 5 filesystem + 2 command
-		t.Errorf("expected 7 tools, got %d", count)
+	if count != 8 { // 6 filesystem (incl. edit_file) + 2 command
+		t.Errorf("expected 8 tools, got %d", count)
 	}
 
 	// 验证所有工具都有有效的Schema
@@ -1006,8 +1006,8 @@ func TestRegisterDefaultFilesystemTools(t *testing.T) {
 		t.Fatalf("failed to register default filesystem tools: %v", err)
 	}
 
-	if defaultRegistry.ToolCount() != 5 {
-		t.Errorf("expected 5 tools, got %d", defaultRegistry.ToolCount())
+	if defaultRegistry.ToolCount() != 6 { // 5 original + edit_file
+		t.Errorf("expected 6 tools, got %d", defaultRegistry.ToolCount())
 	}
 }
 
@@ -1684,12 +1684,12 @@ func TestRegisterFilesystemToolsWithWorkDir(t *testing.T) {
 		t.Fatalf("failed to register filesystem tools with workDir: %v", err)
 	}
 
-	if registry.ToolCount() != 5 {
-		t.Errorf("expected 5 tools, got %d", registry.ToolCount())
+	if registry.ToolCount() != 6 { // 5 original + edit_file
+		t.Errorf("expected 6 tools, got %d", registry.ToolCount())
 	}
 
 	// 验证工具已注册
-	expectedTools := []string{"read_file", "write_file", "list_directory", "delete_file", "create_directory"}
+	expectedTools := []string{"read_file", "write_file", "edit_file", "list_directory", "delete_file", "create_directory"}
 	for _, name := range expectedTools {
 		if _, exists := registry.GetTool(name); !exists {
 			t.Errorf("tool %s should be registered", name)

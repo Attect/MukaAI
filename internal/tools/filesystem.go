@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"agentplus/internal/tools/syntax"
 	"context"
 	"fmt"
 	"io/fs"
@@ -171,7 +172,8 @@ func (t *ReadFileTool) Execute(ctx context.Context, params map[string]interface{
 
 // WriteFileTool 写入文件工具
 type WriteFileTool struct {
-	workDir string
+	workDir    string
+	dispatcher *syntax.Dispatcher
 }
 
 func NewWriteFileTool() *WriteFileTool {
@@ -182,12 +184,19 @@ func NewWriteFileToolWithWorkDir(workDir string) *WriteFileTool {
 	return &WriteFileTool{workDir: workDir}
 }
 
+// NewWriteFileToolWithWorkDirAndDispatcher 创建带语法检查调度器的写入文件工具
+func NewWriteFileToolWithWorkDirAndDispatcher(workDir string, dispatcher *syntax.Dispatcher) *WriteFileTool {
+	return &WriteFileTool{workDir: workDir, dispatcher: dispatcher}
+}
+
 func (t *WriteFileTool) Name() string {
 	return "write_file"
 }
 
 func (t *WriteFileTool) Description() string {
-	return "将内容写入指定路径的文件。如果文件不存在则创建，如果存在则覆盖。路径必须是绝对路径。会自动创建所需的父目录。"
+	return "将内容写入指定路径的文件。如果文件不存在则创建，如果存在则覆盖。路径必须是绝对路径。会自动创建所需的父目录。" +
+		"写入完成后会自动根据文件扩展名进行语法检查（支持JSON/YAML/XML/HTML/Go/JS/TS/Python/Java/Kotlin/Rust等），检查结果会附加在返回数据中。如果发现语法错误，会在返回消息中提示，请根据错误信息修正文件。" +
+		"\n**重要：必须使用此工具进行文件创建/写入操作，不应通过execute_command等命令行方式绕过文件操作工具。**"
 }
 
 func (t *WriteFileTool) Parameters() map[string]interface{} {
@@ -249,11 +258,379 @@ func (t *WriteFileTool) Execute(ctx context.Context, params map[string]interface
 		return NewErrorResultWithError(fmt.Sprintf("failed to write file: %s", validatedPath), err), nil
 	}
 
-	return NewSuccessResult(map[string]interface{}{
+	result := map[string]interface{}{
 		"path":        validatedPath,
 		"bytes_write": len(content),
 		"message":     "file written successfully",
-	}), nil
+	}
+
+	// 写入成功后执行语法检查（仅当dispatcher可用时）
+	if t.dispatcher != nil {
+		syntaxResult := t.dispatcher.Check(content, validatedPath, int64(len(content)))
+		if syntaxResult != nil {
+			result["syntax_check"] = syntaxResult
+			// 有语法错误时修改消息
+			if syntaxResult.HasErrors {
+				result["message"] = "file written successfully, but syntax errors detected. Please fix them immediately by using edit_file or write_file tool."
+			} else if syntaxResult.Degraded {
+				result["message"] = fmt.Sprintf("file written successfully (syntax check skipped: %s)", syntaxResult.DegradedReason)
+			}
+		}
+	}
+
+	return NewSuccessResult(result), nil
+}
+
+// ==================== EditFile Tool ====================
+
+// EditFileTool 编辑文件工具
+// 支持两种模式：line_replace（行号替换）和 string_replace（字符串替换）
+// 编辑完成后自动进行语法检查
+type EditFileTool struct {
+	workDir    string
+	dispatcher *syntax.Dispatcher
+}
+
+// NewEditFileToolWithWorkDir 创建编辑文件工具
+func NewEditFileToolWithWorkDir(workDir string) *EditFileTool {
+	return &EditFileTool{workDir: workDir}
+}
+
+// NewEditFileToolWithWorkDirAndDispatcher 创建带语法检查调度器的编辑文件工具
+func NewEditFileToolWithWorkDirAndDispatcher(workDir string, dispatcher *syntax.Dispatcher) *EditFileTool {
+	return &EditFileTool{workDir: workDir, dispatcher: dispatcher}
+}
+
+func (t *EditFileTool) Name() string {
+	return "edit_file"
+}
+
+func (t *EditFileTool) Description() string {
+	return "编辑指定文件的内容。支持两种编辑模式：" +
+		"1. line_replace模式：通过指定起始行(start_line)和结束行(end_line)替换指定范围的行。" +
+		"2. string_replace模式：通过指定原始字符串(old_string)和新字符串(new_string)进行精确替换。设置replace_all=true可替换所有匹配项。" +
+		"\n编辑完成后会自动进行语法检查，如果发现错误会在返回结果中提示。" +
+		"\n**重要：必须使用此工具或write_file工具进行文件编辑操作，不应通过execute_command等命令行方式绕过文件操作工具。**" +
+		"\n路径必须是绝对路径。"
+}
+
+func (t *EditFileTool) Parameters() map[string]interface{} {
+	return BuildSchema(map[string]*ToolParameter{
+		"path": {
+			Type:        "string",
+			Description: "文件的绝对路径",
+			Required:    true,
+		},
+		"mode": {
+			Type:        "string",
+			Description: "编辑模式：line_replace（行号替换）或 string_replace（字符串替换）",
+			Required:    true,
+			Enum:        []string{"line_replace", "string_replace"},
+		},
+		"start_line": {
+			Type:        "integer",
+			Description: "起始行号（1-based），line_replace模式必需",
+		},
+		"end_line": {
+			Type:        "integer",
+			Description: "结束行号（1-based，包含），line_replace模式必需",
+		},
+		"old_string": {
+			Type:        "string",
+			Description: "被替换的原始字符串，string_replace模式必需",
+		},
+		"new_string": {
+			Type:        "string",
+			Description: "替换后的新字符串，默认为空（即删除操作）",
+		},
+		"replace_all": {
+			Type:        "boolean",
+			Description: "string_replace模式下是否替换所有匹配项，默认false",
+			Default:     false,
+		},
+	}, []string{"path", "mode"})
+}
+
+func (t *EditFileTool) Execute(ctx context.Context, params map[string]interface{}) (*ToolResult, error) {
+	// 解析必需参数
+	pathVal, ok := params["path"]
+	if !ok {
+		return NewErrorResult("missing required parameter: path"), nil
+	}
+	path, ok := pathVal.(string)
+	if !ok {
+		return NewErrorResult("parameter 'path' must be a string"), nil
+	}
+
+	modeVal, ok := params["mode"]
+	if !ok {
+		return NewErrorResult("missing required parameter: mode"), nil
+	}
+	mode, ok := modeVal.(string)
+	if !ok {
+		return NewErrorResult("parameter 'mode' must be a string"), nil
+	}
+
+	// 验证模式
+	if mode != "line_replace" && mode != "string_replace" {
+		return NewErrorResult(fmt.Sprintf("invalid mode '%s', must be 'line_replace' or 'string_replace'", mode)), nil
+	}
+
+	// 验证路径
+	if !filepath.IsAbs(path) {
+		return NewErrorResult(fmt.Sprintf("path must be absolute: %s", path)), nil
+	}
+
+	validatedPath, err := validatePath(path, t.workDir)
+	if err != nil {
+		return NewErrorResult(err.Error()), nil
+	}
+
+	// 检查文件存在且不是目录
+	info, err := os.Stat(validatedPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return NewErrorResult(fmt.Sprintf("file does not exist: %s", validatedPath)), nil
+		}
+		return NewErrorResultWithError(fmt.Sprintf("failed to stat file: %s", validatedPath), err), nil
+	}
+	if info.IsDir() {
+		return NewErrorResult(fmt.Sprintf("path is a directory, not a file: %s", validatedPath)), nil
+	}
+
+	// 读取文件内容
+	contentBytes, err := os.ReadFile(validatedPath)
+	if err != nil {
+		return NewErrorResultWithError(fmt.Sprintf("failed to read file: %s", validatedPath), err), nil
+	}
+	content := string(contentBytes)
+
+	// 解析new_string（默认为空字符串）
+	newString := ""
+	if nsVal, ok := params["new_string"]; ok {
+		if ns, ok := nsVal.(string); ok {
+			newString = ns
+		}
+	}
+
+	var newContent string
+	var replacements int
+	var linesAffected []int
+
+	switch mode {
+	case "line_replace":
+		newContent, linesAffected, err = t.executeLineReplace(content, params)
+		if err != nil {
+			return NewErrorResult(err.Error()), nil
+		}
+		replacements = 1
+
+	case "string_replace":
+		// 解析old_string
+		oldStringVal, ok := params["old_string"]
+		if !ok {
+			return NewErrorResult("missing required parameter: old_string for string_replace mode"), nil
+		}
+		oldString, ok := oldStringVal.(string)
+		if !ok {
+			return NewErrorResult("parameter 'old_string' must be a string"), nil
+		}
+		if oldString == "" {
+			return NewErrorResult("parameter 'old_string' must not be empty"), nil
+		}
+
+		// 解析replace_all
+		replaceAll := false
+		if raVal, ok := params["replace_all"]; ok {
+			if ra, ok := raVal.(bool); ok {
+				replaceAll = ra
+			}
+		}
+
+		newContent, replacements, linesAffected, err = t.executeStringReplace(content, oldString, newString, replaceAll)
+		if err != nil {
+			return NewErrorResult(err.Error()), nil
+		}
+	}
+
+	// 写入修改后的内容
+	if err := os.WriteFile(validatedPath, []byte(newContent), 0644); err != nil {
+		return NewErrorResultWithError(fmt.Sprintf("failed to write edited file: %s", validatedPath), err), nil
+	}
+
+	// 构建返回结果
+	result := map[string]interface{}{
+		"path":              validatedPath,
+		"mode":              mode,
+		"replacements_made": replacements,
+		"bytes_written":     len(newContent),
+		"message":           "file edited successfully",
+	}
+	if len(linesAffected) > 0 {
+		result["lines_affected"] = linesAffected
+	}
+
+	// 编辑完成后执行语法检查
+	if t.dispatcher != nil {
+		syntaxResult := t.dispatcher.Check(newContent, validatedPath, int64(len(newContent)))
+		if syntaxResult != nil {
+			result["syntax_check"] = syntaxResult
+			if syntaxResult.HasErrors {
+				result["message"] = "file edited successfully, but syntax errors detected. Please fix them immediately by using edit_file or write_file tool."
+			} else if syntaxResult.Degraded {
+				result["message"] = fmt.Sprintf("file edited successfully (syntax check skipped: %s)", syntaxResult.DegradedReason)
+			}
+		}
+	}
+
+	return NewSuccessResult(result), nil
+}
+
+// executeLineReplace 执行行号替换模式
+func (t *EditFileTool) executeLineReplace(content string, params map[string]interface{}) (string, []int, error) {
+	// 解析start_line
+	startLineVal, ok := params["start_line"]
+	if !ok {
+		return "", nil, fmt.Errorf("missing required parameter: start_line for line_replace mode")
+	}
+	startLine, ok := startLineVal.(float64)
+	if !ok {
+		return "", nil, fmt.Errorf("parameter 'start_line' must be a number")
+	}
+
+	// 解析end_line
+	endLineVal, ok := params["end_line"]
+	if !ok {
+		return "", nil, fmt.Errorf("missing required parameter: end_line for line_replace mode")
+	}
+	endLine, ok := endLineVal.(float64)
+	if !ok {
+		return "", nil, fmt.Errorf("parameter 'end_line' must be a number")
+	}
+
+	// 验证行号
+	if startLine < 1 {
+		return "", nil, fmt.Errorf("start_line must be >= 1")
+	}
+	if startLine > endLine {
+		return "", nil, fmt.Errorf("start_line must be <= end_line")
+	}
+
+	// 解析new_string
+	newString := ""
+	if nsVal, ok := params["new_string"]; ok {
+		if ns, ok := nsVal.(string); ok {
+			newString = ns
+		}
+	}
+
+	// 分割行
+	lines := strings.Split(content, "\n")
+	totalLines := len(lines)
+
+	// 如果内容为空且只有一行空内容
+	if content == "" {
+		lines = []string{}
+		totalLines = 0
+	}
+
+	if totalLines == 0 {
+		return "", nil, fmt.Errorf("cannot perform line_replace on empty file")
+	}
+
+	sLine := int(startLine)
+	eLine := int(endLine)
+
+	if sLine > totalLines {
+		return "", nil, fmt.Errorf("start_line exceeds file line count (file has %d lines, start_line=%d)", totalLines, sLine)
+	}
+	if eLine > totalLines {
+		return "", nil, fmt.Errorf("end_line exceeds file line count (file has %d lines, end_line=%d)", totalLines, eLine)
+	}
+
+	// 构建受影响行号列表
+	linesAffected := make([]int, 0, eLine-sLine+1)
+	for i := sLine; i <= eLine; i++ {
+		linesAffected = append(linesAffected, i)
+	}
+
+	// 构建新内容
+	var newLines []string
+	// 保留 start_line 之前的行
+	newLines = append(newLines, lines[:sLine-1]...)
+	// 插入新内容
+	if newString != "" {
+		newLines = append(newLines, strings.Split(newString, "\n")...)
+	}
+	// 保留 end_line 之后的行
+	if eLine < totalLines {
+		newLines = append(newLines, lines[eLine:]...)
+	}
+
+	return strings.Join(newLines, "\n"), linesAffected, nil
+}
+
+// executeStringReplace 执行字符串替换模式
+func (t *EditFileTool) executeStringReplace(content string, oldString, newString string, replaceAll bool) (string, int, []int, error) {
+	// 统计匹配次数
+	count := strings.Count(content, oldString)
+
+	if count == 0 {
+		return "", 0, nil, fmt.Errorf("old_string not found in file")
+	}
+
+	if count > 1 && !replaceAll {
+		return "", 0, nil, fmt.Errorf("found %d matches for old_string. Provide more context or use replace_all=true", count)
+	}
+
+	var newContent string
+	replacements := count
+
+	if replaceAll {
+		newContent = strings.ReplaceAll(content, oldString, newString)
+	} else {
+		newContent = strings.Replace(content, oldString, newString, 1)
+	}
+
+	// 计算受影响的行号
+	linesAffected := findAffectedLines(content, oldString, replaceAll, count)
+
+	return newContent, replacements, linesAffected, nil
+}
+
+// findAffectedLines 查找受替换影响的行号
+func findAffectedLines(content, oldString string, replaceAll bool, count int) []int {
+	var affected []int
+
+	// 使用搜索偏移量在内容中查找每次出现的位置
+	// 根据位置计算所在行号
+	searchStart := 0
+	for {
+		idx := strings.Index(content[searchStart:], oldString)
+		if idx < 0 {
+			break
+		}
+
+		// 计算绝对位置
+		absPos := searchStart + idx
+
+		// 计算行号：统计绝对位置之前的换行符数量
+		lineNum := 1
+		for i := 0; i < absPos && i < len(content); i++ {
+			if content[i] == '\n' {
+				lineNum++
+			}
+		}
+		affected = append(affected, lineNum)
+
+		if !replaceAll {
+			break
+		}
+
+		searchStart = absPos + len(oldString)
+	}
+
+	return affected
 }
 
 // ==================== ListDirectory Tool ====================
@@ -601,9 +978,14 @@ func (t *CreateDirectoryTool) Execute(ctx context.Context, params map[string]int
 
 // RegisterFilesystemTools 注册所有文件系统工具到指定注册中心（无workDir限制，向后兼容）
 func RegisterFilesystemTools(registry *ToolRegistry) error {
+	// 初始化语法检查调度器
+	dispatcher := syntax.NewDispatcher()
+	syntax.RegisterAllCheckers(dispatcher)
+
 	toolList := []Tool{
 		NewReadFileTool(),
-		NewWriteFileTool(),
+		NewWriteFileToolWithWorkDirAndDispatcher("", dispatcher),
+		NewEditFileToolWithWorkDirAndDispatcher("", dispatcher),
 		NewListDirectoryTool(),
 		NewDeleteFileTool(),
 		NewCreateDirectoryTool(),
@@ -620,9 +1002,14 @@ func RegisterFilesystemTools(registry *ToolRegistry) error {
 // RegisterFilesystemToolsWithWorkDir 注册带工作目录限制的文件系统工具
 // workDir: 允许操作的工作目录范围，为空时不做限制
 func RegisterFilesystemToolsWithWorkDir(registry *ToolRegistry, workDir string) error {
+	// 初始化语法检查调度器
+	dispatcher := syntax.NewDispatcher()
+	syntax.RegisterAllCheckers(dispatcher)
+
 	toolList := []Tool{
 		NewReadFileToolWithWorkDir(workDir),
-		NewWriteFileToolWithWorkDir(workDir),
+		NewWriteFileToolWithWorkDirAndDispatcher(workDir, dispatcher),
+		NewEditFileToolWithWorkDirAndDispatcher(workDir, dispatcher),
 		NewListDirectoryToolWithWorkDir(workDir),
 		NewDeleteFileToolWithWorkDir(workDir),
 		NewCreateDirectoryToolWithWorkDir(workDir),
