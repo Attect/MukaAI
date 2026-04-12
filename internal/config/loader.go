@@ -35,8 +35,10 @@ type AgentConfig struct {
 
 // StateConfig 状态管理配置
 type StateConfig struct {
-	Dir      string `yaml:"dir"`
-	AutoSave bool   `yaml:"auto_save"`
+	Dir           string `yaml:"dir"`
+	AutoSave      bool   `yaml:"auto_save"`
+	CleanupDays   int    `yaml:"cleanup_days"`   // 过期清理保留天数，0表示使用默认值30
+	CleanupEnable bool   `yaml:"cleanup_enable"` // 是否启用自动清理，默认true
 }
 
 // ToolsConfig 工具配置
@@ -59,8 +61,10 @@ func DefaultConfig() *Config {
 			Temperature:   0.7,
 		},
 		State: StateConfig{
-			Dir:      "./state",
-			AutoSave: true,
+			Dir:           "./state",
+			AutoSave:      true,
+			CleanupDays:   30,
+			CleanupEnable: true,
 		},
 		Tools: ToolsConfig{
 			WorkDir:       ".",
@@ -139,6 +143,14 @@ func applyEnvOverrides(config *Config) {
 	}
 	if v := os.Getenv("AGENTPLUS_STATE_AUTO_SAVE"); v != "" {
 		config.State.AutoSave = strings.ToLower(v) == "true"
+	}
+	if v := os.Getenv("AGENTPLUS_STATE_CLEANUP_DAYS"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			config.State.CleanupDays = i
+		}
+	}
+	if v := os.Getenv("AGENTPLUS_STATE_CLEANUP_ENABLE"); v != "" {
+		config.State.CleanupEnable = strings.ToLower(v) == "true"
 	}
 
 	// Tools配置

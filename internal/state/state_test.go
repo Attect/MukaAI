@@ -1,9 +1,11 @@
 package state
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestNewTaskState(t *testing.T) {
@@ -421,5 +423,490 @@ func TestTimeSerialization(t *testing.T) {
 	// 验证UpdatedAt也能正确处理
 	if !loadedState.Task.UpdatedAt.Equal(state.Task.UpdatedAt) {
 		t.Errorf("UpdatedAt mismatch: expected %v, got %v", state.Task.UpdatedAt, loadedState.Task.UpdatedAt)
+	}
+}
+
+// TestCleanupConfig 测试清理配置
+func TestCleanupConfig(t *testing.T) {
+	// 测试默认清理配置
+	cfg := DefaultCleanupConfig()
+	if cfg.RetentionDays != 30 {
+		t.Errorf("默认保留天数应为30，实际为 %d", cfg.RetentionDays)
+	}
+	if cfg.CheckInterval != 24*time.Hour {
+		t.Errorf("默认检查间隔应为24小时")
+	}
+	if !cfg.Enabled {
+		t.Error("默认应启用自动清理")
+	}
+}
+
+// TestNewStateManagerWithCleanup 测试带清理配置的状态管理器创建
+func TestNewStateManagerWithCleanup(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "cleanup_test")
+	if err != nil {
+		t.Fatalf("创建临时目录失败: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// 测试自定义配置
+	cfg := CleanupConfig{
+		RetentionDays: 7,
+		CheckInterval: time.Hour,
+		Enabled:       true,
+	}
+	manager, err := NewStateManagerWithCleanup(tempDir, true, cfg)
+	if err != nil {
+		t.Fatalf("创建状态管理器失败: %v", err)
+	}
+
+	if manager.cleanupConfig.RetentionDays != 7 {
+		t.Errorf("保留天数应为7，实际为 %d", manager.cleanupConfig.RetentionDays)
+	}
+	if manager.cleanupConfig.CheckInterval != time.Hour {
+		t.Error("检查间隔应为1小时")
+	}
+	if !manager.cleanupConfig.Enabled {
+		t.Error("应启用自动清理")
+	}
+}
+
+// TestNewStateManagerWithCleanup_InvalidConfig 测试无效配置会使用默认值
+func TestNewStateManagerWithCleanup_InvalidConfig(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "cleanup_invalid_test")
+	if err != nil {
+		t.Fatalf("创建临时目录失败: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// 无效的配置值
+	cfg := CleanupConfig{
+		RetentionDays: -1,
+		CheckInterval: -1,
+		Enabled:       true,
+	}
+	manager, err := NewStateManagerWithCleanup(tempDir, true, cfg)
+	if err != nil {
+		t.Fatalf("创建状态管理器失败: %v", err)
+	}
+
+	// 应该被修正为默认值
+	if manager.cleanupConfig.RetentionDays != 30 {
+		t.Errorf("无效保留天数应被修正为30，实际为 %d", manager.cleanupConfig.RetentionDays)
+	}
+	if manager.cleanupConfig.CheckInterval != 24*time.Hour {
+		t.Error("无效检查间隔应被修正为24小时")
+	}
+}
+
+// TestCleanupNow 测试立即清理功能
+func TestCleanupNow(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "cleanup_now_test")
+	if err != nil {
+		t.Fatalf("创建临时目录失败: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	cfg := CleanupConfig{
+		RetentionDays: 30,
+		CheckInterval: 24 * time.Hour,
+		Enabled:       false, // 禁用自动清理，仅测试手动清理
+	}
+	manager, err := NewStateManagerWithCleanup(tempDir, true, cfg)
+	if err != nil {
+		t.Fatalf("创建状态管理器失败: %v", err)
+	}
+
+	// 创建一个过期的已完成任务（更新时间设为31天前）
+	expiredState := NewTaskState("expired-001", "过期任务")
+	expiredState.UpdateStatus("completed")
+	expiredState.Task.UpdatedAt = time.Now().AddDate(0, 0, -31)
+	err = SaveYAML(expiredState, filepath.Join(tempDir, "task-expired-001.yaml"))
+	if err != nil {
+		t.Fatalf("保存过期状态文件失败: %v", err)
+	}
+
+	// 创建一个未过期的已完成任务
+	recentState := NewTaskState("recent-001", "近期任务")
+	recentState.UpdateStatus("completed")
+	recentState.Task.UpdatedAt = time.Now().AddDate(0, 0, -10)
+	err = SaveYAML(recentState, filepath.Join(tempDir, "task-recent-001.yaml"))
+	if err != nil {
+		t.Fatalf("保存近期状态文件失败: %v", err)
+	}
+
+	// 创建一个进行中的任务（即使过期也不应被清理）
+	inProgressState := NewTaskState("progress-001", "进行中任务")
+	inProgressState.UpdateStatus("in_progress")
+	inProgressState.Task.UpdatedAt = time.Now().AddDate(0, 0, -60)
+	err = SaveYAML(inProgressState, filepath.Join(tempDir, "task-progress-001.yaml"))
+	if err != nil {
+		t.Fatalf("保存进行中状态文件失败: %v", err)
+	}
+
+	// 创建一个过期的失败任务
+	failedState := NewTaskState("failed-001", "失败任务")
+	failedState.UpdateStatus("failed")
+	failedState.Task.UpdatedAt = time.Now().AddDate(0, 0, -40)
+	err = SaveYAML(failedState, filepath.Join(tempDir, "task-failed-001.yaml"))
+	if err != nil {
+		t.Fatalf("保存失败状态文件失败: %v", err)
+	}
+
+	// 执行清理
+	cleaned, err := manager.CleanupNow()
+	if err != nil {
+		t.Fatalf("清理执行失败: %v", err)
+	}
+
+	// 应该清理2个文件：expired-001 和 failed-001
+	if cleaned != 2 {
+		t.Errorf("应清理2个文件，实际清理了 %d 个", cleaned)
+	}
+
+	// 验证文件状态
+	if _, err := os.Stat(filepath.Join(tempDir, "task-expired-001.yaml")); !os.IsNotExist(err) {
+		t.Error("过期已完成任务文件应已被删除")
+	}
+	if _, err := os.Stat(filepath.Join(tempDir, "task-recent-001.yaml")); os.IsNotExist(err) {
+		t.Error("近期已完成任务文件不应被删除")
+	}
+	if _, err := os.Stat(filepath.Join(tempDir, "task-progress-001.yaml")); os.IsNotExist(err) {
+		t.Error("进行中任务文件不应被删除，即使已过期")
+	}
+	if _, err := os.Stat(filepath.Join(tempDir, "task-failed-001.yaml")); !os.IsNotExist(err) {
+		t.Error("过期失败任务文件应已被删除")
+	}
+}
+
+// TestCleanupNow_CancelledTask 测试已取消任务的清理
+func TestCleanupNow_CancelledTask(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "cleanup_cancelled_test")
+	if err != nil {
+		t.Fatalf("创建临时目录失败: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	cfg := CleanupConfig{
+		RetentionDays: 30,
+		CheckInterval: 24 * time.Hour,
+		Enabled:       false,
+	}
+	manager, err := NewStateManagerWithCleanup(tempDir, true, cfg)
+	if err != nil {
+		t.Fatalf("创建状态管理器失败: %v", err)
+	}
+
+	// 创建一个过期的已取消任务
+	cancelledState := NewTaskState("cancelled-001", "已取消任务")
+	cancelledState.UpdateStatus("cancelled")
+	cancelledState.Task.UpdatedAt = time.Now().AddDate(0, 0, -35)
+	err = SaveYAML(cancelledState, filepath.Join(tempDir, "task-cancelled-001.yaml"))
+	if err != nil {
+		t.Fatalf("保存已取消状态文件失败: %v", err)
+	}
+
+	cleaned, err := manager.CleanupNow()
+	if err != nil {
+		t.Fatalf("清理执行失败: %v", err)
+	}
+	if cleaned != 1 {
+		t.Errorf("应清理1个已取消任务文件，实际清理了 %d 个", cleaned)
+	}
+}
+
+// TestCleanupNow_EmptyDir 测试空目录的清理
+func TestCleanupNow_EmptyDir(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "cleanup_empty_test")
+	if err != nil {
+		t.Fatalf("创建临时目录失败: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	cfg := CleanupConfig{RetentionDays: 30, Enabled: false}
+	manager, err := NewStateManagerWithCleanup(tempDir, true, cfg)
+	if err != nil {
+		t.Fatalf("创建状态管理器失败: %v", err)
+	}
+
+	cleaned, err := manager.CleanupNow()
+	if err != nil {
+		t.Fatalf("清理空目录不应报错: %v", err)
+	}
+	if cleaned != 0 {
+		t.Errorf("空目录应清理0个文件，实际清理了 %d 个", cleaned)
+	}
+}
+
+// TestCleanupNow_RemovesFromMemoryCache 测试清理时同步移除内存缓存
+func TestCleanupNow_RemovesFromMemoryCache(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "cleanup_cache_test")
+	if err != nil {
+		t.Fatalf("创建临时目录失败: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	cfg := CleanupConfig{RetentionDays: 30, Enabled: false}
+	manager, err := NewStateManagerWithCleanup(tempDir, true, cfg)
+	if err != nil {
+		t.Fatalf("创建状态管理器失败: %v", err)
+	}
+
+	// 通过manager创建任务（加入内存缓存）
+	state1, err := manager.CreateTask("cache-test-001", "缓存测试任务")
+	if err != nil {
+		t.Fatalf("创建任务失败: %v", err)
+	}
+
+	// 修改状态为已完成并设置更新时间为31天前
+	state1.UpdateStatus("completed")
+	state1.Task.UpdatedAt = time.Now().AddDate(0, 0, -31)
+	err = manager.Save("cache-test-001")
+	if err != nil {
+		t.Fatalf("保存任务失败: %v", err)
+	}
+
+	// 确认内存缓存中存在
+	_, err = manager.GetState("cache-test-001")
+	if err != nil {
+		t.Fatalf("任务应在内存缓存中: %v", err)
+	}
+
+	// 执行清理
+	cleaned, err := manager.CleanupNow()
+	if err != nil {
+		t.Fatalf("清理失败: %v", err)
+	}
+	if cleaned != 1 {
+		t.Errorf("应清理1个文件，实际清理了 %d 个", cleaned)
+	}
+
+	// 内存缓存中应该已被移除
+	_, err = manager.GetState("cache-test-001")
+	if err == nil {
+		t.Error("清理后内存缓存应已移除该任务")
+	}
+}
+
+// TestListTasksFromDisk 测试从磁盘扫描任务列表
+func TestListTasksFromDisk(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "list_disk_test")
+	if err != nil {
+		t.Fatalf("创建临时目录失败: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	manager, err := NewStateManager(tempDir, true)
+	if err != nil {
+		t.Fatalf("创建状态管理器失败: %v", err)
+	}
+
+	// 创建几个任务文件
+	_, err = manager.CreateTask("disk-001", "磁盘任务1")
+	if err != nil {
+		t.Fatalf("创建任务1失败: %v", err)
+	}
+	_, err = manager.CreateTask("disk-002", "磁盘任务2")
+	if err != nil {
+		t.Fatalf("创建任务2失败: %v", err)
+	}
+	_, err = manager.CreateTask("disk-003", "磁盘任务3")
+	if err != nil {
+		t.Fatalf("创建任务3失败: %v", err)
+	}
+
+	// 创建一个新的manager实例（无内存缓存）来测试磁盘扫描
+	manager2, err := NewStateManager(tempDir, false)
+	if err != nil {
+		t.Fatalf("创建第二个状态管理器失败: %v", err)
+	}
+
+	// ListTasks只查内存，应为空
+	memoryIDs, err := manager2.ListTasks()
+	if err != nil {
+		t.Fatalf("ListTasks失败: %v", err)
+	}
+	if len(memoryIDs) != 0 {
+		t.Errorf("新管理器的内存缓存应为空，实际有 %d 个任务", len(memoryIDs))
+	}
+
+	// ListTasksFromDisk应能扫描到3个文件
+	diskIDs, err := manager2.ListTasksFromDisk()
+	if err != nil {
+		t.Fatalf("ListTasksFromDisk失败: %v", err)
+	}
+	if len(diskIDs) != 3 {
+		t.Errorf("磁盘应扫描到3个任务，实际扫描到 %d 个", len(diskIDs))
+	}
+
+	// 验证包含预期的任务ID
+	found := make(map[string]bool)
+	for _, id := range diskIDs {
+		found[id] = true
+	}
+	for _, expected := range []string{"disk-001", "disk-002", "disk-003"} {
+		if !found[expected] {
+			t.Errorf("磁盘扫描结果应包含任务ID %s", expected)
+		}
+	}
+}
+
+// TestStartStopCleanup 测试清理goroutine的启动和停止
+func TestStartStopCleanup(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "start_stop_cleanup_test")
+	if err != nil {
+		t.Fatalf("创建临时目录失败: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	cfg := CleanupConfig{
+		RetentionDays: 30,
+		CheckInterval: 1 * time.Second, // 短间隔用于测试
+		Enabled:       true,
+	}
+	manager, err := NewStateManagerWithCleanup(tempDir, true, cfg)
+	if err != nil {
+		t.Fatalf("创建状态管理器失败: %v", err)
+	}
+
+	// 启动清理goroutine
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager.StartCleanup(ctx)
+
+	// 创建一个过期的已完成任务
+	expiredState := NewTaskState("auto-clean-001", "自动清理测试")
+	expiredState.UpdateStatus("completed")
+	expiredState.Task.UpdatedAt = time.Now().AddDate(0, 0, -31)
+	err = SaveYAML(expiredState, filepath.Join(tempDir, "task-auto-clean-001.yaml"))
+	if err != nil {
+		t.Fatalf("保存状态文件失败: %v", err)
+	}
+
+	// 等待初始清理完成
+	time.Sleep(100 * time.Millisecond)
+
+	// 过期文件应已被初始清理删除
+	if _, err := os.Stat(filepath.Join(tempDir, "task-auto-clean-001.yaml")); !os.IsNotExist(err) {
+		t.Error("启动清理后过期文件应已被删除")
+	}
+
+	// 停止清理goroutine
+	manager.StopCleanup()
+
+	// 创建另一个过期文件，停止后不应被清理
+	expiredState2 := NewTaskState("auto-clean-002", "停止后测试")
+	expiredState2.UpdateStatus("completed")
+	expiredState2.Task.UpdatedAt = time.Now().AddDate(0, 0, -31)
+	err = SaveYAML(expiredState2, filepath.Join(tempDir, "task-auto-clean-002.yaml"))
+	if err != nil {
+		t.Fatalf("保存状态文件失败: %v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	// 停止后文件应仍然存在
+	if _, err := os.Stat(filepath.Join(tempDir, "task-auto-clean-002.yaml")); os.IsNotExist(err) {
+		t.Error("停止清理后文件不应被删除")
+	}
+}
+
+// TestStartCleanup_Disabled 测试禁用清理时不启动goroutine
+func TestStartCleanup_Disabled(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "cleanup_disabled_test")
+	if err != nil {
+		t.Fatalf("创建临时目录失败: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	cfg := CleanupConfig{
+		RetentionDays: 30,
+		CheckInterval: time.Second,
+		Enabled:       false, // 禁用
+	}
+	manager, err := NewStateManagerWithCleanup(tempDir, true, cfg)
+	if err != nil {
+		t.Fatalf("创建状态管理器失败: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// 启动清理（应无效果因为已禁用）
+	manager.StartCleanup(ctx)
+
+	// 创建过期任务
+	expiredState := NewTaskState("disabled-001", "禁用测试")
+	expiredState.UpdateStatus("completed")
+	expiredState.Task.UpdatedAt = time.Now().AddDate(0, 0, -31)
+	err = SaveYAML(expiredState, filepath.Join(tempDir, "task-disabled-001.yaml"))
+	if err != nil {
+		t.Fatalf("保存状态文件失败: %v", err)
+	}
+
+	// 等待确认不会被清理
+	time.Sleep(200 * time.Millisecond)
+
+	if _, err := os.Stat(filepath.Join(tempDir, "task-disabled-001.yaml")); os.IsNotExist(err) {
+		t.Error("禁用清理时文件不应被删除")
+	}
+
+	// StopCleanup在未启动时应安全调用
+	manager.StopCleanup()
+}
+
+// TestStopCleanup_Idempotent 测试多次调用StopCleanup的安全性
+func TestStopCleanup_Idempotent(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "stop_idempotent_test")
+	if err != nil {
+		t.Fatalf("创建临时目录失败: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	manager, err := NewStateManager(tempDir, false)
+	if err != nil {
+		t.Fatalf("创建状态管理器失败: %v", err)
+	}
+
+	// 多次调用StopCleanup不应panic
+	manager.StopCleanup()
+	manager.StopCleanup()
+	manager.StopCleanup()
+}
+
+// TestCleanupNow_PendingTaskNotCleaned 测试pending状态的任务不被清理
+func TestCleanupNow_PendingTaskNotCleaned(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "cleanup_pending_test")
+	if err != nil {
+		t.Fatalf("创建临时目录失败: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	cfg := CleanupConfig{RetentionDays: 30, Enabled: false}
+	manager, err := NewStateManagerWithCleanup(tempDir, true, cfg)
+	if err != nil {
+		t.Fatalf("创建状态管理器失败: %v", err)
+	}
+
+	// 创建一个过期的pending任务
+	pendingState := NewTaskState("pending-001", "待处理过期任务")
+	pendingState.Task.Status = "pending"
+	pendingState.Task.UpdatedAt = time.Now().AddDate(0, 0, -60)
+	err = SaveYAML(pendingState, filepath.Join(tempDir, "task-pending-001.yaml"))
+	if err != nil {
+		t.Fatalf("保存状态文件失败: %v", err)
+	}
+
+	cleaned, err := manager.CleanupNow()
+	if err != nil {
+		t.Fatalf("清理失败: %v", err)
+	}
+	if cleaned != 0 {
+		t.Errorf("pending状态的任务不应被清理，实际清理了 %d 个", cleaned)
+	}
+
+	// 文件应仍然存在
+	if _, err := os.Stat(filepath.Join(tempDir, "task-pending-001.yaml")); os.IsNotExist(err) {
+		t.Error("pending状态的任务文件不应被删除")
 	}
 }

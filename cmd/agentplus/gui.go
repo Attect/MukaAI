@@ -74,8 +74,13 @@ func runGUICommand() {
 		os.Exit(1)
 	}
 
-	// 初始化状态管理器
-	stateManager, err := state.NewStateManager(stateDir, cfg.State.AutoSave)
+	// 初始化状态管理器（带自动清理功能）
+	cleanupConfig := state.CleanupConfig{
+		RetentionDays: cfg.State.CleanupDays,
+		CheckInterval: 24 * time.Hour,
+		Enabled:       cfg.State.CleanupEnable,
+	}
+	stateManager, err := state.NewStateManagerWithCleanup(stateDir, cfg.State.AutoSave, cleanupConfig)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "初始化状态管理器失败: %v\n", err)
 		os.Exit(1)
@@ -117,6 +122,8 @@ func runGUICommand() {
 			app.Startup(ctx)
 			bridge.SetContext(ctx)
 			app.SetCurrentDir(workDir)
+			// 启动状态文件自动清理，传入应用上下文
+			stateManager.StartCleanup(ctx)
 		},
 		Bind: []interface{}{
 			app,
@@ -126,9 +133,14 @@ func runGUICommand() {
 			WindowIsTranslucent:  false,
 		},
 	}); err != nil {
+		// 即使出错也要停止清理goroutine
+		stateManager.StopCleanup()
 		fmt.Fprintf(os.Stderr, "启动GUI失败: %v\n", err)
 		os.Exit(1)
 	}
+
+	// 正常退出时停止清理goroutine
+	stateManager.StopCleanup()
 }
 
 // parseGUIFlags 解析GUI子命令的命令行参数

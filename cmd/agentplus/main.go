@@ -118,6 +118,20 @@ func runCLICommand() {
 		os.Exit(1)
 	}
 
+	// 启动状态文件自动清理
+	cleanupConfig := state.CleanupConfig{
+		RetentionDays: cfg.State.CleanupDays,
+		CheckInterval: 24 * time.Hour,
+		Enabled:       cfg.State.CleanupEnable,
+	}
+	stateManagerWithCleanup, err := state.NewStateManagerWithCleanup(stateDir, cfg.State.AutoSave, cleanupConfig)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error initializing state manager with cleanup: %v\n", err)
+		os.Exit(1)
+	}
+	// 替换为带清理功能的实例
+	stateManager = stateManagerWithCleanup
+
 	// 创建Agent
 	ag, err := agent.NewAgent(&agent.Config{
 		ModelClient:   modelClient,
@@ -147,6 +161,10 @@ func runCLICommand() {
 	// 创建上下文，支持优雅退出
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// 启动状态文件自动清理
+	stateManager.StartCleanup(ctx)
+	defer stateManager.StopCleanup()
 
 	// 设置信号处理
 	sigChan := make(chan os.Signal, 1)
