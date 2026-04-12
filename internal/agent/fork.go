@@ -22,7 +22,8 @@ type ForkManager struct {
 	stateManager *state.StateManager // 状态管理器
 
 	// 配置
-	maxIterations int // 子代理最大迭代次数
+	maxIterations int    // 子代理最大迭代次数
+	workDir       string // 工作目录
 
 	// 状态
 	mu          sync.RWMutex
@@ -54,6 +55,7 @@ type ForkConfig struct {
 	ToolRegistry  *tools.ToolRegistry // 工具注册中心（必需）
 	StateManager  *state.StateManager // 状态管理器（必需）
 	MaxIterations int                 // 子代理最大迭代次数（默认30）
+	WorkDir       string              // 工作目录（可选）
 }
 
 // NewForkManager 创建新的Fork管理器
@@ -84,6 +86,7 @@ func NewForkManager(config *ForkConfig) (*ForkManager, error) {
 		toolRegistry:  config.ToolRegistry,
 		stateManager:  config.StateManager,
 		maxIterations: maxIterations,
+		workDir:       config.WorkDir,
 		activeForks:   make(map[string]*ForkedAgent),
 	}, nil
 }
@@ -152,6 +155,7 @@ func (fm *ForkManager) Fork(ctx context.Context, parentAgent *Agent, role, task 
 		MaxIterations: fm.maxIterations,
 		SystemPrompt:  systemPrompt,
 		PromptType:    getPromptTypeByRole(role),
+		WorkDir:       fm.workDir,
 	}
 
 	// 创建子代理实例

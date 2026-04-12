@@ -158,18 +158,27 @@ func GetSystemPrompt(promptType SystemPromptType) string {
 
 // BuildTaskPrompt 构建任务提示词
 // 将任务目标和当前状态组合成提示词
-func BuildTaskPrompt(taskGoal string, stateSummary string) string {
+// workDir: 实际工作目录，如果为空则回退到os.Getwd()
+func BuildTaskPrompt(taskGoal string, stateSummary string, workDir string) string {
 	prompt := "## 任务目标\n" + taskGoal + "\n\n"
 
 	if stateSummary != "" {
 		prompt += "## 当前状态\n" + stateSummary + "\n\n"
 	}
 
+	// 使用传入的workDir，如果为空则回退到os.Getwd()
+	absWorkDir := workDir
+	if absWorkDir == "" {
+		wd, _ := os.Getwd()
+		absWorkDir, _ = filepath.Abs(wd)
+	}
+
 	// 添加环境信息，让模型知道当前操作系统和工作目录
-	workDir, _ := os.Getwd()
-	absWorkDir, _ := filepath.Abs(workDir)
 	prompt += fmt.Sprintf("## 环境信息\n- 操作系统: %s\n- 工作目录: %s\n", runtime.GOOS, absWorkDir)
-	prompt += "\n**重要**: 所有文件操作必须使用工作目录内的路径。使用相对路径或基于工作目录的绝对路径。\n\n"
+	prompt += "\n**重要**: 所有文件操作必须在工作目录内进行。\n"
+	prompt += "- 使用基于工作目录的绝对路径，例如: 工作目录\\文件名\n"
+	prompt += "- 或使用相对路径\n"
+	prompt += "- 不要猜测路径，严格使用上述工作目录\n\n"
 
 	prompt += "请开始执行任务。"
 	return prompt

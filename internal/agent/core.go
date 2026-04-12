@@ -35,6 +35,7 @@ type Agent struct {
 	systemPrompt  string           // 系统提示词
 	taskID        string           // 当前任务ID
 	promptType    SystemPromptType // 提示词类型
+	workDir       string           // 实际工作目录，用于注入到提示词
 
 	// 状态
 	mu         sync.RWMutex
@@ -70,6 +71,7 @@ type Config struct {
 	MaxIterations int                 // 最大迭代次数（默认50）
 	SystemPrompt  string              // 自定义系统提示词（可选）
 	PromptType    SystemPromptType    // 提示词类型（默认orchestrator）
+	WorkDir       string              // 实际工作目录，用于注入到提示词（可选，为空时回退到os.Getwd()）
 
 	// 校验和修正组件配置
 	Reviewer        *Reviewer            // 审查器（可选，会自动创建）
@@ -150,6 +152,7 @@ func NewAgent(config *Config) (*Agent, error) {
 		maxIterations: maxIterations,
 		systemPrompt:  systemPrompt,
 		promptType:    promptType,
+		workDir:       config.WorkDir,
 	}, nil
 }
 
@@ -216,7 +219,7 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 
 	// 构建初始任务提示
 	stateSummary, _ := a.stateManager.GetYAMLSummary(a.taskID)
-	taskPrompt := BuildTaskPrompt(taskGoal, stateSummary)
+	taskPrompt := BuildTaskPrompt(taskGoal, stateSummary, a.workDir)
 	a.history.AddMessage(model.NewUserMessage(taskPrompt))
 
 	// 主循环

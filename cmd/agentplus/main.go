@@ -132,6 +132,7 @@ func runCLICommand() {
 		StateManager:  stateManager,
 		MaxIterations: cfg.Agent.MaxIterations,
 		PromptType:    agent.PromptTypeOrchestrator,
+		WorkDir:       workDir,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating agent: %v\n", err)
@@ -262,6 +263,7 @@ func runGUICommand() {
 		StateManager:  stateManager,
 		MaxIterations: cfg.Agent.MaxIterations,
 		PromptType:    agent.PromptTypeOrchestrator,
+		WorkDir:       workDir,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "创建Agent失败: %v\n", err)
@@ -414,8 +416,19 @@ func initToolRegistry(workDir string, allowCommands []string) (*tools.ToolRegist
 		return nil, fmt.Errorf("failed to register filesystem tools: %w", err)
 	}
 
-	// 注册命令执行工具（带白名单校验）
-	if err := tools.RegisterCommandToolsWithAllowedCommands(registry, allowCommands); err != nil {
+	// 注册命令执行工具（带安全审查系统）
+	if err := tools.RegisterCommandToolsWithSecurity(registry, allowCommands, workDir, func(command, reason string) bool {
+		fmt.Printf("\n\033[33m⚠ 命令安全确认\033[0m\n")
+		fmt.Printf("  命令: %s\n", command)
+		fmt.Printf("  原因: %s\n", reason)
+		fmt.Printf("  是否允许执行? (y/N): ")
+
+		reader := bufio.NewReader(os.Stdin)
+		input, _ := reader.ReadString('\n')
+		input = strings.TrimSpace(strings.ToLower(input))
+
+		return input == "y" || input == "yes"
+	}); err != nil {
 		return nil, fmt.Errorf("failed to register command tools: %w", err)
 	}
 

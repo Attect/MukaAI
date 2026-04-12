@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -12,6 +14,77 @@ import (
 
 // 默认命令执行超时时间
 const DefaultCommandTimeout = 60 * time.Second
+
+// ==================== 命令白名单校验 ====================
+
+// extractBaseCommand 从命令字符串中提取基础命令名称
+// 例如: "go build -o app ./cmd" → "go"
+// 例如: "git commit -m 'test'" → "git"
+// 在Windows上会处理路径，提取文件名部分
+func extractBaseCommand(command string) string {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return ""
+	}
+
+	// 取第一个空格前的部分作为命令
+	parts := strings.Fields(command)
+	if len(parts) == 0 {
+		return ""
+	}
+
+	base := parts[0]
+
+	// 处理路径情况：提取文件名
+	// 例如 "/usr/bin/go" → "go", "C:\Tools\git.exe" → "git.exe"
+	base = filepath.Base(base)
+
+	// 在Windows上，去除扩展名进行比较
+	if runtime.GOOS == "windows" {
+		// 保留 .exe 后缀用于匹配，但也尝试不带后缀
+		// 例如 "git.exe" 匹配 "git" 或 "git.exe"
+		nameWithoutExt := strings.TrimSuffix(base, filepath.Ext(base))
+		if nameWithoutExt != "" {
+			return nameWithoutExt
+		}
+	}
+
+	return base
+}
+
+// isCommandAllowed 检查命令是否在白名单中
+// allowedCommands 为空时表示允许所有命令（向后兼容）
+func isCommandAllowed(command string, allowedCommands []string) bool {
+	// 白名单为空时，不做限制（向后兼容）
+	if len(allowedCommands) == 0 {
+		return true
+	}
+
+	baseCmd := extractBaseCommand(command)
+	if baseCmd == "" {
+		return false
+	}
+
+	// 检查白名单（不区分大小写）
+	baseCmdLower := strings.ToLower(baseCmd)
+	for _, allowed := range allowedCommands {
+		if strings.ToLower(allowed) == baseCmdLower {
+			return true
+		}
+	}
+
+	return false
+}
+
+// buildNotAllowedError 构建命令不被允许的错误信息
+func buildNotAllowedError(command string, allowedCommands []string) *ToolResult {
+	baseCmd := extractBaseCommand(command)
+	return NewErrorResult(fmt.Sprintf(
+		"命令 '%s' 不在允许列表中。允许的命令: [%s]",
+		baseCmd,
+		strings.Join(allowedCommands, ", "),
+	))
+}
 
 // ==================== ExecuteCommand Tool ====================
 
@@ -49,19 +122,33 @@ type CommandResult struct {
 type ExecuteCommandTool struct {
 	// timeout 默认超时时间
 	timeout time.Duration
+	// allowedCommands 允许执行的命令白名单，为空时不做限制
+	allowedCommands []string
+	// securityChecker 命令安全审查器（可选，优先于白名单检查）
+	securityChecker *CommandSecurityChecker
 }
 
 // NewExecuteCommandTool 创建命令执行工具
 func NewExecuteCommandTool() *ExecuteCommandTool {
 	return &ExecuteCommandTool{
-		timeout: DefaultCommandTimeout,
+		timeout:         DefaultCommandTimeout,
+		allowedCommands: nil,
 	}
 }
 
 // NewExecuteCommandToolWithTimeout 创建带自定义超时的命令执行工具
 func NewExecuteCommandToolWithTimeout(timeout time.Duration) *ExecuteCommandTool {
 	return &ExecuteCommandTool{
-		timeout: timeout,
+		timeout:         timeout,
+		allowedCommands: nil,
+	}
+}
+
+// NewExecuteCommandToolWithAllowedCommands 创建带命令白名单的命令执行工具
+func NewExecuteCommandToolWithAllowedCommands(allowedCommands []string) *ExecuteCommandTool {
+	return &ExecuteCommandTool{
+		timeout:         DefaultCommandTimeout,
+		allowedCommands: allowedCommands,
 	}
 }
 
@@ -70,7 +157,7 @@ func (t *ExecuteCommandTool) Name() string {
 }
 
 func (t *ExecuteCommandTool) Description() string {
-	return "执行系统命令并返回结果。支持设置工作目录和超时时间。返回标准输出、标准错误、退出码等信息。"
+	return "执行系统命令并返回结果。支持设置工作目录和超时时间。返回标准输出、标准错误、退出码等信息。仅允许执行配置中白名单内的命令。"
 }
 
 func (t *ExecuteCommandTool) Parameters() map[string]interface{} {
@@ -120,8 +207,40 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, params map[string]inte
 		return NewErrorResult("command cannot be empty"), nil
 	}
 
+	// 校验命令安全性
+	// 获取命令参数用于安全检查
+	var cmdArgsForCheck []string
+	if argsVal, ok := params["args"]; ok {
+		if args, ok := argsVal.([]interface{}); ok {
+			for _, arg := range args {
+				if argStr, ok := arg.(string); ok {
+					cmdArgsForCheck = append(cmdArgsForCheck, argStr)
+				}
+			}
+		}
+	}
+	if t.securityChecker != nil {
+		checkResult := t.securityChecker.Check(command, cmdArgsForCheck)
+		switch checkResult.Verdict {
+		case SecurityAllow:
+			// 放行
+		case SecurityDeny:
+			return NewErrorResult(fmt.Sprintf("命令被安全审查拒绝: %s", checkResult.Reason)), nil
+		case SecurityConfirm:
+			// 需要用户确认
+			if t.securityChecker.GetUserApproveFunc() != nil {
+				if !t.securityChecker.GetUserApproveFunc()(command, checkResult.Reason) {
+					return NewErrorResult(fmt.Sprintf("用户拒绝执行: %s。原因: %s", command, checkResult.Reason)), nil
+				}
+			} else {
+				return NewErrorResult(fmt.Sprintf("命令需要确认但无确认通道: %s。原因: %s", command, checkResult.Reason)), nil
+			}
+		}
+	} else if !isCommandAllowed(command, t.allowedCommands) {
+		return buildNotAllowedError(command, t.allowedCommands), nil
+	}
+
 	// 解析命令和参数
-	// 在Windows上，需要特殊处理shell命令
 	var cmdName string
 	var cmdArgs []string
 
@@ -138,17 +257,13 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, params map[string]inte
 
 	// 根据操作系统处理命令
 	if runtime.GOOS == "windows" {
-		// Windows下使用cmd /c执行命令
 		cmdName = "cmd"
 		cmdArgs = append([]string{"/c", command}, cmdArgs...)
 	} else {
-		// Unix系统使用sh -c执行
-		// 如果有额外参数，将命令和参数组合
 		if len(cmdArgs) > 0 {
 			cmdName = "sh"
-			cmdArgs = append([]string{"-c", command + " " + strings.Join(cmdArgs, " ")})
+			cmdArgs = []string{"-c", command + " " + strings.Join(cmdArgs, " ")}
 		} else {
-			// 解析命令字符串
 			parts := strings.Fields(command)
 			if len(parts) > 0 {
 				cmdName = parts[0]
@@ -159,15 +274,28 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, params map[string]inte
 		}
 	}
 
-	// 创建命令
+	// 解析超时
+	timeout := t.timeout
+	if timeoutVal, ok := params["timeout"]; ok {
+		if timeoutSec, ok := timeoutVal.(float64); ok {
+			timeout = time.Duration(timeoutSec) * time.Second
+		} else if timeoutSec, ok := timeoutVal.(int); ok {
+			timeout = time.Duration(timeoutSec) * time.Second
+		}
+	}
+
+	// 创建带超时的上下文（只创建一次 cmd，避免丢失设置）
+	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(ctx, cmdName, cmdArgs...)
+		cmd = exec.CommandContext(timeoutCtx, cmdName, cmdArgs...)
 	} else {
 		if len(cmdArgs) > 0 {
-			cmd = exec.CommandContext(ctx, cmdName, cmdArgs...)
+			cmd = exec.CommandContext(timeoutCtx, cmdName, cmdArgs...)
 		} else {
-			cmd = exec.CommandContext(ctx, cmdName)
+			cmd = exec.CommandContext(timeoutCtx, cmdName)
 		}
 	}
 
@@ -178,36 +306,17 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, params map[string]inte
 		}
 	}
 
-	// 设置环境变量
+	// 设置环境变量（继承当前进程的环境变量，再追加自定义变量）
 	if envVal, ok := params["env"]; ok {
 		if env, ok := envVal.(map[string]interface{}); ok {
-			// 继承当前环境变量
-			cmd.Env = append(cmd.Env, cmd.Env...)
+			// 继承当前进程的所有环境变量
+			cmd.Env = append(os.Environ())
+			// 追加自定义环境变量（可覆盖已有变量）
 			for k, v := range env {
 				if vStr, ok := v.(string); ok {
 					cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, vStr))
 				}
 			}
-		}
-	}
-
-	// 设置超时
-	timeout := t.timeout
-	if timeoutVal, ok := params["timeout"]; ok {
-		if timeoutSec, ok := timeoutVal.(float64); ok {
-			timeout = time.Duration(timeoutSec) * time.Second
-		} else if timeoutSec, ok := timeoutVal.(int); ok {
-			timeout = time.Duration(timeoutSec) * time.Second
-		}
-	}
-
-	// 创建带超时的上下文
-	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	cmd = exec.CommandContext(timeoutCtx, cmdName, cmdArgs...)
-	if workDirVal, ok := params["working_dir"]; ok {
-		if workDir, ok := workDirVal.(string); ok && workDir != "" {
-			cmd.Dir = workDir
 		}
 	}
 
@@ -259,12 +368,23 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, params map[string]inte
 // ShellExecuteTool Shell命令执行工具
 // 提供更简单的接口，直接执行shell命令字符串
 type ShellExecuteTool struct {
-	timeout time.Duration
+	timeout         time.Duration
+	allowedCommands []string
+	securityChecker *CommandSecurityChecker
 }
 
 func NewShellExecuteTool() *ShellExecuteTool {
 	return &ShellExecuteTool{
-		timeout: DefaultCommandTimeout,
+		timeout:         DefaultCommandTimeout,
+		allowedCommands: nil,
+	}
+}
+
+// NewShellExecuteToolWithAllowedCommands 创建带命令白名单的Shell命令执行工具
+func NewShellExecuteToolWithAllowedCommands(allowedCommands []string) *ShellExecuteTool {
+	return &ShellExecuteTool{
+		timeout:         DefaultCommandTimeout,
+		allowedCommands: allowedCommands,
 	}
 }
 
@@ -273,7 +393,7 @@ func (t *ShellExecuteTool) Name() string {
 }
 
 func (t *ShellExecuteTool) Description() string {
-	return "执行Shell命令字符串。自动处理管道、重定向等Shell特性。适用于需要执行复杂Shell命令的场景。"
+	return "执行Shell命令字符串。自动处理管道、重定向等Shell特性。适用于需要执行复杂Shell命令的场景。仅允许执行配置中白名单内的命令。"
 }
 
 func (t *ShellExecuteTool) Parameters() map[string]interface{} {
@@ -310,6 +430,29 @@ func (t *ShellExecuteTool) Execute(ctx context.Context, params map[string]interf
 
 	if strings.TrimSpace(command) == "" {
 		return NewErrorResult("command cannot be empty"), nil
+	}
+
+	// 校验命令安全性
+	// 对于shell命令，提取第一个命令进行安全校验
+	if t.securityChecker != nil {
+		checkResult := t.securityChecker.Check(command, nil)
+		switch checkResult.Verdict {
+		case SecurityAllow:
+			// 放行
+		case SecurityDeny:
+			return NewErrorResult(fmt.Sprintf("命令被安全审查拒绝: %s", checkResult.Reason)), nil
+		case SecurityConfirm:
+			// 需要用户确认
+			if t.securityChecker.GetUserApproveFunc() != nil {
+				if !t.securityChecker.GetUserApproveFunc()(command, checkResult.Reason) {
+					return NewErrorResult(fmt.Sprintf("用户拒绝执行: %s。原因: %s", command, checkResult.Reason)), nil
+				}
+			} else {
+				return NewErrorResult(fmt.Sprintf("命令需要确认但无确认通道: %s。原因: %s", command, checkResult.Reason)), nil
+			}
+		}
+	} else if !isCommandAllowed(command, t.allowedCommands) {
+		return buildNotAllowedError(command, t.allowedCommands), nil
 	}
 
 	// 设置超时
@@ -386,13 +529,30 @@ func (t *ShellExecuteTool) Execute(ctx context.Context, params map[string]interf
 // ==================== 工具注册函数 ====================
 
 // RegisterCommandTools 注册所有命令执行工具到指定注册中心
+// 不带白名单限制，为了向后兼容保留
 func RegisterCommandTools(registry *ToolRegistry) error {
-	tools := []Tool{
+	toolList := []Tool{
 		NewExecuteCommandTool(),
 		NewShellExecuteTool(),
 	}
 
-	for _, tool := range tools {
+	for _, tool := range toolList {
+		if err := registry.RegisterTool(tool); err != nil {
+			return fmt.Errorf("failed to register tool %s: %w", tool.Name(), err)
+		}
+	}
+	return nil
+}
+
+// RegisterCommandToolsWithAllowedCommands 注册带白名单限制的命令执行工具
+// allowedCommands: 允许执行的命令名称列表，为空时不做限制
+func RegisterCommandToolsWithAllowedCommands(registry *ToolRegistry, allowedCommands []string) error {
+	toolList := []Tool{
+		NewExecuteCommandToolWithAllowedCommands(allowedCommands),
+		NewShellExecuteToolWithAllowedCommands(allowedCommands),
+	}
+
+	for _, tool := range toolList {
 		if err := registry.RegisterTool(tool); err != nil {
 			return fmt.Errorf("failed to register tool %s: %w", tool.Name(), err)
 		}
@@ -403,4 +563,30 @@ func RegisterCommandTools(registry *ToolRegistry) error {
 // RegisterDefaultCommandTools 注册命令执行工具到默认注册中心
 func RegisterDefaultCommandTools() error {
 	return RegisterCommandTools(defaultRegistry)
+}
+
+// RegisterCommandToolsWithSecurity 注册带安全审查的命令执行工具
+// 使用安全审查器替代原有的白名单机制：
+//   - 扩展白名单自动包含常见构建/运行/系统命令
+//   - 非白名单命令通过安全审查器检查
+//   - CLI模式下通过userApproveFunc进行终端交互确认
+//   - GUI模式下userApproveFunc为nil时，SecurityConfirm命令会被拒绝
+func RegisterCommandToolsWithSecurity(registry *ToolRegistry, allowedCommands []string, workDir string, userApproveFunc func(command, reason string) bool) error {
+	checker := NewCommandSecurityChecker(workDir, allowedCommands)
+	if userApproveFunc != nil {
+		checker.SetUserApproveFunc(userApproveFunc)
+	}
+
+	execTool := NewExecuteCommandToolWithAllowedCommands(allowedCommands)
+	execTool.securityChecker = checker
+
+	shellTool := NewShellExecuteToolWithAllowedCommands(allowedCommands)
+	shellTool.securityChecker = checker
+
+	for _, tool := range []Tool{execTool, shellTool} {
+		if err := registry.RegisterTool(tool); err != nil {
+			return fmt.Errorf("failed to register tool %s: %w", tool.Name(), err)
+		}
+	}
+	return nil
 }

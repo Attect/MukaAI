@@ -14,6 +14,9 @@ state:
 
 tools:
   work_dir: "."
+  # 用户特别指定的命令白名单
+  # 常见构建命令（gcc、cargo、node、npm、python、java等）由安全审查器自动包含
+  # 不在白名单中的命令会通过安全审查器检查，非危险命令会在CLI模式下询问确认
   allow_commands:
     - "go"
     - "git"
