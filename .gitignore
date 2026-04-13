@@ -53,6 +53,7 @@ test_mcp_go_task/
 
 # Test workspace
 test_workspace/
+project/
 
 # Test files
 test_fuzzy_requirement.go
