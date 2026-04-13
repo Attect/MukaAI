@@ -95,6 +95,8 @@ jobs:
         run: echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Build GUI
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: >
           wails build
           -platform linux/amd64
