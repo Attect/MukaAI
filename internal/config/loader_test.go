@@ -131,27 +131,27 @@ model:
 }
 
 func TestEnvOverrides(t *testing.T) {
-	// 设置环境变量
-	os.Setenv("AGENTPLUS_MODEL_ENDPOINT", "http://env-test:9090/v1/")
-	os.Setenv("AGENTPLUS_MODEL_API_KEY", "env-key")
-	os.Setenv("AGENTPLUS_MODEL_NAME", "env-model")
-	os.Setenv("AGENTPLUS_MODEL_CONTEXT_SIZE", "50000")
-	os.Setenv("AGENTPLUS_AGENT_MAX_ITERATIONS", "200")
-	os.Setenv("AGENTPLUS_AGENT_TEMPERATURE", "0.9")
-	os.Setenv("AGENTPLUS_STATE_DIR", "/env/state")
-	os.Setenv("AGENTPLUS_STATE_AUTO_SAVE", "false")
-	os.Setenv("AGENTPLUS_TOOLS_WORK_DIR", "/env/work")
+	// 设置环境变量（使用代码中实际的前缀 MUKAAI_）
+	os.Setenv("MUKAAI_MODEL_ENDPOINT", "http://env-test:9090/v1/")
+	os.Setenv("MUKAAI_MODEL_API_KEY", "env-key")
+	os.Setenv("MUKAAI_MODEL_NAME", "env-model")
+	os.Setenv("MUKAAI_MODEL_CONTEXT_SIZE", "50000")
+	os.Setenv("MUKAAI_AGENT_MAX_ITERATIONS", "200")
+	os.Setenv("MUKAAI_AGENT_TEMPERATURE", "0.9")
+	os.Setenv("MUKAAI_STATE_DIR", "/env/state")
+	os.Setenv("MUKAAI_STATE_AUTO_SAVE", "false")
+	os.Setenv("MUKAAI_TOOLS_WORK_DIR", "/env/work")
 
 	defer func() {
-		os.Unsetenv("AGENTPLUS_MODEL_ENDPOINT")
-		os.Unsetenv("AGENTPLUS_MODEL_API_KEY")
-		os.Unsetenv("AGENTPLUS_MODEL_NAME")
-		os.Unsetenv("AGENTPLUS_MODEL_CONTEXT_SIZE")
-		os.Unsetenv("AGENTPLUS_AGENT_MAX_ITERATIONS")
-		os.Unsetenv("AGENTPLUS_AGENT_TEMPERATURE")
-		os.Unsetenv("AGENTPLUS_STATE_DIR")
-		os.Unsetenv("AGENTPLUS_STATE_AUTO_SAVE")
-		os.Unsetenv("AGENTPLUS_TOOLS_WORK_DIR")
+		os.Unsetenv("MUKAAI_MODEL_ENDPOINT")
+		os.Unsetenv("MUKAAI_MODEL_API_KEY")
+		os.Unsetenv("MUKAAI_MODEL_NAME")
+		os.Unsetenv("MUKAAI_MODEL_CONTEXT_SIZE")
+		os.Unsetenv("MUKAAI_AGENT_MAX_ITERATIONS")
+		os.Unsetenv("MUKAAI_AGENT_TEMPERATURE")
+		os.Unsetenv("MUKAAI_STATE_DIR")
+		os.Unsetenv("MUKAAI_STATE_AUTO_SAVE")
+		os.Unsetenv("MUKAAI_TOOLS_WORK_DIR")
 	}()
 
 	// 加载配置（使用不存在的文件，这样会使用默认值+环境变量）

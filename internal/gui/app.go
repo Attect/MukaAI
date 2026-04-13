@@ -11,7 +11,6 @@ import (
 
 	"github.com/Attect/MukaAI/internal/agent"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"gopkg.in/yaml.v3"
 )
 
@@ -56,9 +55,10 @@ type TokenStats struct {
 // App Wails应用绑定层
 // 作为前端与后端Agent之间的桥梁，管理对话状态和消息流
 type App struct {
-	ctx   context.Context
-	agent *agent.Agent
-	mu    sync.RWMutex
+	ctx          context.Context
+	agent        *agent.Agent
+	mu           sync.RWMutex
+	eventEmitter EventEmitter // 事件发射器抽象，替代直接调用runtime.EventsEmit
 
 	conversations  []*conversation
 	activeConvID   string
@@ -107,6 +107,7 @@ func NewApp() *App {
 // 初始化对话持久化存储并加载历史对话
 func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
+	a.eventEmitter = NewWailsEventEmitter(ctx)
 
 	// 初始化对话持久化存储
 	convDir := filepath.Join(a.currentDir, "state", "conversations")
@@ -274,16 +275,16 @@ func (a *App) SaveSettings(settings map[string]interface{}) error {
 // UpdateConversationTitle 更新对话标题
 func (a *App) UpdateConversationTitle(id string, title string) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-
 	for _, conv := range a.conversations {
 		if conv.id == id {
 			conv.title = title
 			a.saveConv(conv)
-			runtime.EventsEmit(a.ctx, "conversation:updated", a.GetConversationData())
+			a.mu.Unlock()
+			a.emit("conversation:updated", a.GetConversationData())
 			return nil
 		}
 	}
+	a.mu.Unlock()
 	return fmt.Errorf("conversation not found: %s", id)
 }
 
@@ -389,7 +390,7 @@ func (a *App) DeleteConversation(id string) error {
 	}
 	a.mu.Unlock()
 
-	runtime.EventsEmit(a.ctx, "conversation:updated", a.GetConversationData())
+	a.emit("conversation:updated", a.GetConversationData())
 	return nil
 }
 
@@ -417,7 +418,7 @@ func (a *App) SendMessage(content string) error {
 	a.saveConv(conv) // 持久化：保存用户消息
 	a.mu.Unlock()
 
-	runtime.EventsEmit(a.ctx, "conversation:updated", a.GetConversationData())
+	a.emit("conversation:updated", a.GetConversationData())
 
 	go func() {
 		// 使用defer作为最终保障
@@ -427,8 +428,8 @@ func (a *App) SendMessage(content string) error {
 			if a.isStreaming {
 				a.isStreaming = false
 				a.mu.Unlock()
-				runtime.EventsEmit(a.ctx, "stream:done")
-				runtime.EventsEmit(a.ctx, "conversation:updated", a.GetConversationData())
+				a.emit("stream:done")
+				a.emit("conversation:updated", a.GetConversationData())
 			} else {
 				a.mu.Unlock()
 			}
@@ -438,7 +439,7 @@ func (a *App) SendMessage(content string) error {
 			a.mu.Lock()
 			a.isStreaming = false
 			a.mu.Unlock()
-			runtime.EventsEmit(a.ctx, "stream:error", err.Error())
+			a.emit("stream:error", err.Error())
 		}
 	}()
 
@@ -539,7 +540,7 @@ func (a *App) SetWorkDir(path string) error {
 	a.mu.Lock()
 	a.currentDir = absPath
 	a.mu.Unlock()
-	runtime.EventsEmit(a.ctx, "workdir:changed", absPath)
+	a.emit("workdir:changed", absPath)
 	return nil
 }
 
@@ -574,8 +575,8 @@ func (a *App) InterruptInference() {
 		a.saveConv(conv) // 持久化：保存打断时的消息
 	}
 	a.mu.Unlock()
-	runtime.EventsEmit(a.ctx, "stream:interrupted")
-	runtime.EventsEmit(a.ctx, "conversation:updated", a.GetConversationData())
+	a.emit("stream:interrupted")
+	a.emit("conversation:updated", a.GetConversationData())
 }
 
 // SwitchConversation 切换到指定ID的对话
@@ -603,7 +604,7 @@ func (a *App) SwitchConversation(id string) error {
 	a.activeConvID = id
 	a.mu.Unlock()
 
-	runtime.EventsEmit(a.ctx, "conversation:updated", a.GetConversationData())
+	a.emit("conversation:updated", a.GetConversationData())
 	return nil
 }
 
@@ -618,7 +619,7 @@ func (a *App) ClearConversation() {
 		a.saveConv(conv) // 持久化：保存清空后的状态
 	}
 	a.mu.Unlock()
-	runtime.EventsEmit(a.ctx, "conversation:updated", a.GetConversationData())
+	a.emit("conversation:updated", a.GetConversationData())
 }
 
 // getOrCreateActiveConversation 获取或创建活跃对话
@@ -670,4 +671,24 @@ func (a *App) GetTerminalWSUrl() string {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.terminalWSUrl
+}
+
+// SetEventEmitter 设置事件发射器
+// 用于测试时注入MockEventEmitter，生产环境通过Startup自动设置
+func (a *App) SetEventEmitter(emitter EventEmitter) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.eventEmitter = emitter
+}
+
+// emit 通过EventEmitter发射事件
+// 内部辅助方法，统一事件发射入口
+func (a *App) emit(event string, data ...interface{}) {
+	a.mu.RLock()
+	emitter := a.eventEmitter
+	a.mu.RUnlock()
+
+	if emitter != nil {
+		emitter.Emit(event, data...)
+	}
 }

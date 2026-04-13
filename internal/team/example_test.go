@@ -1,8 +1,9 @@
 package team_test
 
 import (
-	"github.com/Attect/MukaAI/internal/team"
 	"fmt"
+	"github.com/Attect/MukaAI/internal/team"
+	"sort"
 )
 
 // ExampleDefaultTeam 演示如何使用默认团队配置
@@ -140,8 +141,14 @@ func Example_workflow() {
 		fmt.Printf("%d. %s (%s): %s\n", i+1, step.StepName, step.Role, step.Description)
 		if len(step.NextSteps) > 0 {
 			fmt.Println("   下一步骤：")
-			for condition, nextStep := range step.NextSteps {
-				fmt.Printf("   - %s -> %s\n", condition, nextStep)
+			// 按key排序输出，保证Example测试输出稳定
+			keys := make([]string, 0, len(step.NextSteps))
+			for k := range step.NextSteps {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, condition := range keys {
+				fmt.Printf("   - %s -> %s\n", condition, step.NextSteps[condition])
 			}
 		}
 	}
@@ -150,8 +157,8 @@ func Example_workflow() {
 	// 默认工作流步骤：
 	// 1. task_analysis (orchestrator): 分析任务，制定执行计划
 	//    下一步骤：
-	//    - need_design -> architecture_design
 	//    - direct_execute -> implementation
+	//    - need_design -> architecture_design
 	// 2. architecture_design (architect): 进行架构设计和技术选型
 	//    下一步骤：
 	//    - design_complete -> implementation
@@ -160,11 +167,11 @@ func Example_workflow() {
 	//    - code_complete -> testing
 	// 4. testing (tester): 编写和执行测试
 	//    下一步骤：
-	//    - test_pass -> code_review
 	//    - test_fail -> implementation
+	//    - test_pass -> code_review
 	// 5. code_review (reviewer): 代码审查
 	//    下一步骤：
-	//    - review_pass -> task_complete
 	//    - review_fail -> implementation
+	//    - review_pass -> task_complete
 	// 6. task_complete (orchestrator): 任务完成，整理输出
 }
