@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"agentplus/internal/state"
+	"github.com/Attect/MukaAI/internal/state"
 )
 
 // VerifyStatus 校验结果状态

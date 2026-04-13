@@ -1,10 +1,10 @@
 //go:build !gui
 
-// Package agentplus 提供前端资源的嵌入支持
+// Package mukaai 提供前端资源的嵌入支持
 //
 // 此文件为CLI构建模式下的桩实现，不嵌入任何前端资源。
 // 当使用 gui 构建标签时，frontend_assets.go 中的真实实现会替代此文件。
-package agentplus
+package mukaai
 
 import "embed"
 

@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"agentplus/internal/agent"
-	"agentplus/internal/model"
-	"agentplus/internal/state"
-	"agentplus/internal/tools"
+	"github.com/Attect/MukaAI/internal/agent"
+	"github.com/Attect/MukaAI/internal/model"
+	"github.com/Attect/MukaAI/internal/state"
+	"github.com/Attect/MukaAI/internal/tools"
 )
 
 // 创建测试用的监督器
@@ -257,8 +257,9 @@ func TestIntervene(t *testing.T) {
 		t.Fatal("intervention record should not be nil")
 	}
 
-	if record.Type != InterventionPause {
-		t.Errorf("expected pause intervention for high severity, got: %s", record.Type)
+	// 高严重度在警告计数未达上限时为warning而非pause
+	if record.Type != InterventionWarning {
+		t.Errorf("expected warning intervention for high severity with low warning count, got: %s", record.Type)
 	}
 
 	// 检查统计更新
@@ -406,12 +407,12 @@ func TestDetermineInterventionType(t *testing.T) {
 			expected: InterventionRollback,
 		},
 		{
-			name: "高严重度问题",
+			name: "高严重度问题（警告计数未达上限）",
 			issue: SupervisionIssue{
 				Severity: "high",
 				Type:     IssueTypeQuality,
 			},
-			expected: InterventionPause,
+			expected: InterventionWarning, // 警告计数未达到MaxWarnings时只返回warning
 		},
 		{
 			name: "中等严重度问题",
@@ -477,8 +478,8 @@ func TestGetInterventionLog(t *testing.T) {
 		t.Errorf("expected 1 intervention log, got: %d", len(log))
 	}
 
-	if log[0].Type != InterventionPause {
-		t.Errorf("expected pause intervention, got: %s", log[0].Type)
+	if log[0].Type != InterventionWarning {
+		t.Errorf("expected warning intervention, got: %s", log[0].Type)
 	}
 }
 

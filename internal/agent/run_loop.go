@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"agentplus/internal/model"
+	"github.com/Attect/MukaAI/internal/model"
 )
 
 // iterationResult 单次迭代处理结果
@@ -149,6 +149,11 @@ func (a *Agent) handleToolCallsIteration(runCtx context.Context, response *model
 		return &iterationResult{action: "return", result: result, err: fmt.Errorf("tool execution failed: %w", err)}
 	}
 
+	// 工具执行后：执行监督检查
+	if ir := a.runSupervision(runCtx, response, toolResults, taskGoal, totalIterations); ir != nil {
+		return ir
+	}
+
 	// 添加工具结果到历史
 	a.history.AddMessages(toolResults)
 
@@ -196,6 +201,11 @@ func (a *Agent) handleToolCallsIteration(runCtx context.Context, response *model
 // handleNoToolCallIteration 处理无工具调用的迭代
 // 返回nil表示主循环应continue，非nil表示应break或return
 func (a *Agent) handleNoToolCallIteration(runCtx context.Context, response *modelResponse, result *RunResult, taskGoal string, totalIterations int, consecutiveNoToolCalls int) *iterationResult {
+	// 无工具调用时也执行监督检查
+	if ir := a.runSupervision(runCtx, response, nil, taskGoal, totalIterations); ir != nil {
+		return ir
+	}
+
 	// 检查是否完成（通过文本内容判断）
 	if a.isTaskComplete(response.Content) {
 		// 在完成任务前进行校验

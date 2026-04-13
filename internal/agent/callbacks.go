@@ -79,9 +79,44 @@ func (a *Agent) SetOnThinking(callback func(thinking string)) {
 	a.onThinking = callback
 }
 
+// SetOnSupervisor 设置监督结果回调
+func (a *Agent) SetOnSupervisor(callback func(result *SupervisionResult)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.onSupervisor = callback
+}
+
+// SetSupervisor 设置监督器
+func (a *Agent) SetSupervisor(s Supervisor) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.supervisor = s
+}
+
+// GetSupervisor 获取监督器
+func (a *Agent) GetSupervisor() Supervisor {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.supervisor
+}
+
 // SetStreamHandler 设置流式消息处理器
 func (a *Agent) SetStreamHandler(handler StreamHandler) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.streamHandler = handler
+}
+
+// SetContextInjector 设置代码上下文注入器
+func (a *Agent) SetContextInjector(injector ContextInjector) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.contextInjector = injector
+}
+
+// GetContextInjector 获取代码上下文注入器
+func (a *Agent) GetContextInjector() ContextInjector {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.contextInjector
 }

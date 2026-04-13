@@ -52,7 +52,54 @@ func extractBaseCommand(command string) string {
 	return base
 }
 
+// splitShellSubCommands 将Shell命令按操作符分割为多个子命令
+// 支持的操作符: |, ||, &&, ;
+// 使用基础字符串分割，不引入Shell解析器，宁可误报不漏报
+func splitShellSubCommands(command string) []string {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return nil
+	}
+
+	// 按优先级从低到高分隔符逐层分割
+	// 先按 ; 分割，再按 && 和 || 分割，最后按 | 分割
+	var segments []string
+
+	// 第一步：按 ; 分割
+	for _, seg := range strings.Split(command, ";") {
+		seg = strings.TrimSpace(seg)
+		if seg == "" {
+			continue
+		}
+		// 第二步：按 && 分割
+		for _, seg2 := range strings.Split(seg, "&&") {
+			seg2 = strings.TrimSpace(seg2)
+			if seg2 == "" {
+				continue
+			}
+			// 第三步：按 || 分割
+			for _, seg3 := range strings.Split(seg2, "||") {
+				seg3 = strings.TrimSpace(seg3)
+				if seg3 == "" {
+					continue
+				}
+				// 第四步：按 | 分割（管道）
+				for _, seg4 := range strings.Split(seg3, "|") {
+					seg4 = strings.TrimSpace(seg4)
+					if seg4 == "" {
+						continue
+					}
+					segments = append(segments, seg4)
+				}
+			}
+		}
+	}
+
+	return segments
+}
+
 // isCommandAllowed 检查命令是否在白名单中
+// 对于包含管道/链式操作符的Shell命令，会分割后逐段检查
 // allowedCommands 为空时表示允许所有命令（向后兼容）
 func isCommandAllowed(command string, allowedCommands []string) bool {
 	// 白名单为空时，不做限制（向后兼容）
@@ -60,30 +107,121 @@ func isCommandAllowed(command string, allowedCommands []string) bool {
 		return true
 	}
 
-	baseCmd := extractBaseCommand(command)
-	if baseCmd == "" {
-		return false
+	// 分割为子命令逐个检查，防止 "cmd1 || rm -rf /" 绕过
+	subCommands := splitShellSubCommands(command)
+	if len(subCommands) == 0 {
+		baseCmd := extractBaseCommand(command)
+		return baseCmd != ""
 	}
 
-	// 检查白名单（不区分大小写）
-	baseCmdLower := strings.ToLower(baseCmd)
-	for _, allowed := range allowedCommands {
-		if strings.ToLower(allowed) == baseCmdLower {
-			return true
+	for _, subCmd := range subCommands {
+		baseCmd := extractBaseCommand(subCmd)
+		if baseCmd == "" {
+			return false
+		}
+
+		// 检查白名单（不区分大小写）
+		baseCmdLower := strings.ToLower(baseCmd)
+		found := false
+		for _, allowed := range allowedCommands {
+			if strings.ToLower(allowed) == baseCmdLower {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
 		}
 	}
 
-	return false
+	return true
 }
 
 // buildNotAllowedError 构建命令不被允许的错误信息
 func buildNotAllowedError(command string, allowedCommands []string) *ToolResult {
+	// 尝试找出哪个子命令不被允许，提供更精确的错误信息
+	subCommands := splitShellSubCommands(command)
+	if len(subCommands) > 1 {
+		for _, subCmd := range subCommands {
+			baseCmd := extractBaseCommand(subCmd)
+			baseCmdLower := strings.ToLower(baseCmd)
+			found := false
+			for _, allowed := range allowedCommands {
+				if strings.ToLower(allowed) == baseCmdLower {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return NewErrorResult(fmt.Sprintf(
+					"命令 '%s' 不在允许列表中（在复合命令中被发现）。允许的命令: [%s]",
+					baseCmd,
+					strings.Join(allowedCommands, ", "),
+				))
+			}
+		}
+	}
+
 	baseCmd := extractBaseCommand(command)
 	return NewErrorResult(fmt.Sprintf(
 		"命令 '%s' 不在允许列表中。允许的命令: [%s]",
 		baseCmd,
 		strings.Join(allowedCommands, ", "),
 	))
+}
+
+// ==================== 环境变量安全过滤 ====================
+
+// protectedEnvVars 受保护的环境变量黑名单
+// 这些变量被注入后可能影响系统安全性，因此必须过滤
+var protectedEnvVars = []string{
+	"PATH",
+	"HOME",
+	"USERPROFILE",
+	"USER",
+	"USERNAME",
+	"SHELL",
+	"LD_LIBRARY_PATH",
+	"DYLD_LIBRARY_PATH",
+	"LD_PRELOAD",
+	"DYLD_INSERT_LIBRARIES",
+	"SYSTEMROOT",
+	"WINDIR",
+	"HOSTNAME",
+	"COMPUTERNAME",
+	"TEMP",
+	"TMP",
+}
+
+// filterEnvironmentVariables 过滤环境变量中的受保护变量
+// 移除黑名单中的变量，但不阻止执行，返回被过滤的变量名列表
+func filterEnvironmentVariables(env map[string]interface{}) (map[string]string, []string) {
+	// 构建受保护变量集合（不区分大小写，因为环境变量在Windows上大小写不敏感）
+	protected := make(map[string]bool, len(protectedEnvVars))
+	for _, v := range protectedEnvVars {
+		protected[strings.ToUpper(v)] = true
+	}
+
+	filtered := make(map[string]string, len(env))
+	var removed []string
+
+	for k, v := range env {
+		keyUpper := strings.ToUpper(k)
+		if protected[keyUpper] {
+			if vStr, ok := v.(string); ok {
+				// 记录被过滤的变量名（不记录值，避免泄露）
+				removed = append(removed, k)
+				_ = vStr // 不使用值
+			}
+			continue
+		}
+		// 安全变量，保留
+		if vStr, ok := v.(string); ok {
+			filtered[k] = vStr
+		}
+	}
+
+	return filtered, removed
 }
 
 // ==================== ExecuteCommand Tool ====================
@@ -307,15 +445,20 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, params map[string]inte
 	}
 
 	// 设置环境变量（继承当前进程的环境变量，再追加自定义变量）
+	// 安全过滤：移除受保护的环境变量（PATH/HOME等），防止环境注入攻击
+	var envWarnings []string
 	if envVal, ok := params["env"]; ok {
 		if env, ok := envVal.(map[string]interface{}); ok {
+			// 过滤受保护的环境变量
+			safeEnv, removed := filterEnvironmentVariables(env)
+			if len(removed) > 0 {
+				envWarnings = removed
+			}
 			// 继承当前进程的所有环境变量
 			cmd.Env = append(os.Environ())
-			// 追加自定义环境变量（可覆盖已有变量）
-			for k, v := range env {
-				if vStr, ok := v.(string); ok {
-					cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, vStr))
-				}
+			// 追加经过过滤的安全环境变量
+			for k, v := range safeEnv {
+				cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
 			}
 		}
 	}
@@ -358,6 +501,16 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, params map[string]inte
 	} else {
 		result.ExitCode = 0
 		result.Success = true
+	}
+
+	// 如果有环境变量被过滤，附加警告信息到stderr
+	if len(envWarnings) > 0 {
+		warningMsg := fmt.Sprintf("[安全警告] 以下受保护的环境变量已被过滤: %s", strings.Join(envWarnings, ", "))
+		if result.Stderr != "" {
+			result.Stderr += "\n" + warningMsg
+		} else {
+			result.Stderr = warningMsg
+		}
 	}
 
 	return NewSuccessResult(result), nil

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"golang.org/x/net/html"
 )
 
 // ==================== Dispatcher 测试 ====================
@@ -218,7 +220,7 @@ func TestDispatcher_RegisterMultipleCheckers(t *testing.T) {
 	for _, ext := range exts {
 		extMap[ext] = true
 	}
-	for _, expected := range []string{".json", ".yaml", ".yml", ".xml", ".html", ".go"} {
+	for _, expected := range []string{".json", ".yaml", ".yml", ".xml", ".html", ".go", ".toml", ".css", ".sql", ".properties"} {
 		if !extMap[expected] {
 			t.Errorf("expected extension '%s' to be registered", expected)
 		}
@@ -413,6 +415,284 @@ func TestExternalChecker_DegradedWhenToolNotAvailable(t *testing.T) {
 	}
 }
 
+// ==================== TOML Checker 测试 ====================
+
+func TestTOMLChecker_Valid(t *testing.T) {
+	c := NewTOMLChecker()
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{"simple", `key = "value"`},
+		{"section", `[database]
+host = "localhost"
+port = 5432`},
+		{"array", `fruits = ["apple", "banana", "cherry"]`},
+		{"nested", `[owner]
+name = "Tom"
+[owner.bio]
+age = 30`},
+		{"empty", ""},
+		{"whitespace_only", "  \n\t  "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := c.Check(tt.content, "test.toml")
+			if result.HasErrors {
+				t.Errorf("expected no errors for %s, got: %v", tt.name, result.Errors)
+			}
+			if result.Language != "toml" {
+				t.Errorf("expected language 'toml', got '%s'", result.Language)
+			}
+		})
+	}
+}
+
+func TestTOMLChecker_Invalid(t *testing.T) {
+	c := NewTOMLChecker()
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{"missing_equals", `key "value"`},
+		{"invalid_section", `[section`},
+		{"duplicate_key", `key = "1"
+key = "2"`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := c.Check(tt.content, "test.toml")
+			if !result.HasErrors {
+				t.Errorf("expected errors for %s", tt.name)
+			}
+			if len(result.Errors) == 0 {
+				t.Error("expected at least one error")
+			}
+		})
+	}
+}
+
+// ==================== CSS Checker 测试 ====================
+
+func TestCSSChecker_Valid(t *testing.T) {
+	c := NewCSSChecker()
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{"simple_rule", `body { color: red; }`},
+		{"nested", `.container { display: flex; }
+.container .item { flex: 1; }`},
+		{"at_rule", `@media (max-width: 600px) { body { font-size: 14px; } }`},
+		{"empty", ""},
+		{"whitespace_only", "  \n\t  "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := c.Check(tt.content, "test.css")
+			if result.HasErrors {
+				t.Errorf("expected no errors for %s, got: %v", tt.name, result.Errors)
+			}
+			if result.Language != "css" {
+				t.Errorf("expected language 'css', got '%s'", result.Language)
+			}
+		})
+	}
+}
+
+func TestCSSChecker_Invalid(t *testing.T) {
+	c := NewCSSChecker()
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{"unclosed_brace", `body { color: red;`},
+		{"extra_closing_brace", `}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := c.Check(tt.content, "test.css")
+			if !result.HasErrors {
+				t.Errorf("expected errors for %s", tt.name)
+			}
+		})
+	}
+}
+
+// ==================== SQL Checker 测试 ====================
+
+func TestSQLChecker_Valid(t *testing.T) {
+	c := NewSQLChecker()
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{"simple_select", `SELECT * FROM users WHERE id = 1;`},
+		{"multi_statement", `CREATE TABLE users (id INT, name VARCHAR(100));
+INSERT INTO users VALUES (1, 'Alice');
+SELECT * FROM users;`},
+		{"with_comments", `-- This is a comment
+SELECT /* inline */ name FROM users;`},
+		{"string_with_quote", `SELECT 'it''s fine' AS val;`},
+		{"bracket_ident", `SELECT [name] FROM [my-table];`},
+		{"empty", ""},
+		{"whitespace_only", "  \n\t  "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := c.Check(tt.content, "test.sql")
+			if result.HasErrors {
+				t.Errorf("expected no errors for %s, got: %v", tt.name, result.Errors)
+			}
+			if result.Language != "sql" {
+				t.Errorf("expected language 'sql', got '%s'", result.Language)
+			}
+		})
+	}
+}
+
+func TestSQLChecker_Invalid(t *testing.T) {
+	c := NewSQLChecker()
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{"unclosed_string", `SELECT 'unclosed FROM users;`},
+		{"unclosed_paren", `SELECT * FROM users WHERE id IN (1, 2;`},
+		{"extra_close_paren", `SELECT *) FROM users;`},
+		{"unclosed_comment", `/* this is never closed`},
+		{"unclosed_ident", `SELECT "name FROM users;`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := c.Check(tt.content, "test.sql")
+			if !result.HasErrors {
+				t.Errorf("expected errors for %s", tt.name)
+			}
+			if len(result.Errors) == 0 {
+				t.Error("expected at least one error")
+			}
+		})
+	}
+}
+
+// ==================== Properties Checker 测试 ====================
+
+func TestPropertiesChecker_Valid(t *testing.T) {
+	c := NewPropertiesChecker()
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{"simple", "key=value"},
+		{"colon_sep", "key:value"},
+		{"space_sep", "key value"},
+		{"comment", "# This is a comment\nkey=value"},
+		{"bang_comment", "! Another comment\nkey=value"},
+		{"unicode_escape", `name=\u0041lice`},
+		{"escape_sequences", `path=C:\\Users\\test
+newline=line1\nline2
+tab=col1\tcol2`},
+		{"continuation", `key=line1 \
+line2`},
+		{"empty", ""},
+		{"whitespace_only", "  \n\t  "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := c.Check(tt.content, "test.properties")
+			if result.HasErrors {
+				t.Errorf("expected no errors for %s, got: %v", tt.name, result.Errors)
+			}
+			if result.Language != "properties" {
+				t.Errorf("expected language 'properties', got '%s'", result.Language)
+			}
+		})
+	}
+}
+
+func TestPropertiesChecker_Invalid(t *testing.T) {
+	c := NewPropertiesChecker()
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{"invalid_unicode_short", `name=\u00`},
+		{"invalid_unicode_char", `name=\u00GG`},
+		{"trailing_continuation", `key=value\`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := c.Check(tt.content, "test.properties")
+			if !result.HasErrors {
+				t.Errorf("expected errors for %s", tt.name)
+			}
+		})
+	}
+}
+
+// ==================== Dispatcher 注册测试 ====================
+
+func TestDispatcher_Check_TOML(t *testing.T) {
+	d := NewDispatcher()
+	d.RegisterChecker(NewTOMLChecker())
+
+	result := d.Check(`key = "value"`, "test.toml", 100)
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.HasErrors {
+		t.Errorf("expected no errors, got: %v", result.Errors)
+	}
+}
+
+func TestDispatcher_Check_CSS(t *testing.T) {
+	d := NewDispatcher()
+	d.RegisterChecker(NewCSSChecker())
+
+	result := d.Check("body { color: red; }", "test.css", 100)
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.HasErrors {
+		t.Errorf("expected no errors, got: %v", result.Errors)
+	}
+}
+
+func TestDispatcher_Check_SQL(t *testing.T) {
+	d := NewDispatcher()
+	d.RegisterChecker(NewSQLChecker())
+
+	result := d.Check("SELECT * FROM users;", "test.sql", 100)
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.HasErrors {
+		t.Errorf("expected no errors, got: %v", result.Errors)
+	}
+}
+
+func TestDispatcher_Check_Properties(t *testing.T) {
+	d := NewDispatcher()
+	d.RegisterChecker(NewPropertiesChecker())
+
+	result := d.Check("key=value", "test.properties", 100)
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.HasErrors {
+		t.Errorf("expected no errors, got: %v", result.Errors)
+	}
+}
+
 // ==================== Result 结构测试 ====================
 
 func TestSyntaxCheckResult_Serialization(t *testing.T) {
@@ -461,6 +741,10 @@ func TestDetectLanguage(t *testing.T) {
 		{"test.ps1", "powershell"},
 		{"test.bat", "batch"},
 		{"test.gradle", "gradle"},
+		{"test.toml", "toml"},
+		{"test.css", "css"},
+		{"test.sql", "sql"},
+		{"test.properties", "properties"},
 		{"path/to/file.java", "java"},
 		{"C:\\Users\\test.py", "python"},
 	}
@@ -472,6 +756,285 @@ func TestDetectLanguage(t *testing.T) {
 				t.Errorf("detectLanguage(%s) = %s, want %s", tt.path, got, tt.expected)
 			}
 		})
+	}
+}
+
+// ==================== BAT/GradleKTS 扩展名注册测试 ====================
+
+func TestExternalChecker_BATExtension(t *testing.T) {
+	c := NewExternalChecker()
+
+	// .bat 和 .cmd 应该被ExternalChecker支持
+	exts := c.SupportedExtensions()
+	extMap := make(map[string]bool)
+	for _, ext := range exts {
+		extMap[ext] = true
+	}
+	if !extMap[".bat"] {
+		t.Error("expected .bat to be supported by ExternalChecker")
+	}
+	if !extMap[".cmd"] {
+		t.Error("expected .cmd to be supported by ExternalChecker")
+	}
+}
+
+func TestExternalChecker_GradleKTSExtension(t *testing.T) {
+	c := NewExternalChecker()
+
+	// .gradle.kts 应该被ExternalChecker支持
+	exts := c.SupportedExtensions()
+	extMap := make(map[string]bool)
+	for _, ext := range exts {
+		extMap[ext] = true
+	}
+	if !extMap[".gradle.kts"] {
+		t.Error("expected .gradle.kts to be supported by ExternalChecker")
+	}
+}
+
+func TestExternalChecker_BATCheck(t *testing.T) {
+	c := NewExternalChecker()
+
+	// 测试.bat文件能触发检查（降级或实际检查都是合理的）
+	result := c.Check("@echo off\necho hello\n", "test.bat")
+	// 在非Windows平台期望降级，Windows平台可能成功或降级
+	if result == nil {
+		t.Error("expected non-nil result for .bat file")
+	}
+	if result != nil {
+		t.Logf("BAT check: language=%s, degraded=%v, method=%s", result.Language, result.Degraded, result.CheckMethod)
+	}
+}
+
+func TestExternalChecker_GradleKTSCheck(t *testing.T) {
+	c := NewExternalChecker()
+
+	// 测试.gradle.kts文件（双扩展名）能触发Gradle检查
+	result := c.Check(`plugins { java }`, "build.gradle.kts")
+	if result == nil {
+		t.Error("expected non-nil result for .gradle.kts file")
+	}
+	if result != nil {
+		t.Logf("Gradle KTS check: language=%s, degraded=%v, method=%s", result.Language, result.Degraded, result.CheckMethod)
+	}
+}
+
+func TestDetectLanguage_GradleKTS(t *testing.T) {
+	tests := []struct {
+		path     string
+		expected string
+	}{
+		{"build.gradle.kts", "gradle"},
+		{"settings.gradle.kts", "gradle"},
+		{"path/to/build.gradle.kts", "gradle"},
+		{"test.kts", "kotlin"},
+		{"build.gradle", "gradle"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			got := detectLanguage(tt.path)
+			if got != tt.expected {
+				t.Errorf("detectLanguage(%s) = %s, want %s", tt.path, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestDispatcher_RegisterAllIncludesBATAndGradleKTS(t *testing.T) {
+	d := NewDispatcher()
+	RegisterAllCheckers(d)
+
+	exts := d.RegisteredExtensions()
+	extMap := make(map[string]bool)
+	for _, ext := range exts {
+		extMap[ext] = true
+	}
+
+	// BAT扩展名
+	if !extMap[".bat"] {
+		t.Error("expected .bat to be registered")
+	}
+	if !extMap[".cmd"] {
+		t.Error("expected .cmd to be registered")
+	}
+	// GradleKTS扩展名
+	if !extMap[".gradle.kts"] {
+		t.Error("expected .gradle.kts to be registered")
+	}
+}
+
+// ==================== HTML+JS 嵌入式JavaScript检查测试 ====================
+
+func TestHTMLChecker_NoScript(t *testing.T) {
+	c := NewHTMLChecker()
+	result := c.Check(`<!DOCTYPE html><html><body><p>Hello</p></body></html>`, "test.html")
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.HasErrors {
+		t.Errorf("expected no errors, got: %v", result.Errors)
+	}
+}
+
+func TestHTMLChecker_ValidScript(t *testing.T) {
+	c := NewHTMLChecker()
+	html := `<!DOCTYPE html><html><body>
+<script>console.log("hello");</script>
+</body></html>`
+	result := c.Check(html, "test.html")
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	// node可用时检查JS，不可用时HTML结构检查仍通过
+	t.Logf("HTML+JS check: has_errors=%v, degraded=%v, warnings=%d", result.HasErrors, result.Degraded, len(result.Warnings))
+}
+
+func TestHTMLChecker_InvalidScript(t *testing.T) {
+	c := NewHTMLChecker()
+	html := `<!DOCTYPE html><html><body>
+<script>function foo( { }</script>
+</body></html>`
+	result := c.Check(html, "test.html")
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	t.Logf("HTML+invalid JS check: has_errors=%v, warnings=%d", result.HasErrors, len(result.Warnings))
+}
+
+func TestHTMLChecker_MultipleScripts(t *testing.T) {
+	c := NewHTMLChecker()
+	html := `<!DOCTYPE html><html><body>
+<script>var x = 1;</script>
+<script>var y = 2;</script>
+</body></html>`
+	result := c.Check(html, "test.html")
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	t.Logf("HTML+multiple scripts: has_errors=%v, warnings=%d", result.HasErrors, len(result.Warnings))
+}
+
+func TestHTMLChecker_ImportMapSkipped(t *testing.T) {
+	c := NewHTMLChecker()
+	// importmap类型的script不应被作为JS检查
+	html := `<!DOCTYPE html><html><body>
+<script type="importmap">{ "imports": {} }</script>
+</body></html>`
+	result := c.Check(html, "test.html")
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.HasErrors {
+		t.Errorf("expected no errors for importmap script, got: %v", result.Errors)
+	}
+	// importmap中的JSON内容不应产生JS语法错误
+	t.Logf("HTML+importmap: has_errors=%v, warnings=%d", result.HasErrors, len(result.Warnings))
+}
+
+func TestHTMLChecker_NonJSScriptTypes(t *testing.T) {
+	c := NewHTMLChecker()
+	// 各种非JS类型的script标签应被跳过
+	html := `<!DOCTYPE html><html><body>
+<script type="application/json">{ "key": "value" }</script>
+<script type="text/template"><div>{{name}}</div></script>
+<script type="importmap">{ "imports": {} }</script>
+</body></html>`
+	result := c.Check(html, "test.html")
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.HasErrors {
+		t.Errorf("expected no errors for non-JS scripts, got: %v", result.Errors)
+	}
+}
+
+func TestHTMLChecker_EmptyScript(t *testing.T) {
+	c := NewHTMLChecker()
+	html := `<!DOCTYPE html><html><body>
+<script></script>
+<script>    </script>
+</body></html>`
+	result := c.Check(html, "test.html")
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.HasErrors {
+		t.Errorf("expected no errors for empty scripts, got: %v", result.Errors)
+	}
+}
+
+func TestIsJSScriptType(t *testing.T) {
+	tests := []struct {
+		scriptType string
+		expected   bool
+	}{
+		{"", true},
+		{"text/javascript", true},
+		{"module", true},
+		{"application/javascript", true},
+		{"TEXT/JAVASCRIPT", true},
+		{"Module", true},
+		{"importmap", false},
+		{"application/json", false},
+		{"text/template", false},
+		{"text/x-custom", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.scriptType, func(t *testing.T) {
+			got := isJSScriptType(tt.scriptType)
+			if got != tt.expected {
+				t.Errorf("isJSScriptType(%q) = %v, want %v", tt.scriptType, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestExtractScriptContents(t *testing.T) {
+	htmlContent := `<!DOCTYPE html><html><body>
+<script>var a = 1;</script>
+<script type="module">import { x } from 'y';</script>
+<script type="importmap">{ "imports": {} }</script>
+<script type="text/javascript">var b = 2;</script>
+</body></html>`
+
+	doc, err := html.Parse(strings.NewReader(htmlContent))
+	if err != nil {
+		t.Fatalf("failed to parse HTML: %v", err)
+	}
+
+	scripts := extractScriptContents(doc)
+	if len(scripts) != 4 {
+		t.Fatalf("expected 4 script elements, got %d", len(scripts))
+	}
+
+	// 验证各script内容
+	expectedContents := []string{
+		"var a = 1;",
+		"import { x } from 'y';",
+		`{ "imports": {} }`,
+		"var b = 2;",
+	}
+	for i, script := range scripts {
+		if !strings.Contains(script.Content, strings.TrimSpace(expectedContents[i])) {
+			t.Errorf("script[%d]: expected content containing %q, got %q", i, expectedContents[i], script.Content)
+		}
+	}
+
+	// 验证type属性
+	expectedTypes := []string{"", "module", "importmap", "text/javascript"}
+	for i, script := range scripts {
+		if script.Type != expectedTypes[i] {
+			t.Errorf("script[%d]: expected type %q, got %q", i, expectedTypes[i], script.Type)
+		}
+	}
+
+	// 验证索引
+	for i, script := range scripts {
+		if script.Index != i {
+			t.Errorf("script[%d]: expected index %d, got %d", i, i, script.Index)
+		}
 	}
 }
 

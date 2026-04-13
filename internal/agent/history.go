@@ -3,7 +3,7 @@ package agent
 import (
 	"sync"
 
-	"agentplus/internal/model"
+	"github.com/Attect/MukaAI/internal/model"
 )
 
 // HistoryManager 管理消息历史

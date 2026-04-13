@@ -18,6 +18,8 @@ vendor/
 go.work
 
 # Build output
+/mukaai
+/mukaai.exe
 /agentplus
 /agentplus.exe
 
@@ -31,26 +33,38 @@ go.work
 .DS_Store
 Thumbs.db
 
-# State files
-state/
-*.yaml
-!configs/config.yaml
+# Runtime config (use config.yaml.example as template)
+configs/config.yaml
 
-# Frontend
-frontend/node_modules/
-frontend/dist/
+# Logs
+logs/
 
-# AI working docs (tracked selectively)
-# ai/ directory is tracked for documentation
+# Build output
+out/
 
-# Trae IDE specs
-.trae/
+# AI working docs
+ai/
+
+# IDE project files
+*.iml
+
+# Test artifacts  
+test_mcp_go_task/
 
 # Test workspace
 test_workspace/
 
+# Test files
+test_fuzzy_requirement.go
+
+# Temporary reports
+task13_token_stats_report.md
+
 # Windows artifacts
 nul
 
-# Temporary test files
-test_fuzzy_requirement.go
+# State data
+state/
+
+# .agentplus directory (legacy)
+.agentplus/

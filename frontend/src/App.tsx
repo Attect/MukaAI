@@ -7,7 +7,24 @@ import Toolbar from "./components/Toolbar";
 import MessageList from "./components/MessageList";
 import InputArea from "./components/InputArea";
 import Sidebar from "./components/Sidebar";
-import type { ConversationData, TokenStats } from "./types";
+import Settings from "./components/Settings";
+import SupervisorPanel from "./components/SupervisorPanel";
+import TerminalPanel from "./components/TerminalPanel";
+import type { ConversationData, TokenStats, SupervisorResult } from "./types";
+
+// 主题管理工具函数
+function getInitialTheme(): boolean {
+  const stored = localStorage.getItem("theme");
+  if (stored === "light") return false;
+  if (stored === "dark") return true;
+  // 跟随系统偏好，无偏好时默认暗色
+  return !window.matchMedia("(prefers-color-scheme: light)").matches;
+}
+
+function applyTheme(dark: boolean): void {
+  document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+  localStorage.setItem("theme", dark ? "dark" : "light");
+}
 
 function App(): React.ReactElement {
   const {
@@ -26,10 +43,21 @@ function App(): React.ReactElement {
     clearConv,
     changeWorkDir,
     switchConv,
+    deleteConv,
+    exportConv,
   } = useConversation();
 
   const [sidebarVisible, setSidebarVisible] = useState(false);
+  const [settingsVisible, setSettingsVisible] = useState(false);
+  const [terminalVisible, setTerminalVisible] = useState(false);
   const [wailsReady, setWailsReady] = useState(false);
+  const [isDarkTheme, setIsDarkTheme] = useState(getInitialTheme);
+  const [supervisorResults, setSupervisorResults] = useState<SupervisorResult[]>([]);
+
+  // 初始化主题
+  useEffect(() => {
+    applyTheme(isDarkTheme);
+  }, [isDarkTheme]);
 
   useEffect(() => {
     const checkReady = () => {
@@ -63,6 +91,17 @@ function App(): React.ReactElement {
     setError(err);
   }, [setError]);
 
+  const handleSupervisorResult = useCallback((result: SupervisorResult) => {
+    setSupervisorResults((prev) => [...prev, result]);
+  }, []);
+
+  // 新对话时清空监督结果
+  useEffect(() => {
+    if (!conversationData.isStreaming && conversationData.messages.length === 0) {
+      setSupervisorResults([]);
+    }
+  }, [conversationData.isStreaming, conversationData.messages.length]);
+
   const handleWorkDirChanged = useCallback((dir: string) => {
     setWorkDir(dir);
   }, [setWorkDir]);
@@ -73,6 +112,7 @@ function App(): React.ReactElement {
     onStreamDone: handleStreamDone,
     onStreamError: handleStreamError,
     onWorkDirChanged: handleWorkDirChanged,
+    onSupervisorResult: handleSupervisorResult,
   });
 
   const handleCommand = useCallback((cmd: string) => {
@@ -85,6 +125,11 @@ function App(): React.ReactElement {
       case "/clear":
         clearConv();
         break;
+      case "/save": {
+        const filename = parts.slice(1).join(" ").trim();
+        exportConv(conversationData.id || "", filename);
+        break;
+      }
       case "/help":
         alert("可用命令：/cd, /clear, /save, /help, /exit");
         break;
@@ -94,14 +139,22 @@ function App(): React.ReactElement {
       default:
         setError(`未知命令: ${command}`);
     }
-  }, [changeWorkDir, clearConv, setError]);
+  }, [changeWorkDir, clearConv, conversationData.id, exportConv, setError]);
+
+  const handleToggleTheme = useCallback(() => {
+    setIsDarkTheme((prev) => {
+      const next = !prev;
+      applyTheme(next);
+      return next;
+    });
+  }, []);
 
   if (!wailsReady) {
     return (
-      <div className="flex h-screen items-center justify-center bg-gray-900 text-white">
-        <div className="text-center">
-          <div className="text-2xl font-bold mb-2">AgentPlus</div>
-          <div className="text-gray-400 animate-pulse">正在初始化...</div>
+      <div style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", background: "var(--bg-app)", color: "var(--text-primary)" }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: "1.5rem", fontWeight: 700, marginBottom: "0.5rem" }}>MukaAI</div>
+          <div style={{ color: "var(--text-muted)" }} className="animate-pulse">正在初始化...</div>
         </div>
       </div>
     );
@@ -109,43 +162,58 @@ function App(): React.ReactElement {
 
   return (
     <ErrorBoundary>
-    <div className="flex h-screen bg-gray-900 text-white">
-      <Sidebar
-        visible={sidebarVisible}
-        conversations={conversations}
-        activeId={conversationData.id}
-        onSelect={(id) => {
-          if (id !== conversationData.id) {
-            switchConv(id);
-          }
-          setSidebarVisible(false);
-        }}
-        onClose={() => setSidebarVisible(false)}
-        onNew={clearConv}
-      />
-      <div className="flex-1 flex flex-col min-w-0">
-        <Toolbar
-          workDir={workDir}
-          tokenStats={tokenStats}
-          isStreaming={conversationData.isStreaming}
-          onInterrupt={interruptInference}
-          onClear={clearConv}
-          onToggleSidebar={() => setSidebarVisible(!sidebarVisible)}
+      <div style={{ display: "flex", height: "100vh", background: "var(--bg-app)", color: "var(--text-primary)" }}>
+        <Sidebar
+          visible={sidebarVisible}
+          conversations={conversations}
+          activeId={conversationData.id}
+          onSelect={(id) => {
+            if (id !== conversationData.id) {
+              switchConv(id);
+            }
+            setSidebarVisible(false);
+          }}
+          onClose={() => setSidebarVisible(false)}
+          onNew={clearConv}
+          onDelete={deleteConv}
         />
-        {error && (
-          <div className="bg-red-900/50 text-red-300 px-4 py-2 text-sm flex justify-between">
-            <span>{error}</span>
-            <button onClick={() => setError(null)} className="text-red-400 hover:text-red-200">✕</button>
-          </div>
-        )}
-        <MessageList messages={conversationData.messages} />
-        <InputArea
-          isStreaming={conversationData.isStreaming}
-          onSend={sendMessage}
-          onCommand={handleCommand}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+          <Toolbar
+            workDir={workDir}
+            tokenStats={tokenStats}
+            isStreaming={conversationData.isStreaming}
+            onInterrupt={interruptInference}
+            onClear={clearConv}
+            onToggleSidebar={() => setSidebarVisible(!sidebarVisible)}
+            onToggleSettings={() => setSettingsVisible(!settingsVisible)}
+            onToggleTerminal={() => setTerminalVisible(!terminalVisible)}
+            isTerminalVisible={terminalVisible}
+            onToggleTheme={handleToggleTheme}
+            isDarkTheme={isDarkTheme}
+          />
+          {error && (
+            <div style={{ background: "var(--bg-error)", color: "var(--text-red)", padding: "0.5rem 1rem", fontSize: "0.875rem", display: "flex", justifyContent: "space-between" }}>
+              <span>{error}</span>
+              <button onClick={() => setError(null)} style={{ background: "none", border: "none", color: "var(--text-red-hover)", cursor: "pointer" }}>✕</button>
+            </div>
+          )}
+          <MessageList messages={conversationData.messages} />
+          <SupervisorPanel results={supervisorResults} />
+          <TerminalPanel
+            visible={terminalVisible}
+            onClose={() => setTerminalVisible(false)}
+          />
+          <InputArea
+            isStreaming={conversationData.isStreaming}
+            onSend={sendMessage}
+            onCommand={handleCommand}
+          />
+        </div>
+        <Settings
+          visible={settingsVisible}
+          onClose={() => setSettingsVisible(false)}
         />
       </div>
-    </div>
     </ErrorBoundary>
   );
 }

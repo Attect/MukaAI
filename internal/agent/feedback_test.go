@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"agentplus/internal/model"
+	"github.com/Attect/MukaAI/internal/model"
 )
 
 // TestNewFeedbackInjector 测试创建反馈注入器

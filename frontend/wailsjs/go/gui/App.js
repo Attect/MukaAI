@@ -6,12 +6,24 @@ export function ClearConversation() {
   return window['go']['gui']['App']['ClearConversation']();
 }
 
+export function DeleteConversation(arg1) {
+  return window['go']['gui']['App']['DeleteConversation'](arg1);
+}
+
+export function ExportConversation(arg1, arg2) {
+  return window['go']['gui']['App']['ExportConversation'](arg1, arg2);
+}
+
 export function GetConversationData() {
   return window['go']['gui']['App']['GetConversationData']();
 }
 
 export function GetConversations() {
   return window['go']['gui']['App']['GetConversations']();
+}
+
+export function GetSettings() {
+  return window['go']['gui']['App']['GetSettings']();
 }
 
 export function GetTokenStats() {
@@ -26,6 +38,10 @@ export function InterruptInference() {
   return window['go']['gui']['App']['InterruptInference']();
 }
 
+export function SaveSettings(arg1) {
+  return window['go']['gui']['App']['SaveSettings'](arg1);
+}
+
 export function SendMessage(arg1) {
   return window['go']['gui']['App']['SendMessage'](arg1);
 }
@@ -36,4 +52,8 @@ export function SetWorkDir(arg1) {
 
 export function SwitchConversation(arg1) {
   return window['go']['gui']['App']['SwitchConversation'](arg1);
+}
+
+export function UpdateConversationTitle(arg1, arg2) {
+  return window['go']['gui']['App']['UpdateConversationTitle'](arg1, arg2);
 }

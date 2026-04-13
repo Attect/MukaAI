@@ -151,13 +151,21 @@ func (c *ExternalChecker) initTools() {
 			parseErrors: parsePSErrors,
 		},
 		// BAT (§9.3.3.10) - 仅做基础结构检查，不执行文件
-		// 注意：BAT文件无法安全地进行真正的语法检查，
-		// 因为cmd.exe没有提供仅检查语法的选项
-		// 此处保留框架以备将来扩展
-		// Gradle (§9.3.3.11)
+		// cmd.exe没有仅检查语法的选项，此处通过type命令验证文件可读性
+		// 非Windows平台cmd不可用，自动降级
+		{
+			language:   "bat",
+			extensions: []string{".bat", ".cmd"},
+			command:    "cmd",
+			buildArgs: func(tmpFile string) []string {
+				return []string{"/c", "type", tmpFile}
+			},
+			parseErrors: parseBATErrors,
+		},
+		// Gradle (§9.3.3.11) - 同时支持 .gradle 和 .gradle.kts
 		{
 			language:   "gradle",
-			extensions: []string{".gradle"},
+			extensions: []string{".gradle", ".gradle.kts"},
 			command:    "gradle",
 			buildArgs: func(tmpFile string) []string {
 				return []string{"--dry-run", "-b", tmpFile}
@@ -186,12 +194,27 @@ func (c *ExternalChecker) SupportedExtensions() []string {
 
 // Check 对文件内容执行外部工具语法检查
 func (c *ExternalChecker) Check(content string, filePath string) *SyntaxCheckResult {
+	lowerPath := strings.ToLower(filePath)
+
+	// 处理双扩展名（如 .gradle.kts）
+	// filepath.Ext() 只返回最后一个扩展名（如 .kts），需要后缀匹配复合扩展名
+	for ext, tool := range c.extToTool {
+		if strings.Count(ext, ".") > 1 && strings.HasSuffix(lowerPath, ext) {
+			return c.executeToolCheck(tool, content, ext)
+		}
+	}
+
 	ext := strings.ToLower(filepath.Ext(filePath))
 	tool, ok := c.extToTool[ext]
 	if !ok {
 		return nil
 	}
 
+	return c.executeToolCheck(tool, content, ext)
+}
+
+// executeToolCheck 执行具体的外部工具检查
+func (c *ExternalChecker) executeToolCheck(tool *externalToolDef, content string, ext string) *SyntaxCheckResult {
 	// 检查工具可用性
 	if !c.isToolAvailable(tool.command) {
 		return newDegradedCheckResult(
@@ -666,6 +689,21 @@ func parsePSErrors(stderr string, language string) []SyntaxError {
 			Message:    truncateOutput(stderr, 500),
 			Severity:   "error",
 			Suggestion: "Check PowerShell syntax",
+		},
+	}
+}
+
+// parseBATErrors 解析BAT检查输出
+// cmd /c type 只验证文件可读性，错误输出较为简单
+func parseBATErrors(stderr string, language string) []SyntaxError {
+	if stderr == "" {
+		return nil
+	}
+	return []SyntaxError{
+		{
+			Message:    truncateOutput(stderr, 500),
+			Severity:   "error",
+			Suggestion: "Check batch file syntax",
 		},
 	}
 }

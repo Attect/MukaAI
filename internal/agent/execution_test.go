@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"agentplus/internal/model"
-	"agentplus/internal/state"
-	"agentplus/internal/tools"
+	"github.com/Attect/MukaAI/internal/model"
+	"github.com/Attect/MukaAI/internal/state"
+	"github.com/Attect/MukaAI/internal/tools"
 )
 
 // TestParseToolCallArguments_有效JSON 测试解析有效的工具调用参数

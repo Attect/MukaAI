@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"agentplus/internal/tools/syntax"
+	"github.com/Attect/MukaAI/internal/tools/syntax"
 	"context"
 	"fmt"
 	"io/fs"
@@ -15,14 +15,16 @@ import (
 
 // validatePath 验证请求的路径是否在允许的工作目录范围内
 // workDir为空时不做限制（向后兼容，与命令白名单设计一致）
-// 返回清理后的绝对路径，或错误
-func validatePath(requestedPath, workDir string) (string, error) {
+// 同时检查目标路径是否为系统敏感路径（拒绝/警告）
+// 返回清理后的绝对路径、敏感路径警告列表，或错误
+func validatePath(requestedPath, workDir string) (string, []string, error) {
 	// 清理路径（处理 .. 和 . 等）
 	cleaned := filepath.Clean(requestedPath)
 
 	// workDir为空时不做限制（向后兼容）
 	if workDir == "" {
-		return cleaned, nil
+		// 即使不限制工作目录，仍然执行敏感路径检查
+		return checkSensitiveAndReturn(cleaned)
 	}
 
 	absWorkDir := filepath.Clean(workDir)
@@ -35,7 +37,7 @@ func validatePath(requestedPath, workDir string) (string, error) {
 		// filepath.Clean在Windows上不会将以/开头的路径视为绝对路径
 		if strings.HasPrefix(requestedPath, "/") {
 			// 这是Unix风格的绝对路径，在Windows上无法使用，直接拒绝
-			return "", fmt.Errorf("路径 '%s' 超出允许的工作目录范围 '%s'", requestedPath, workDir)
+			return "", nil, fmt.Errorf("路径 '%s' 超出允许的工作目录范围 '%s'", requestedPath, workDir)
 		}
 		// 真正的相对路径，拼接workDir
 		cleaned = filepath.Join(absWorkDir, cleaned)
@@ -56,14 +58,14 @@ func validatePath(requestedPath, workDir string) (string, error) {
 	// rel为空字符串表示两路径相同，rel不以".."开头表示在范围内
 	rel, err := filepath.Rel(realWorkDir, realPath)
 	if err != nil {
-		return "", fmt.Errorf("路径 '%s' 超出允许的工作目录范围 '%s'", requestedPath, workDir)
+		return "", nil, fmt.Errorf("路径 '%s' 超出允许的工作目录范围 '%s'", requestedPath, workDir)
 	}
 
 	// filepath.Rel在Windows上可能返回以\开头的路径（表示不同卷）
 	// 也可能返回".."开头的路径（表示在工作目录之外）
 	relNorm := filepath.ToSlash(rel)
 	if strings.HasPrefix(relNorm, "..") || strings.HasPrefix(relNorm, "/") {
-		return "", fmt.Errorf("路径 '%s' 超出允许的工作目录范围 '%s'", requestedPath, workDir)
+		return "", nil, fmt.Errorf("路径 '%s' 超出允许的工作目录范围 '%s'", requestedPath, workDir)
 	}
 
 	// Windows上路径大小写不敏感，额外使用EqualFold校验
@@ -72,14 +74,24 @@ func validatePath(requestedPath, workDir string) (string, error) {
 		workDirLower := strings.ToLower(realWorkDir)
 		if !strings.HasPrefix(pathLower+string(filepath.Separator), workDirLower+string(filepath.Separator)) &&
 			pathLower != workDirLower {
-			// filepath.Rel已经通过了，这里作为双重保障
-			// 如果Rel通过了但前缀检查失败，可能是边缘情况，优先信任Rel的结果
-			_ = pathLower
-			_ = workDirLower
+			return "", nil, fmt.Errorf("路径 '%s' 超出允许的工作目录范围 '%s'", requestedPath, workDir)
 		}
 	}
 
-	return cleaned, nil
+	return checkSensitiveAndReturn(cleaned)
+}
+
+// checkSensitiveAndReturn 对清理后的路径执行敏感路径检查，返回路径和可能的警告
+func checkSensitiveAndReturn(cleanedPath string) (string, []string, error) {
+	var warnings []string
+	checkResult := CheckSensitivePath(cleanedPath)
+	switch checkResult.Level {
+	case PathCheckDeny:
+		return "", nil, fmt.Errorf("敏感路径拒绝: %s", checkResult.Reason)
+	case PathCheckWarn:
+		warnings = append(warnings, checkResult.Reason)
+	}
+	return cleanedPath, warnings, nil
 }
 
 // ==================== ReadFile Tool ====================
@@ -136,8 +148,8 @@ func (t *ReadFileTool) Execute(ctx context.Context, params map[string]interface{
 		return NewErrorResult(fmt.Sprintf("path must be absolute: %s", path)), nil
 	}
 
-	// 验证路径在工作目录范围内
-	validatedPath, err := validatePath(path, t.workDir)
+	// 验证路径在工作目录范围内（含敏感路径检查）
+	validatedPath, warnings, err := validatePath(path, t.workDir)
 	if err != nil {
 		return NewErrorResult(err.Error()), nil
 	}
@@ -161,11 +173,15 @@ func (t *ReadFileTool) Execute(ctx context.Context, params map[string]interface{
 		return NewErrorResultWithError(fmt.Sprintf("failed to read file: %s", validatedPath), err), nil
 	}
 
-	return NewSuccessResult(map[string]interface{}{
+	result := map[string]interface{}{
 		"path":    validatedPath,
 		"content": string(content),
 		"size":    len(content),
-	}), nil
+	}
+	if len(warnings) > 0 {
+		result["warnings"] = warnings
+	}
+	return NewSuccessResult(result), nil
 }
 
 // ==================== WriteFile Tool ====================
@@ -240,8 +256,8 @@ func (t *WriteFileTool) Execute(ctx context.Context, params map[string]interface
 		return NewErrorResult(fmt.Sprintf("path must be absolute: %s", path)), nil
 	}
 
-	// 验证路径在工作目录范围内
-	validatedPath, err := validatePath(path, t.workDir)
+	// 验证路径在工作目录范围内（含敏感路径检查）
+	validatedPath, warnings, err := validatePath(path, t.workDir)
 	if err != nil {
 		return NewErrorResult(err.Error()), nil
 	}
@@ -262,6 +278,9 @@ func (t *WriteFileTool) Execute(ctx context.Context, params map[string]interface
 		"path":        validatedPath,
 		"bytes_write": len(content),
 		"message":     "file written successfully",
+	}
+	if len(warnings) > 0 {
+		result["warnings"] = warnings
 	}
 
 	// 写入成功后执行语法检查（仅当dispatcher可用时）
@@ -381,12 +400,11 @@ func (t *EditFileTool) Execute(ctx context.Context, params map[string]interface{
 		return NewErrorResult(fmt.Sprintf("path must be absolute: %s", path)), nil
 	}
 
-	validatedPath, err := validatePath(path, t.workDir)
+	validatedPath, warnings, err := validatePath(path, t.workDir)
 	if err != nil {
 		return NewErrorResult(err.Error()), nil
 	}
 
-	// 检查文件存在且不是目录
 	info, err := os.Stat(validatedPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -468,6 +486,9 @@ func (t *EditFileTool) Execute(ctx context.Context, params map[string]interface{
 	}
 	if len(linesAffected) > 0 {
 		result["lines_affected"] = linesAffected
+	}
+	if len(warnings) > 0 {
+		result["warnings"] = warnings
 	}
 
 	// 编辑完成后执行语法检查
@@ -697,8 +718,8 @@ func (t *ListDirectoryTool) Execute(ctx context.Context, params map[string]inter
 		return NewErrorResult(fmt.Sprintf("path must be absolute: %s", path)), nil
 	}
 
-	// 验证路径在工作目录范围内
-	validatedPath, err := validatePath(path, t.workDir)
+	// 验证路径在工作目录范围内（含敏感路径检查）
+	validatedPath, _, err := validatePath(path, t.workDir)
 	if err != nil {
 		return NewErrorResult(err.Error()), nil
 	}
@@ -842,8 +863,8 @@ func (t *DeleteFileTool) Execute(ctx context.Context, params map[string]interfac
 		return NewErrorResult(fmt.Sprintf("path must be absolute: %s", path)), nil
 	}
 
-	// 验证路径在工作目录范围内
-	validatedPath, err := validatePath(path, t.workDir)
+	// 验证路径在工作目录范围内（含敏感路径检查）
+	validatedPath, _, err := validatePath(path, t.workDir)
 	if err != nil {
 		return NewErrorResult(err.Error()), nil
 	}
@@ -943,8 +964,8 @@ func (t *CreateDirectoryTool) Execute(ctx context.Context, params map[string]int
 		return NewErrorResult(fmt.Sprintf("path must be absolute: %s", path)), nil
 	}
 
-	// 验证路径在工作目录范围内
-	validatedPath, err := validatePath(path, t.workDir)
+	// 验证路径在工作目录范围内（含敏感路径检查）
+	validatedPath, _, err := validatePath(path, t.workDir)
 	if err != nil {
 		return NewErrorResult(err.Error()), nil
 	}

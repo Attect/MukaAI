@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"agentplus/internal/state"
+	"github.com/Attect/MukaAI/internal/state"
 )
 
 // 测试辅助函数

@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
-	"agentplus/internal/agent"
+	"github.com/Attect/MukaAI/internal/agent"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"gopkg.in/yaml.v3"
 )
 
 // Conversation 对话信息，暴露给前端的JSON结构
@@ -65,6 +67,8 @@ type App struct {
 	inferenceCount int
 	isStreaming    bool
 	convStore      *ConversationStore // 对话持久化存储
+	configPath     string             // 配置文件路径，用于GetSettings/SaveSettings
+	terminalWSUrl  string             // 终端 WebSocket 连接地址
 }
 
 // conversation 内部对话结构，包含消息列表和当前流式消息
@@ -143,6 +147,200 @@ func (a *App) Shutdown() {
 	if a.convStore != nil {
 		a.convStore.Close()
 	}
+}
+
+// SetConfigPath 设置配置文件路径
+// 由外部初始化代码调用，用于GetSettings/SaveSettings操作
+func (a *App) SetConfigPath(path string) {
+	a.mu.Lock()
+	a.configPath = path
+	a.mu.Unlock()
+}
+
+// GetSettings 获取当前配置
+// 读取配置文件，返回扁平化的配置map供前端设置页面使用
+func (a *App) GetSettings() map[string]interface{} {
+	a.mu.RLock()
+	configPath := a.configPath
+	a.mu.RUnlock()
+
+	if configPath == "" {
+		return map[string]interface{}{}
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return map[string]interface{}{}
+	}
+
+	var raw map[string]interface{}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return map[string]interface{}{}
+	}
+
+	// 将嵌套的YAML结构扁平化
+	result := make(map[string]interface{})
+	if m, ok := raw["model"].(map[string]interface{}); ok {
+		result["endpoint"] = m["endpoint"]
+		result["api_key"] = m["api_key"]
+		result["model_name"] = m["model_name"]
+		result["context_size"] = m["context_size"]
+	}
+	if ag, ok := raw["agent"].(map[string]interface{}); ok {
+		result["temperature"] = ag["temperature"]
+		result["max_iterations"] = ag["max_iterations"]
+	}
+	if t, ok := raw["tools"].(map[string]interface{}); ok {
+		result["work_dir"] = t["work_dir"]
+		if ac, ok := t["allow_commands"].([]interface{}); ok {
+			result["allow_commands"] = ac
+		}
+	}
+
+	return result
+}
+
+// SaveSettings 保存配置到YAML文件
+// 接收前端传来的扁平化配置map，映射到YAML嵌套结构并写入文件
+func (a *App) SaveSettings(settings map[string]interface{}) error {
+	a.mu.RLock()
+	configPath := a.configPath
+	a.mu.RUnlock()
+
+	if configPath == "" {
+		return fmt.Errorf("config path not set")
+	}
+
+	// 读取现有配置以保留注释和其他字段
+	raw := make(map[string]interface{})
+	if data, err := os.ReadFile(configPath); err == nil {
+		yaml.Unmarshal(data, &raw)
+	}
+
+	// 更新 model 部分
+	if _, ok := raw["model"]; !ok {
+		raw["model"] = make(map[string]interface{})
+	}
+	model := raw["model"].(map[string]interface{})
+	if v, ok := settings["endpoint"]; ok {
+		model["endpoint"] = v
+	}
+	if v, ok := settings["api_key"]; ok {
+		model["api_key"] = v
+	}
+	if v, ok := settings["model_name"]; ok {
+		model["model_name"] = v
+	}
+	if v, ok := settings["context_size"]; ok {
+		model["context_size"] = v
+	}
+
+	// 更新 agent 部分
+	if _, ok := raw["agent"]; !ok {
+		raw["agent"] = make(map[string]interface{})
+	}
+	agentSection := raw["agent"].(map[string]interface{})
+	if v, ok := settings["temperature"]; ok {
+		agentSection["temperature"] = v
+	}
+	if v, ok := settings["max_iterations"]; ok {
+		agentSection["max_iterations"] = v
+	}
+
+	// 更新 tools 部分
+	if _, ok := raw["tools"]; !ok {
+		raw["tools"] = make(map[string]interface{})
+	}
+	toolsSection := raw["tools"].(map[string]interface{})
+	if v, ok := settings["work_dir"]; ok {
+		toolsSection["work_dir"] = v
+	}
+	if v, ok := settings["allow_commands"]; ok {
+		toolsSection["allow_commands"] = v
+	}
+
+	// 写回文件
+	outData, err := yaml.Marshal(raw)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+	if err := os.WriteFile(configPath, outData, 0644); err != nil {
+		return fmt.Errorf("failed to write config: %w", err)
+	}
+
+	return nil
+}
+
+// UpdateConversationTitle 更新对话标题
+func (a *App) UpdateConversationTitle(id string, title string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for _, conv := range a.conversations {
+		if conv.id == id {
+			conv.title = title
+			a.saveConv(conv)
+			runtime.EventsEmit(a.ctx, "conversation:updated", a.GetConversationData())
+			return nil
+		}
+	}
+	return fmt.Errorf("conversation not found: %s", id)
+}
+
+// ExportConversation 导出对话为Markdown文件
+// id为空时导出当前活跃对话，filename为空时自动生成文件名
+func (a *App) ExportConversation(id string, filename string) error {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	// 查找目标对话
+	var conv *conversation
+	if id == "" || id == a.activeConvID {
+		conv = a.getActiveConversation()
+	} else {
+		for _, c := range a.conversations {
+			if c.id == id {
+				conv = c
+				break
+			}
+		}
+	}
+	if conv == nil {
+		return fmt.Errorf("conversation not found")
+	}
+
+	// 构建Markdown内容
+	var sb strings.Builder
+	sb.WriteString("# " + conv.title + "\n\n")
+	sb.WriteString("导出时间: " + time.Now().Format("2006-01-02 15:04:05") + "\n\n---\n\n")
+
+	for _, msg := range conv.messages {
+		if msg.role == "user" {
+			sb.WriteString("## User\n\n")
+			sb.WriteString(msg.content + "\n\n")
+		} else if msg.role == "assistant" {
+			sb.WriteString("## Assistant\n\n")
+			if msg.thinking != "" {
+				sb.WriteString("<details><summary>思考过程</summary>\n\n")
+				sb.WriteString(msg.thinking + "\n\n")
+				sb.WriteString("</details>\n\n")
+			}
+			sb.WriteString(msg.content + "\n\n")
+		}
+	}
+
+	// 确定文件名
+	if filename == "" {
+		safeTitle := strings.ReplaceAll(conv.title, " ", "_")
+		safeTitle = strings.ReplaceAll(safeTitle, "/", "_")
+		filename = fmt.Sprintf("%s_%s.md", safeTitle, time.Now().Format("20060102_150405"))
+	}
+	if !strings.HasSuffix(filename, ".md") {
+		filename += ".md"
+	}
+
+	path := filepath.Join(a.currentDir, filename)
+	return os.WriteFile(path, []byte(sb.String()), 0644)
 }
 
 // saveConv 触发异步保存指定对话到磁盘
@@ -347,6 +545,8 @@ func (a *App) SetWorkDir(path string) error {
 
 // GetWorkDir 获取当前工作目录
 func (a *App) GetWorkDir() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	return a.currentDir
 }
 
@@ -454,4 +654,20 @@ func (a *App) getActiveConversation() *conversation {
 		}
 	}
 	return nil
+}
+
+// SetTerminalWSUrl 设置终端 WebSocket 连接地址
+// 由 GUI 初始化代码调用，将 WebSocket 服务器地址传递给前端
+func (a *App) SetTerminalWSUrl(url string) {
+	a.mu.Lock()
+	a.terminalWSUrl = url
+	a.mu.Unlock()
+}
+
+// GetTerminalWSUrl 获取终端 WebSocket 连接地址
+// 前端通过 Wails 绑定调用此方法获取连接地址
+func (a *App) GetTerminalWSUrl() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.terminalWSUrl
 }

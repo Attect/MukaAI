@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"testing"
 
-	"agentplus/internal/model"
-	"agentplus/internal/state"
+	"github.com/Attect/MukaAI/internal/model"
+	"github.com/Attect/MukaAI/internal/state"
 )
 
 // TestNewCompressor 测试压缩器创建

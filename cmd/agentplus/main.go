@@ -1,4 +1,4 @@
-// Package main 提供AgentPlus命令行入口
+// Package main 提供MukaAI命令行入口
 package main
 
 import (
@@ -8,23 +8,29 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
 
-	"agentplus/internal/agent"
-	"agentplus/internal/config"
-	"agentplus/internal/model"
-	"agentplus/internal/state"
-	"agentplus/internal/tools"
+	"github.com/Attect/MukaAI/internal/agent"
+	"github.com/Attect/MukaAI/internal/config"
+	ctxpkg "github.com/Attect/MukaAI/internal/context"
+	"github.com/Attect/MukaAI/internal/lsp"
+	"github.com/Attect/MukaAI/internal/mcp"
+	"github.com/Attect/MukaAI/internal/model"
+	"github.com/Attect/MukaAI/internal/state"
+	"github.com/Attect/MukaAI/internal/supervisor"
+	"github.com/Attect/MukaAI/internal/tools"
+	"github.com/Attect/MukaAI/internal/tools/git"
 )
 
 // 版本信息
 const (
 	Version = "1.0.0"
-	Name    = "AgentPlus"
+	Name    = "MukaAI"
 )
 
 // 命令行参数
@@ -132,6 +138,18 @@ func runCLICommand() {
 	// 替换为带清理功能的实例
 	stateManager = stateManagerWithCleanup
 
+	// 初始化MCP客户端管理器（如果启用）
+	var mcpManager *mcp.MCPClientManager
+	if cfg.MCP.Enabled {
+		mcpManager = initMCPManager(cfg, toolRegistry, workDir)
+	}
+
+	// 初始化LSP管理器并注册诊断工具（如果启用）
+	var lspManager *lsp.LSPManager
+	if cfg.LSP.Enabled {
+		lspManager = initLSPManager(cfg, toolRegistry, workDir)
+	}
+
 	// 创建Agent
 	ag, err := agent.NewAgent(&agent.Config{
 		ModelClient:   modelClient,
@@ -149,6 +167,50 @@ func runCLICommand() {
 	// 设置任务ID（如果指定）
 	if opts.TaskID != "" {
 		ag.SetTaskID(opts.TaskID)
+	}
+
+	// 创建代码上下文索引器（异步构建索引）
+	indexer := ctxpkg.NewIndexer(workDir)
+	scanCh := indexer.ScanAsync()
+	go func() {
+		result := <-scanCh
+		if result.Err != nil {
+			log.Printf("Warning: context indexing failed: %v", result.Err)
+			return
+		}
+		log.Printf("Context index built: %d files indexed", result.FileCount)
+	}()
+
+	// 创建上下文注入器并设置到Agent
+	injector := ctxpkg.NewInjectorFromContextSize(indexer, cfg.Model.ContextSize)
+	ag.SetContextInjector(injector)
+
+	// 创建Supervisor监督器（默认启用，--no-supervisor时跳过）
+	var sup agent.Supervisor
+	if !opts.NoSupervisor {
+		supInstance, err := supervisor.NewSupervisor(
+			modelClient,
+			toolRegistry,
+			stateManager,
+			ag.GetReviewer(),
+			nil, // 使用默认配置
+		)
+		if err != nil {
+			log.Printf("Warning: failed to create supervisor, running without supervision: %v", err)
+		} else {
+			sup = supInstance
+			ag.SetSupervisor(sup)
+
+			// 设置监督结果回调（CLI模式简单输出）
+			ag.SetOnSupervisor(func(result *agent.SupervisionResult) {
+				if result.Status != "pass" {
+					fmt.Printf("\n\033[33m[Supervisor]\033[0m %s\n", result.Summary)
+					if result.InterventionType != "" && result.InterventionType != "warning" {
+						fmt.Printf("\033[33m  Intervention: %s - %s\033[0m\n", result.InterventionType, result.InterventionAction)
+					}
+				}
+			})
+		}
 	}
 
 	// 设置回调
@@ -172,6 +234,14 @@ func runCLICommand() {
 	go func() {
 		<-sigChan
 		fmt.Println("\nReceived interrupt signal, stopping...")
+		// 关闭MCP连接
+		if mcpManager != nil {
+			_ = mcpManager.Shutdown()
+		}
+		// 关闭LSP语言服务器
+		if lspManager != nil {
+			lspManager.ShutdownAll()
+		}
 		cancel()
 	}()
 
@@ -206,16 +276,26 @@ func runCLICommand() {
 
 	// 打印结果
 	printResult(result)
+
+	// 关闭MCP连接
+	if mcpManager != nil {
+		_ = mcpManager.Shutdown()
+	}
+
+	// 关闭LSP语言服务器
+	if lspManager != nil {
+		lspManager.ShutdownAll()
+	}
 }
 
 // printUsage 打印使用说明
 func printUsage() {
 	fmt.Fprintf(os.Stderr, "%s v%s - AI Agent CLI Tool\n\n", Name, Version)
 	fmt.Fprintf(os.Stderr, "Usage:\n")
-	fmt.Fprintf(os.Stderr, "  agentplus [options] <task>        Run in CLI mode (default)\n")
-	fmt.Fprintf(os.Stderr, "  agentplus gui [options]           Run in GUI mode\n")
-	fmt.Fprintf(os.Stderr, "  agentplus help                    Show this help message\n")
-	fmt.Fprintf(os.Stderr, "  agentplus version                 Show version information\n")
+	fmt.Fprintf(os.Stderr, "  mukaai [options] <task>        Run in CLI mode (default)\n")
+	fmt.Fprintf(os.Stderr, "  mukaai gui [options]           Run in GUI mode\n")
+	fmt.Fprintf(os.Stderr, "  mukaai help                    Show this help message\n")
+	fmt.Fprintf(os.Stderr, "  mukaai version                 Show version information\n")
 	fmt.Fprintf(os.Stderr, "\nCLI Mode Options:\n")
 	fmt.Fprintf(os.Stderr, "  -c, --config <file>               配置文件路径 (default: ./configs/config.yaml)\n")
 	fmt.Fprintf(os.Stderr, "  -t, --task <id>                   继续已有任务ID\n")
@@ -229,16 +309,16 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  -w, --workdir <dir>               工作目录\n")
 	fmt.Fprintf(os.Stderr, "\nExamples:\n")
 	fmt.Fprintf(os.Stderr, "  # CLI 模式\n")
-	fmt.Fprintf(os.Stderr, "  agentplus \"创建一个Hello World程序\"\n")
-	fmt.Fprintf(os.Stderr, "  agentplus -c ./config.yaml \"分析项目结构\"\n")
-	fmt.Fprintf(os.Stderr, "  agentplus -t task-123 \"继续执行任务\"\n")
+	fmt.Fprintf(os.Stderr, "  mukaai \"创建一个Hello World程序\"\n")
+	fmt.Fprintf(os.Stderr, "  mukaai -c ./config.yaml \"分析项目结构\"\n")
+	fmt.Fprintf(os.Stderr, "  mukaai -t task-123 \"继续执行任务\"\n")
 	fmt.Fprintf(os.Stderr, "\n  # GUI 模式\n")
-	fmt.Fprintf(os.Stderr, "  agentplus gui\n")
+	fmt.Fprintf(os.Stderr, "  mukaai gui\n")
 	fmt.Fprintf(os.Stderr, "\nBuild:\n")
 	fmt.Fprintf(os.Stderr, "  # CLI 构建（默认，不需要前端资源）\n")
-	fmt.Fprintf(os.Stderr, "  go build -o agentplus.exe ./cmd/agentplus\n")
+	fmt.Fprintf(os.Stderr, "  go build -o mukaai.exe ./cmd/agentplus\n")
 	fmt.Fprintf(os.Stderr, "  # GUI 构建（需要 frontend/dist 目录）\n")
-	fmt.Fprintf(os.Stderr, "  go build -tags gui -ldflags \"-w -s\" -o agentplus.exe ./cmd/agentplus\n")
+	fmt.Fprintf(os.Stderr, "  go build -tags gui -ldflags \"-w -s\" -o mukaai.exe ./cmd/agentplus\n")
 }
 
 // parseFlags 解析命令行参数
@@ -325,6 +405,11 @@ func initToolRegistry(workDir string, allowCommands []string) (*tools.ToolRegist
 		}
 	}
 	tools.RegisterStateToolsWithVerifier(registry, verifierFunc)
+
+	// 注册Git工具（git_status, git_diff, git_commit, git_log, git_add）
+	if err := git.RegisterGitTools(registry, workDir); err != nil {
+		return nil, fmt.Errorf("failed to register git tools: %w", err)
+	}
 
 	return registry, nil
 }
@@ -600,4 +685,88 @@ func init() {
 	if err := os.Chdir(getWorkDir()); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to change to work directory: %v\n", err)
 	}
+}
+
+// initMCPManager 初始化MCP客户端管理器
+func initMCPManager(cfg *config.Config, registry *tools.ToolRegistry, workDir string) *mcp.MCPClientManager {
+	// 将config包的MCP配置转换为mcp包的配置
+	mcpConfig := &mcp.MCPConfig{
+		Enabled: cfg.MCP.Enabled,
+		Security: mcp.MCPSecurityConfig{
+			DefaultPolicy: cfg.MCP.Security.DefaultPolicy,
+			DenyTools:     cfg.MCP.Security.DenyTools,
+			ConfirmTools:  cfg.MCP.Security.ConfirmTools,
+			AllowTools:    cfg.MCP.Security.AllowTools,
+			MaxTools:      cfg.MCP.Security.MaxTools,
+		},
+	}
+
+	// 转换Server配置
+	for _, s := range cfg.MCP.Servers {
+		projectPath := s.ProjectPath
+		if projectPath == "" {
+			projectPath = workDir // 使用workDir作为默认projectPath
+		}
+		mcpConfig.Servers = append(mcpConfig.Servers, mcp.ServerConfig{
+			ID:          s.ID,
+			Enabled:     s.Enabled,
+			Transport:   s.Transport,
+			Command:     s.Command,
+			Args:        s.Args,
+			Env:         s.Env,
+			URL:         s.URL,
+			Headers:     s.Headers,
+			Timeout:     s.Timeout,
+			ProjectPath: projectPath,
+		})
+	}
+
+	// 验证配置
+	if err := mcpConfig.Validate(); err != nil {
+		log.Printf("[MCP] 配置验证失败: %v", err)
+		return nil
+	}
+
+	manager := mcp.NewMCPClientManager(mcpConfig, registry)
+
+	// 异步初始化MCP连接，不阻塞应用启动
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if err := manager.Initialize(ctx); err != nil {
+			log.Printf("[MCP] 初始化出错: %v", err)
+		}
+	}()
+
+	return manager
+}
+
+// initLSPManager 初始化LSP管理器并注册诊断工具
+func initLSPManager(cfg *config.Config, registry *tools.ToolRegistry, workDir string) *lsp.LSPManager {
+	manager := lsp.NewManager(workDir)
+
+	// 配置语言服务器
+	if len(cfg.LSP.Servers) > 0 {
+		configs := make(map[string]lsp.LanguageServerConfig)
+		for lang, entry := range cfg.LSP.Servers {
+			configs[lang] = lsp.LanguageServerConfig{
+				Language: lang,
+				Command:  entry.Command,
+				Args:     entry.Args,
+			}
+		}
+		manager.ConfigureFromMap(configs)
+	} else {
+		// 使用默认配置
+		manager.ConfigureFromMap(lsp.DefaultConfigs())
+	}
+
+	// 注册LSP诊断工具到工具注册中心
+	if err := lsp.RegisterLSPTools(registry, manager, workDir); err != nil {
+		log.Printf("[LSP] 注册诊断工具失败: %v", err)
+		return nil
+	}
+
+	log.Printf("[LSP] 已启用，支持Go/TypeScript/Python代码诊断")
+	return manager
 }

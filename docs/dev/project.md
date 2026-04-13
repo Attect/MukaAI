@@ -208,10 +208,10 @@
 
 #### 功能实现说明
 **子命令模式**：
-- 支持默认 CLI 模式：`agentplus [options] <task>`
-- 支持 TUI 模式：`agentplus tui [options]`
-- 支持帮助命令：`agentplus help`
-- 支持版本命令：`agentplus version`
+- 支持默认 CLI 模式：`mukaai [options] <task>`
+- 支持 TUI 模式：`mukaai tui [options]`
+- 支持帮助命令：`mukaai help`
+- 支持版本命令：`mukaai version`
 
 **TUI 启动流程**：
 1. 解析命令行参数

@@ -7,10 +7,18 @@ import (
 	"sync"
 	"time"
 
-	"agentplus/internal/model"
-	"agentplus/internal/state"
-	"agentplus/internal/tools"
+	"github.com/Attect/MukaAI/internal/model"
+	"github.com/Attect/MukaAI/internal/state"
+	"github.com/Attect/MukaAI/internal/tools"
 )
+
+// ContextInjector 代码上下文注入器接口
+// 用于在模型调用前自动注入与任务相关的文件上下文
+type ContextInjector interface {
+	// InjectContext 根据任务描述注入上下文到消息历史中
+	// 返回注入后的消息列表和注入的文件路径列表
+	InjectContext(taskDesc string, messages []model.Message) []model.Message
+}
 
 // Agent 核心Agent结构体
 // 负责协调模型、工具和状态管理，实现任务执行主循环
@@ -27,6 +35,12 @@ type Agent struct {
 	verifier  *Verifier      // 成果校验器
 	corrector *SelfCorrector // 自我修正器
 
+	// 监督组件
+	supervisor Supervisor // Agent监督器（可选，通过接口解耦）
+
+	// 上下文感知组件
+	contextInjector ContextInjector // 代码上下文注入器（可选，自动提取相关文件）
+
 	// 日志记录器
 	logger *AgentLogger // 运行日志记录器
 
@@ -42,6 +56,9 @@ type Agent struct {
 	running    bool
 	cancelFunc context.CancelFunc
 
+	// Supervisor冷却
+	lastCorrectionIteration int // 上次注入修正指令的迭代号，用于冷却期控制
+
 	// 回调
 	onStreamChunk  func(chunk string)                  // 流式输出回调
 	onToolCall     func(name, args string)             // 工具调用回调（即将废弃）
@@ -54,6 +71,7 @@ type Agent struct {
 	onHistoryAdd   func(role, content string)          // 消息历史添加回调
 	onIteration    func(iteration int)                 // 迭代回调
 	onThinking     func(thinking string)               // 思考内容回调
+	onSupervisor   func(result *SupervisionResult)     // 监督结果回调
 
 	// 流式处理器
 	streamHandler StreamHandler // 流式消息处理器
@@ -74,6 +92,12 @@ type Config struct {
 	Verifier        *Verifier            // 校验器（可选，会自动创建）
 	VerifierConfig  *VerifyConfig        // 校验器配置（可选）
 	CorrectorConfig *SelfCorrectorConfig // 修正器配置（可选）
+
+	// 监督组件配置
+	Supervisor Supervisor // Agent监督器（可选，nil则不启用监督检查）
+
+	// 上下文感知组件配置
+	ContextInjector ContextInjector // 代码上下文注入器（可选，nil则不启用自动上下文注入）
 
 	// 日志配置
 	LogPath string // 日志文件路径（可选，为空则不记录日志）
@@ -136,19 +160,21 @@ func NewAgent(config *Config) (*Agent, error) {
 	}
 
 	return &Agent{
-		modelClient:   config.ModelClient,
-		toolRegistry:  config.ToolRegistry,
-		stateManager:  config.StateManager,
-		executor:      NewToolExecutor(config.ToolRegistry),
-		history:       NewHistoryManager(),
-		reviewer:      reviewer,
-		verifier:      verifier,
-		corrector:     corrector,
-		logger:        logger,
-		maxIterations: maxIterations,
-		systemPrompt:  systemPrompt,
-		promptType:    promptType,
-		workDir:       config.WorkDir,
+		modelClient:     config.ModelClient,
+		toolRegistry:    config.ToolRegistry,
+		stateManager:    config.StateManager,
+		executor:        NewToolExecutor(config.ToolRegistry),
+		history:         NewHistoryManager(),
+		reviewer:        reviewer,
+		verifier:        verifier,
+		corrector:       corrector,
+		supervisor:      config.Supervisor,
+		contextInjector: config.ContextInjector,
+		logger:          logger,
+		maxIterations:   maxIterations,
+		systemPrompt:    systemPrompt,
+		promptType:      promptType,
+		workDir:         config.WorkDir,
 	}, nil
 }
 
@@ -286,17 +312,25 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 // 返回 runCtx、result、totalIterations、maxTotalIterations、cleanup函数、error
 func (a *Agent) initRunContext(ctx context.Context, taskGoal string) (context.Context, *RunResult, int, int, func(), error) {
 	// 检查是否已在运行
+	// 注意：SendMessage会预先设置running=true，此时cancelFunc为nil，
+	// 可与"另一个Run正在执行"（cancelFunc非nil）区分
 	a.mu.Lock()
 	if a.running {
-		a.mu.Unlock()
-		return nil, nil, 0, 0, nil, fmt.Errorf("agent is already running")
+		if a.cancelFunc != nil {
+			// cancelFunc已设置，说明另一个Run正在执行中
+			a.mu.Unlock()
+			return nil, nil, 0, 0, nil, fmt.Errorf("agent is already running")
+		}
+		// running=true但cancelFunc为nil：由SendMessage预设，允许通过
+	} else {
+		a.running = true
 	}
-	a.running = true
 	a.mu.Unlock()
 
 	cleanup := func() {
 		a.mu.Lock()
 		a.running = false
+		a.cancelFunc = nil
 		a.mu.Unlock()
 	}
 
@@ -339,6 +373,18 @@ func (a *Agent) initRunContext(ctx context.Context, taskGoal string) (context.Co
 	// 初始化消息历史
 	a.history.Clear()
 	a.history.AddMessage(model.NewSystemMessage(a.systemPrompt))
+
+	// 自动注入代码上下文（在系统消息之后、用户消息之前）
+	if a.contextInjector != nil {
+		contextMessages := a.contextInjector.InjectContext(taskGoal, a.history.GetMessages())
+		// 替换历史中的消息为注入后的消息
+		a.history.Clear()
+		a.history.AddMessages(contextMessages)
+
+		if a.logger != nil {
+			a.logger.LogMessage("system", "[自动上下文注入完成]")
+		}
+	}
 
 	// 构建初始任务提示
 	stateSummary, _ := a.stateManager.GetYAMLSummary(a.taskID)
@@ -513,16 +559,24 @@ func (a *Agent) GetTaskID() string {
 // SendMessage 发送用户消息并启动推理
 // 这是一个异步方法，会在后台启动推理过程
 func (a *Agent) SendMessage(content string) error {
-	// 检查是否已在运行（使用写锁消除TOCTOU竞态）
+	// 检查是否已在运行，并将running=true设在同一临界区内，消除TOCTOU竞态
 	a.mu.Lock()
 	if a.running {
 		a.mu.Unlock()
 		return fmt.Errorf("agent is already running")
 	}
+	a.running = true
 	a.mu.Unlock()
 
 	// 在后台启动推理
 	go func() {
+		// goroutine结束时重置running标志（持锁保护）
+		defer func() {
+			a.mu.Lock()
+			a.running = false
+			a.mu.Unlock()
+		}()
+
 		ctx := context.Background()
 		_, err := a.Run(ctx, content)
 		if err != nil {

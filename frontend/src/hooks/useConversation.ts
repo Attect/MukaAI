@@ -7,6 +7,8 @@ import {
   setWorkDir as wailsSetWorkDir,
   getConversations as wailsGetConversations,
   switchConversation as wailsSwitchConversation,
+  deleteConversation as wailsDeleteConversation,
+  exportConversation as wailsExportConversation,
 } from "../wailsRuntime";
 
 export function useConversation() {
@@ -75,6 +77,24 @@ export function useConversation() {
     }
   }, []);
 
+  const deleteConv = useCallback(async (id: string) => {
+    try {
+      await wailsDeleteConversation(id);
+      await loadConversations();
+    } catch (err: any) {
+      setError(err?.message || String(err));
+    }
+  }, [loadConversations]);
+
+  const exportConv = useCallback(async (id: string, filename: string) => {
+    try {
+      await wailsExportConversation(id, filename);
+      setError(null);
+    } catch (err: any) {
+      setError(err?.message || String(err));
+    }
+  }, []);
+
   return {
     conversationData,
     setConversationData,
@@ -91,5 +111,7 @@ export function useConversation() {
     clearConv,
     changeWorkDir,
     switchConv,
+    deleteConv,
+    exportConv,
   };
 }

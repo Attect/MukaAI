@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"agentplus/internal/model"
-	"agentplus/internal/state"
+	"github.com/Attect/MukaAI/internal/model"
+	"github.com/Attect/MukaAI/internal/state"
 )
 
 // ReviewStatus 审查结果状态

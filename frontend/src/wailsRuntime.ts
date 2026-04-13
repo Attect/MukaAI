@@ -10,6 +10,11 @@ import {
   InterruptInference as wailsInterruptInference,
   ClearConversation as wailsClearConversation,
   SwitchConversation as wailsSwitchConversation,
+  GetSettings as wailsGetSettings,
+  SaveSettings as wailsSaveSettings,
+  DeleteConversation as wailsDeleteConversation,
+  UpdateConversationTitle as wailsUpdateConversationTitle,
+  ExportConversation as wailsExportConversation,
 } from "../wailsjs/go/gui/App";
 
 import { EventsOn } from "../wailsjs/runtime/runtime";
@@ -58,6 +63,26 @@ export async function getConversations(): Promise<Conversation[]> {
 
 export async function switchConversation(id: string): Promise<void> {
   await wailsSwitchConversation(id);
+}
+
+export async function getSettings(): Promise<Record<string, any>> {
+  return (await wailsGetSettings()) as Record<string, any>;
+}
+
+export async function saveSettings(settings: Record<string, any>): Promise<void> {
+  await wailsSaveSettings(settings);
+}
+
+export async function deleteConversation(id: string): Promise<void> {
+  await wailsDeleteConversation(id);
+}
+
+export async function updateConversationTitle(id: string, title: string): Promise<void> {
+  await wailsUpdateConversationTitle(id, title);
+}
+
+export async function exportConversation(id: string, filename: string): Promise<void> {
+  await wailsExportConversation(id, filename);
 }
 
 export function onEvent(event: string, callback: (...args: any[]) => void): void {

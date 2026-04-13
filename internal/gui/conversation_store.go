@@ -145,8 +145,17 @@ func (s *ConversationStore) flush(id string) {
 		return
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
-		// 重命名失败（可能跨文件系统），尝试直接写入目标文件
-		_ = os.WriteFile(path, data, 0644)
+		// 重命名失败（可能跨文件系统），降级为直接写入目标文件
+		if writeErr := os.WriteFile(path, data, 0644); writeErr != nil {
+			fmt.Printf("[ConversationStore] 降级写入对话文件失败: %v (rename错误: %v)\n", writeErr, err)
+			_ = os.Remove(tmpPath)
+			return
+		}
+		// 降级写入成功，同步确保数据落盘
+		if f, syncErr := os.OpenFile(path, os.O_WRONLY, 0644); syncErr == nil {
+			_ = f.Sync()
+			_ = f.Close()
+		}
 		_ = os.Remove(tmpPath)
 	}
 }
@@ -272,10 +281,18 @@ func (s *ConversationStore) Close() {
 		path := filepath.Join(s.dir, id+".json")
 		tmpPath := path + ".tmp"
 		if err := os.WriteFile(tmpPath, data, 0644); err == nil {
-			if err := os.Rename(tmpPath, path); err != nil {
-				_ = os.WriteFile(path, data, 0644)
+			if renameErr := os.Rename(tmpPath, path); renameErr != nil {
+				// 重命名失败，降级为直接写入
+				if writeErr := os.WriteFile(path, data, 0644); writeErr != nil {
+					fmt.Printf("[ConversationStore] 关闭时降级写入对话 %s 失败: %v (rename错误: %v)\n", id, writeErr, renameErr)
+				} else if f, syncErr := os.OpenFile(path, os.O_WRONLY, 0644); syncErr == nil {
+					_ = f.Sync()
+					_ = f.Close()
+				}
 				_ = os.Remove(tmpPath)
 			}
+		} else {
+			fmt.Printf("[ConversationStore] 关闭时写入临时文件 %s 失败: %v\n", tmpPath, err)
 		}
 	}
 }

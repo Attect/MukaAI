@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"agentplus/internal/model"
-	"agentplus/internal/state"
-	"agentplus/internal/tools"
+	"github.com/Attect/MukaAI/internal/model"
+	"github.com/Attect/MukaAI/internal/state"
+	"github.com/Attect/MukaAI/internal/tools"
 )
 
 // ForkManager 管理子代理的创建、执行和合并

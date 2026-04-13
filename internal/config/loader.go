@@ -17,6 +17,41 @@ type Config struct {
 	Agent AgentConfig `yaml:"agent"`
 	State StateConfig `yaml:"state"`
 	Tools ToolsConfig `yaml:"tools"`
+	MCP   MCPConfig   `yaml:"mcp"`
+	LSP   LSPConfig   `yaml:"lsp"`
+}
+
+// MCPConfig MCP（Model Context Protocol）配置
+type MCPConfig struct {
+	Enabled  bool              `yaml:"enabled"`
+	Servers  []MCPServerConfig `yaml:"servers"`
+	Security MCPSecurityConfig `yaml:"security"`
+}
+
+// MCPServerConfig 单个MCP Server配置
+type MCPServerConfig struct {
+	ID        string `yaml:"id"`
+	Enabled   bool   `yaml:"enabled"`
+	Transport string `yaml:"transport"` // "stdio" | "http"
+	// stdio模式配置
+	Command string            `yaml:"command"`
+	Args    []string          `yaml:"args"`
+	Env     map[string]string `yaml:"env"`
+	// http模式配置
+	URL     string            `yaml:"url"`
+	Headers map[string]string `yaml:"headers"`
+	// 通用配置
+	Timeout     int    `yaml:"timeout"`      // 秒
+	ProjectPath string `yaml:"project_path"` // 项目路径，自动注入到MCP工具参数
+}
+
+// MCPSecurityConfig MCP安全策略配置
+type MCPSecurityConfig struct {
+	DefaultPolicy string   `yaml:"default_policy"` // allow | confirm | deny
+	DenyTools     []string `yaml:"deny_tools"`
+	ConfirmTools  []string `yaml:"confirm_tools"`
+	AllowTools    []string `yaml:"allow_tools"`
+	MaxTools      int      `yaml:"max_tools"` // 单个Server最大工具数，默认50
 }
 
 // ModelConfig 模型服务配置
@@ -47,6 +82,19 @@ type ToolsConfig struct {
 	AllowCommands []string `yaml:"allow_commands"`
 }
 
+// LSPConfig LSP（Language Server Protocol）配置
+type LSPConfig struct {
+	Enabled     bool                      `yaml:"enabled"`
+	IdleTimeout int                       `yaml:"idle_timeout"` // 空闲超时（秒），默认600
+	Servers     map[string]LSPServerEntry `yaml:"servers"`
+}
+
+// LSPServerEntry 单个语言服务器配置
+type LSPServerEntry struct {
+	Command string   `yaml:"command"`
+	Args    []string `yaml:"args"`
+}
+
 // DefaultConfig 返回默认配置
 func DefaultConfig() *Config {
 	return &Config{
@@ -69,6 +117,22 @@ func DefaultConfig() *Config {
 		Tools: ToolsConfig{
 			WorkDir:       ".",
 			AllowCommands: []string{},
+		},
+		MCP: MCPConfig{
+			Enabled: false,
+			Security: MCPSecurityConfig{
+				DefaultPolicy: "allow",
+				MaxTools:      50,
+			},
+		},
+		LSP: LSPConfig{
+			Enabled:     false,
+			IdleTimeout: 600,
+			Servers: map[string]LSPServerEntry{
+				"go":         {Command: "gopls"},
+				"typescript": {Command: "typescript-language-server", Args: []string{"--stdio"}},
+				"python":     {Command: "pylsp"},
+			},
 		},
 	}
 }
@@ -106,55 +170,55 @@ func LoadConfig(path string) (*Config, error) {
 }
 
 // applyEnvOverrides 应用环境变量覆盖配置
-// 环境变量格式：AGENTPLUS_<SECTION>_<KEY>
-// 例如：AGENTPLUS_MODEL_ENDPOINT=http://localhost:8080/v1/
+// 环境变量格式：MUKAAI_<SECTION>_<KEY>
+// 例如：MUKAAI_MODEL_ENDPOINT=http://localhost:8080/v1/
 func applyEnvOverrides(config *Config) {
 	// Model配置
-	if v := os.Getenv("AGENTPLUS_MODEL_ENDPOINT"); v != "" {
+	if v := os.Getenv("MUKAAI_MODEL_ENDPOINT"); v != "" {
 		config.Model.Endpoint = v
 	}
-	if v := os.Getenv("AGENTPLUS_MODEL_API_KEY"); v != "" {
+	if v := os.Getenv("MUKAAI_MODEL_API_KEY"); v != "" {
 		config.Model.APIKey = v
 	}
-	if v := os.Getenv("AGENTPLUS_MODEL_NAME"); v != "" {
+	if v := os.Getenv("MUKAAI_MODEL_NAME"); v != "" {
 		config.Model.ModelName = v
 	}
-	if v := os.Getenv("AGENTPLUS_MODEL_CONTEXT_SIZE"); v != "" {
+	if v := os.Getenv("MUKAAI_MODEL_CONTEXT_SIZE"); v != "" {
 		if i, err := strconv.Atoi(v); err == nil {
 			config.Model.ContextSize = i
 		}
 	}
 
 	// Agent配置
-	if v := os.Getenv("AGENTPLUS_AGENT_MAX_ITERATIONS"); v != "" {
+	if v := os.Getenv("MUKAAI_AGENT_MAX_ITERATIONS"); v != "" {
 		if i, err := strconv.Atoi(v); err == nil {
 			config.Agent.MaxIterations = i
 		}
 	}
-	if v := os.Getenv("AGENTPLUS_AGENT_TEMPERATURE"); v != "" {
+	if v := os.Getenv("MUKAAI_AGENT_TEMPERATURE"); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			config.Agent.Temperature = f
 		}
 	}
 
 	// State配置
-	if v := os.Getenv("AGENTPLUS_STATE_DIR"); v != "" {
+	if v := os.Getenv("MUKAAI_STATE_DIR"); v != "" {
 		config.State.Dir = v
 	}
-	if v := os.Getenv("AGENTPLUS_STATE_AUTO_SAVE"); v != "" {
+	if v := os.Getenv("MUKAAI_STATE_AUTO_SAVE"); v != "" {
 		config.State.AutoSave = strings.ToLower(v) == "true"
 	}
-	if v := os.Getenv("AGENTPLUS_STATE_CLEANUP_DAYS"); v != "" {
+	if v := os.Getenv("MUKAAI_STATE_CLEANUP_DAYS"); v != "" {
 		if i, err := strconv.Atoi(v); err == nil {
 			config.State.CleanupDays = i
 		}
 	}
-	if v := os.Getenv("AGENTPLUS_STATE_CLEANUP_ENABLE"); v != "" {
+	if v := os.Getenv("MUKAAI_STATE_CLEANUP_ENABLE"); v != "" {
 		config.State.CleanupEnable = strings.ToLower(v) == "true"
 	}
 
 	// Tools配置
-	if v := os.Getenv("AGENTPLUS_TOOLS_WORK_DIR"); v != "" {
+	if v := os.Getenv("MUKAAI_TOOLS_WORK_DIR"); v != "" {
 		config.Tools.WorkDir = v
 	}
 }
@@ -188,6 +252,59 @@ func (c *Config) Validate() error {
 	// 验证Tools配置
 	if c.Tools.WorkDir == "" {
 		c.Tools.WorkDir = "."
+	}
+
+	// 验证MCP配置
+	if c.MCP.Enabled {
+		if err := c.validateMCPConfig(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateMCPConfig 验证MCP配置
+func (c *Config) validateMCPConfig() error {
+	seen := make(map[string]bool)
+	for i, s := range c.MCP.Servers {
+		if !s.Enabled {
+			continue
+		}
+		if s.ID == "" {
+			return fmt.Errorf("mcp.servers[%d]: id不能为空", i)
+		}
+		if seen[s.ID] {
+			return fmt.Errorf("mcp.servers[%d]: id '%s' 重复", i, s.ID)
+		}
+		seen[s.ID] = true
+
+		switch s.Transport {
+		case "stdio":
+			if s.Command == "" {
+				return fmt.Errorf("mcp.servers[%d] '%s': stdio模式必须提供command", i, s.ID)
+			}
+		case "http":
+			if s.URL == "" {
+				return fmt.Errorf("mcp.servers[%d] '%s': http模式必须提供url", i, s.ID)
+			}
+		case "":
+			return fmt.Errorf("mcp.servers[%d] '%s': 必须指定transport类型", i, s.ID)
+		default:
+			return fmt.Errorf("mcp.servers[%d] '%s': 不支持的transport类型 '%s'", i, s.ID, s.Transport)
+		}
+
+		if s.Timeout != 0 && (s.Timeout < 5 || s.Timeout > 300) {
+			return fmt.Errorf("mcp.servers[%d] '%s': timeout必须在5-300秒之间", i, s.ID)
+		}
+	}
+
+	// 验证安全策略
+	switch c.MCP.Security.DefaultPolicy {
+	case "", "allow", "confirm", "deny":
+		// 合法（空值使用默认allow）
+	default:
+		return fmt.Errorf("mcp.security.default_policy 必须是 allow、confirm 或 deny")
 	}
 
 	return nil

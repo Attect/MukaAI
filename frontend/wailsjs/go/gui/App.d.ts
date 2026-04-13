@@ -4,11 +4,16 @@
 import { conversation, conversationData, tokenStats } from "./models";
 
 export function ClearConversation(): Promise<void>;
+export function DeleteConversation(arg1: string): Promise<void>;
+export function ExportConversation(arg1: string, arg2: string): Promise<void>;
 export function GetConversationData(): Promise<conversationData>;
 export function GetConversations(): Promise<Array<conversation>>;
+export function GetSettings(): Promise<Record<string, any>>;
 export function GetTokenStats(): Promise<tokenStats>;
 export function GetWorkDir(): Promise<string>;
 export function InterruptInference(): Promise<void>;
+export function SaveSettings(arg1: Record<string, any>): Promise<void>;
 export function SendMessage(arg1: string): Promise<void>;
 export function SetWorkDir(arg1: string): Promise<void>;
 export function SwitchConversation(arg1: string): Promise<void>;
+export function UpdateConversationTitle(arg1: string, arg2: string): Promise<void>;

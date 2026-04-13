@@ -1,7 +1,7 @@
 package team_test
 
 import (
-	"agentplus/internal/team"
+	"github.com/Attect/MukaAI/internal/team"
 	"fmt"
 )
 

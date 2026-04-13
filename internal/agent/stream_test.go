@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"agentplus/internal/model"
+	"github.com/Attect/MukaAI/internal/model"
 )
 
 // TestStreamHandlerFunc 测试函数式流式处理器

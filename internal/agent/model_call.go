@@ -6,7 +6,7 @@ import (
 	"context"
 	"strings"
 
-	"agentplus/internal/model"
+	"github.com/Attect/MukaAI/internal/model"
 )
 
 // callModel 调用模型

@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"agentplus/internal/model"
-	"agentplus/internal/tools"
+	"github.com/Attect/MukaAI/internal/model"
+	"github.com/Attect/MukaAI/internal/tools"
 )
 
 // ToolExecutor 执行工具调用

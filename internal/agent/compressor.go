@@ -5,8 +5,8 @@ import (
 	"strings"
 	"sync"
 
-	"agentplus/internal/model"
-	"agentplus/internal/state"
+	"github.com/Attect/MukaAI/internal/model"
+	"github.com/Attect/MukaAI/internal/state"
 )
 
 // CompressorConfig 压缩器配置

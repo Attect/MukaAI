@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"agentplus/internal/model"
+	"github.com/Attect/MukaAI/internal/model"
 )
 
 // FeedbackLevel 反馈级别

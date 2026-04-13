@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { onEvent } from "../wailsRuntime";
-import type { ConversationData, TokenStats } from "../types";
+import type { ConversationData, TokenStats, SupervisorResult } from "../types";
 
 interface UseStreamEventsProps {
   onConversationUpdated: (data: ConversationData) => void;
@@ -8,6 +8,7 @@ interface UseStreamEventsProps {
   onStreamDone: () => void;
   onStreamError: (error: string) => void;
   onWorkDirChanged: (dir: string) => void;
+  onSupervisorResult?: (result: SupervisorResult) => void;
 }
 
 export function useStreamEvents({
@@ -16,6 +17,7 @@ export function useStreamEvents({
   onStreamDone,
   onStreamError,
   onWorkDirChanged,
+  onSupervisorResult,
 }: UseStreamEventsProps) {
   useEffect(() => {
     onEvent("conversation:updated", (data: ConversationData) => {
@@ -33,5 +35,10 @@ export function useStreamEvents({
     onEvent("workdir:changed", (dir: string) => {
       onWorkDirChanged(dir);
     });
-  }, [onConversationUpdated, onTokenStatsUpdated, onStreamDone, onStreamError, onWorkDirChanged]);
+    if (onSupervisorResult) {
+      onEvent("stream:supervisor", (result: SupervisorResult) => {
+        onSupervisorResult(result);
+      });
+    }
+  }, [onConversationUpdated, onTokenStatsUpdated, onStreamDone, onStreamError, onWorkDirChanged, onSupervisorResult]);
 }

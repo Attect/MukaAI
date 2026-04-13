@@ -6,7 +6,7 @@ import (
 	"context"
 	"time"
 
-	"agentplus/internal/model"
+	"github.com/Attect/MukaAI/internal/model"
 )
 
 // executeTools 执行工具调用

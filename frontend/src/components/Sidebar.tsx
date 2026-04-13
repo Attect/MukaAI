@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useCallback } from "react";
 import type { Conversation } from "../types";
 
 interface SidebarProps {
@@ -8,36 +8,159 @@ interface SidebarProps {
   onSelect: (id: string) => void;
   onClose: () => void;
   onNew: () => void;
+  onDelete: (id: string) => void;
 }
 
-export default function Sidebar({ visible, conversations, activeId, onSelect, onClose, onNew }: SidebarProps): React.ReactElement {
+export default function Sidebar({ visible, conversations, activeId, onSelect, onClose, onNew, onDelete }: SidebarProps): React.ReactElement {
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+
+  const handleConfirmDelete = useCallback(() => {
+    if (deleteTarget) {
+      onDelete(deleteTarget);
+      setDeleteTarget(null);
+    }
+  }, [deleteTarget, onDelete]);
+
   if (!visible) return <></>;
 
   return (
-    <div className="w-64 bg-gray-800 border-r border-gray-700 flex flex-col">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
-        <h2 className="text-gray-200 font-bold text-sm">对话列表</h2>
-        <button onClick={onClose} className="text-gray-400 hover:text-white">✕</button>
-      </div>
-      <button onClick={onNew} className="mx-3 my-2 bg-blue-600 hover:bg-blue-700 text-white text-sm py-2 rounded">
-        + 新对话
-      </button>
-      <div className="flex-1 overflow-y-auto">
-        {conversations.map((conv) => (
-          <button
-            key={conv.id}
-            onClick={() => onSelect(conv.id)}
-            className={`block w-full text-left px-4 py-2 text-sm border-b border-gray-700/50 ${
-              conv.id === activeId ? "bg-gray-700 text-white" : "text-gray-400 hover:bg-gray-700/50"
-            }`}
-          >
-            <div className="truncate">{conv.title}</div>
-            <div className="text-xs text-gray-500 mt-1">
-              {conv.status === "active" ? "🔄" : "✓"} {conv.messageCount} 条消息
+    <>
+      <div
+        style={{
+          width: "16rem",
+          background: "var(--bg-sidebar)",
+          borderRight: "1px solid var(--border-color)",
+          display: "flex",
+          flexDirection: "column",
+          flexShrink: 0,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.75rem 1rem", borderBottom: "1px solid var(--border-color)" }}>
+          <span style={{ color: "var(--text-secondary)", fontWeight: 700, fontSize: "0.875rem" }}>对话列表</span>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: "1rem" }}>✕</button>
+        </div>
+        <button
+          onClick={onNew}
+          style={{
+            margin: "0.5rem 0.75rem",
+            padding: "0.5rem",
+            background: "var(--bg-button)",
+            color: "#fff",
+            border: "none",
+            borderRadius: "0.375rem",
+            fontSize: "0.875rem",
+            cursor: "pointer",
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-button-hover)"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = "var(--bg-button)"; }}
+        >
+          + 新对话
+        </button>
+        <div style={{ flex: 1, overflowY: "auto" }}>
+          {conversations.map((conv) => (
+            <div
+              key={conv.id}
+              onClick={() => onSelect(conv.id)}
+              onMouseEnter={() => setHoveredId(conv.id)}
+              onMouseLeave={() => setHoveredId(null)}
+              style={{
+                padding: "0.5rem 1rem",
+                cursor: "pointer",
+                borderBottom: "1px solid var(--border-light)",
+                background: conv.id === activeId ? "var(--bg-active)" : "transparent",
+                position: "relative",
+              }}
+              onMouseOver={(e) => {
+                if (conv.id !== activeId) {
+                  e.currentTarget.style.background = "var(--bg-hover)";
+                }
+              }}
+              onMouseOut={(e) => {
+                if (conv.id !== activeId) {
+                  e.currentTarget.style.background = "transparent";
+                }
+              }}
+            >
+              <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: "0.875rem", color: conv.id === activeId ? "var(--text-primary)" : "var(--text-muted)", paddingRight: "1.5rem" }}>
+                {conv.title}
+              </div>
+              <div style={{ fontSize: "0.75rem", color: "var(--text-dim)", marginTop: "0.25rem" }}>
+                {conv.status === "active" ? "🔄" : "✓"} {conv.messageCount} 条消息
+              </div>
+              {hoveredId === conv.id && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDeleteTarget(conv.id);
+                  }}
+                  style={{
+                    position: "absolute",
+                    top: "0.5rem",
+                    right: "0.5rem",
+                    background: "var(--bg-danger)",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: "0.25rem",
+                    width: "1.25rem",
+                    height: "1.25rem",
+                    fontSize: "0.625rem",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    lineHeight: 1,
+                  }}
+                  title="删除对话"
+                >
+                  ✕
+                </button>
+              )}
             </div>
-          </button>
-        ))}
+          ))}
+        </div>
       </div>
-    </div>
+
+      {deleteTarget && (
+        <div className="confirm-overlay" onClick={(e) => { if (e.target === e.currentTarget) setDeleteTarget(null); }}>
+          <div className="confirm-box">
+            <div style={{ fontSize: "0.9375rem", fontWeight: 600, marginBottom: "0.5rem" }}>确认删除</div>
+            <div style={{ fontSize: "0.875rem", color: "var(--text-muted)", marginBottom: "1rem" }}>
+              确定要删除这个对话吗？此操作不可恢复。
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem" }}>
+              <button
+                onClick={() => setDeleteTarget(null)}
+                style={{
+                  padding: "0.375rem 0.75rem",
+                  fontSize: "0.8125rem",
+                  borderRadius: "0.25rem",
+                  border: "1px solid var(--border-color)",
+                  background: "transparent",
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                }}
+              >
+                取消
+              </button>
+              <button
+                onClick={handleConfirmDelete}
+                style={{
+                  padding: "0.375rem 0.75rem",
+                  fontSize: "0.8125rem",
+                  borderRadius: "0.25rem",
+                  border: "none",
+                  background: "var(--bg-danger)",
+                  color: "#fff",
+                  cursor: "pointer",
+                }}
+              >
+                删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

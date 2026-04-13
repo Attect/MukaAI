@@ -1,6 +1,6 @@
 //go:build gui
 
-// Package main 提供AgentPlus的GUI模式入口
+// Package main 提供MukaAI的GUI模式入口
 // 此文件仅在 gui 构建标签下编译，包含Wails GUI相关的初始化和启动逻辑。
 package main
 
@@ -8,14 +8,18 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"time"
 
-	"agentplus"
-	"agentplus/internal/agent"
-	"agentplus/internal/config"
-	"agentplus/internal/gui"
-	"agentplus/internal/state"
+	"github.com/Attect/MukaAI"
+	"github.com/Attect/MukaAI/internal/agent"
+	"github.com/Attect/MukaAI/internal/config"
+	ctxpkg "github.com/Attect/MukaAI/internal/context"
+	"github.com/Attect/MukaAI/internal/gui"
+	"github.com/Attect/MukaAI/internal/state"
+	"github.com/Attect/MukaAI/internal/supervisor"
+	"github.com/Attect/MukaAI/internal/terminal"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -101,9 +105,47 @@ func runGUICommand() {
 		os.Exit(1)
 	}
 
+	// 创建Supervisor监督器（GUI模式默认启用）
+	supInstance, err := supervisor.NewSupervisor(
+		modelClient,
+		toolRegistry,
+		stateManager,
+		ag.GetReviewer(),
+		nil, // 使用默认配置
+	)
+	if err != nil {
+		log.Printf("Warning: failed to create supervisor, running without supervision: %v", err)
+	} else {
+		ag.SetSupervisor(supInstance)
+	}
+
+	// 创建代码上下文索引器（异步构建索引）
+	indexer := ctxpkg.NewIndexer(workDir)
+	scanCh := indexer.ScanAsync()
+	go func() {
+		result := <-scanCh
+		if result.Err != nil {
+			log.Printf("Warning: context indexing failed: %v", result.Err)
+			return
+		}
+		log.Printf("Context index built: %d files indexed", result.FileCount)
+	}()
+	injector := ctxpkg.NewInjectorFromContextSize(indexer, cfg.Model.ContextSize)
+	ag.SetContextInjector(injector)
+
 	// 创建GUI App实例
 	app := gui.NewApp()
 	app.SetAgent(ag)
+	app.SetConfigPath(opts.ConfigPath)
+
+	// 创建终端管理器和 WebSocket 服务器
+	terminalManager := terminal.NewTerminalManager("", workDir)
+	wsServer := terminal.NewWebSocketServer(terminalManager)
+
+	// 注册终端工具到工具注册中心
+	if err := terminal.RegisterTerminalTools(toolRegistry, terminalManager); err != nil {
+		log.Printf("Warning: failed to register terminal tools: %v", err)
+	}
 
 	// 创建StreamBridge，将Agent流式事件桥接到Wails前端事件系统
 	bridge := gui.NewStreamBridge(app)
@@ -111,13 +153,13 @@ func runGUICommand() {
 
 	// 启动Wails应用
 	if err := wails.Run(&options.App{
-		Title:     "AgentPlus",
+		Title:     "MukaAI",
 		Width:     1024,
 		Height:    768,
 		MinWidth:  640,
 		MinHeight: 480,
 		AssetServer: &assetserver.Options{
-			Assets: agentplus.FrontendAssets,
+			Assets: mukaai.FrontendAssets,
 		},
 		OnStartup: func(ctx context.Context) {
 			app.Startup(ctx)
@@ -125,6 +167,12 @@ func runGUICommand() {
 			app.SetCurrentDir(workDir)
 			// 启动状态文件自动清理，传入应用上下文
 			stateManager.StartCleanup(ctx)
+			// 启动终端 WebSocket 服务器
+			if err := wsServer.Start(); err != nil {
+				log.Printf("Warning: failed to start terminal WebSocket server: %v", err)
+			} else {
+				app.SetTerminalWSUrl(wsServer.GetWSUrl())
+			}
 		},
 		Bind: []interface{}{
 			app,
@@ -136,12 +184,16 @@ func runGUICommand() {
 	}); err != nil {
 		// 即使出错也要停止清理goroutine
 		stateManager.StopCleanup()
+		wsServer.Stop()
+		terminalManager.Stop()
 		fmt.Fprintf(os.Stderr, "启动GUI失败: %v\n", err)
 		os.Exit(1)
 	}
 
 	// 正常退出时停止清理goroutine
 	stateManager.StopCleanup()
+	wsServer.Stop()
+	terminalManager.Stop()
 }
 
 // parseGUIFlags 解析GUI子命令的命令行参数
@@ -156,8 +208,8 @@ func parseGUIFlags() *GUIOptions {
 	guiFlagSet.StringVar(&opts.WorkDir, "workdir", "", "工作目录")
 
 	guiFlagSet.Usage = func() {
-		fmt.Fprintf(os.Stderr, "AgentPlus GUI Mode\n\n")
-		fmt.Fprintf(os.Stderr, "Usage: agentplus gui [options]\n\n")
+		fmt.Fprintf(os.Stderr, "MukaAI GUI Mode\n\n")
+		fmt.Fprintf(os.Stderr, "Usage: mukaai gui [options]\n\n")
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		guiFlagSet.PrintDefaults()
 	}

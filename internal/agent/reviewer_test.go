@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"agentplus/internal/model"
-	"agentplus/internal/state"
+	"github.com/Attect/MukaAI/internal/model"
+	"github.com/Attect/MukaAI/internal/state"
 )
 
 // TestNewReviewer 测试创建审查器

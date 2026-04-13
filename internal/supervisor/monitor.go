@@ -5,13 +5,14 @@ package supervisor
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
-	"agentplus/internal/agent"
-	"agentplus/internal/model"
-	"agentplus/internal/state"
-	"agentplus/internal/tools"
+	"github.com/Attect/MukaAI/internal/agent"
+	"github.com/Attect/MukaAI/internal/model"
+	"github.com/Attect/MukaAI/internal/state"
+	"github.com/Attect/MukaAI/internal/tools"
 )
 
 // InterventionType 干预类型
@@ -178,11 +179,11 @@ func DefaultSupervisorConfig() *SupervisorConfig {
 		EnableBehaviorCheck:   true,
 		EnableResourceCheck:   false,
 		MonitorInterval:       5,
-		MaxWarnings:           3,
+		MaxWarnings:           5,
 		AutoIntervene:         true,
-		MaxConsecutiveErrors:  3,
-		QualityThreshold:      60,
-		ProgressTimeout:       300, // 5分钟
+		MaxConsecutiveErrors:  5,
+		QualityThreshold:      40,
+		ProgressTimeout:       1800, // 30分钟
 		EnableParallelMonitor: true,
 		MaxParallelChecks:     5,
 	}
@@ -490,12 +491,12 @@ func (s *Supervisor) checkQuality(
 		return issues
 	}
 
-	// 检查输出长度是否合理
-	if len(output.Content) > 0 && len(output.Content) < 10 {
+	// 检查输出长度是否合理（仅在无工具调用时检查，有工具调用时文本短是正常的）
+	if len(output.Content) > 0 && len(output.Content) < 10 && len(output.ToolCalls) == 0 {
 		issues = append(issues, SupervisionIssue{
 			Type:        IssueTypeQuality,
-			Severity:    "medium",
-			Description: "Agent输出内容过短，可能不完整",
+			Severity:    "low",
+			Description: "Agent输出内容过短且无工具调用，可能不完整",
 			Evidence:    fmt.Sprintf("输出长度: %d 字符", len(output.Content)),
 			Suggestion:  "检查是否需要更详细的输出",
 			Timestamp:   time.Now(),
@@ -564,10 +565,10 @@ func (s *Supervisor) checkProgress(
 
 	if !lastProgress.IsZero() {
 		stagnantTime := time.Since(lastProgress)
-		if stagnantTime > time.Duration(s.config.ProgressTimeout/2)*time.Second {
+		if stagnantTime > time.Duration(float64(s.config.ProgressTimeout)*0.75)*time.Second {
 			issues = append(issues, SupervisionIssue{
 				Type:        IssueTypeProgress,
-				Severity:    "medium",
+				Severity:    "low",
 				Description: fmt.Sprintf("任务进度停滞 %.0f 秒", stagnantTime.Seconds()),
 				Evidence:    "没有新的完成步骤",
 				Suggestion:  "检查是否有阻塞或需要调整策略",
@@ -595,30 +596,40 @@ func (s *Supervisor) checkErrors(
 
 	// 检查输出中的错误标记
 	if output.Error != "" {
+		// 区分系统错误和工具业务错误
+		isSystemError := !isToolBusinessError(output.Error)
+
+		severity := "medium"
+		if isSystemError {
+			severity = "high"
+		}
+
 		issues = append(issues, SupervisionIssue{
 			Type:        IssueTypeError,
-			Severity:    "high",
+			Severity:    severity,
 			Description: "Agent执行过程中发生错误",
 			Evidence:    output.Error,
 			Suggestion:  "检查错误原因并尝试修复",
 			Timestamp:   time.Now(),
 		})
 
-		// 更新连续错误计数
-		s.mu.Lock()
-		s.consecutiveErrors++
-		count := s.consecutiveErrors
-		s.mu.Unlock()
+		// 只有系统错误才递增连续错误计数
+		if isSystemError {
+			s.mu.Lock()
+			s.consecutiveErrors++
+			count := s.consecutiveErrors
+			s.mu.Unlock()
 
-		if count >= s.config.MaxConsecutiveErrors {
-			issues = append(issues, SupervisionIssue{
-				Type:        IssueTypeError,
-				Severity:    "critical",
-				Description: fmt.Sprintf("连续错误次数达到 %d 次", count),
-				Evidence:    "系统可能存在严重问题",
-				Suggestion:  "建议暂停任务并进行人工检查",
-				Timestamp:   time.Now(),
-			})
+			if count >= s.config.MaxConsecutiveErrors {
+				issues = append(issues, SupervisionIssue{
+					Type:        IssueTypeError,
+					Severity:    "critical",
+					Description: fmt.Sprintf("连续系统错误次数达到 %d 次", count),
+					Evidence:    "系统可能存在严重问题",
+					Suggestion:  "建议暂停任务并进行人工检查",
+					Timestamp:   time.Now(),
+				})
+			}
 		}
 	} else {
 		// 成功时重置错误计数
@@ -848,8 +859,15 @@ func (s *Supervisor) determineInterventionType(issue SupervisionIssue) Intervent
 		}
 		return InterventionRollback
 	case "high":
-		// 高严重度：暂停
-		return InterventionPause
+		// 高严重度但不紧急：仅警告
+		// 只有在连续多次high后才升级为pause
+		s.mu.RLock()
+		warningCount := s.warningCount
+		s.mu.RUnlock()
+		if warningCount >= s.config.MaxWarnings {
+			return InterventionPause
+		}
+		return InterventionWarning
 	default:
 		// 其他：警告
 		return InterventionWarning
@@ -1066,6 +1084,24 @@ func (s *Supervisor) GetStopChan() <-chan struct{} {
 }
 
 // 辅助函数
+
+// isToolBusinessError 判断是否为工具返回的业务错误（非系统错误）
+// 工具返回业务错误的特征：包含 "success":false 或 "isError":true 等
+// 这类错误是工具正常返回，只是业务结果为失败，不应计入系统连续错误
+func isToolBusinessError(errorContent string) bool {
+	businessErrorMarkers := []string{
+		`"success":false`,
+		`"success": false`,
+		`"isError":true`,
+		`"isError": true`,
+	}
+	for _, marker := range businessErrorMarkers {
+		if strings.Contains(errorContent, marker) {
+			return true
+		}
+	}
+	return false
+}
 
 // contains 检查字符串是否包含子串
 func contains(s, substr string) bool {

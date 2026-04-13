@@ -1480,15 +1480,30 @@ func TestFileInfo_ToJSON(t *testing.T) {
 func TestValidatePath(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// workDir为空时允许所有路径
-	_, err := validatePath("/etc/passwd", "")
+	// workDir为空时允许安全路径
+	_, _, err := validatePath("/some/safe/path", "")
 	if err != nil {
-		t.Error("should allow any path when workDir is empty")
+		t.Errorf("should allow safe path when workDir is empty: %v", err)
+	}
+
+	// workDir为空时，敏感路径（如/etc/shadow）在Unix上应被拒绝
+	// 在Windows上/etc/shadow不是有效路径，因此测试平台相关的敏感路径
+	if runtime.GOOS != "windows" {
+		_, _, err = validatePath("/etc/passwd", "")
+		if err == nil {
+			t.Error("should reject sensitive path even when workDir is empty")
+		}
+	} else {
+		// Windows上测试Windows敏感路径
+		_, _, err = validatePath(`C:\Windows\System32\config\SAM`, "")
+		if err == nil {
+			t.Error("should reject Windows sensitive path even when workDir is empty")
+		}
 	}
 
 	// 路径在workDir范围内应通过
 	testFile := filepath.Join(tmpDir, "test.txt")
-	validated, err := validatePath(testFile, tmpDir)
+	validated, _, err := validatePath(testFile, tmpDir)
 	if err != nil {
 		t.Errorf("should allow path within workDir: %v", err)
 	}
@@ -1497,32 +1512,32 @@ func TestValidatePath(t *testing.T) {
 	}
 
 	// 路径在workDir范围外应拒绝
-	_, err = validatePath("/etc/passwd", tmpDir)
+	_, _, err = validatePath("/etc/passwd", tmpDir)
 	if err == nil {
 		t.Error("should reject path outside workDir")
 	}
 
 	// ..遍历应被阻止
-	_, err = validatePath(filepath.Join(tmpDir, "..", "etc", "passwd"), tmpDir)
+	_, _, err = validatePath(filepath.Join(tmpDir, "..", "etc", "passwd"), tmpDir)
 	if err == nil {
 		t.Error("should reject path traversal with ..")
 	}
 
 	// 子目录路径应通过
 	subFile := filepath.Join(tmpDir, "sub", "dir", "file.txt")
-	_, err = validatePath(subFile, tmpDir)
+	_, _, err = validatePath(subFile, tmpDir)
 	if err != nil {
 		t.Errorf("should allow subdirectory path: %v", err)
 	}
 
 	// 精确匹配workDir本身应通过
-	_, err = validatePath(tmpDir, tmpDir)
+	_, _, err = validatePath(tmpDir, tmpDir)
 	if err != nil {
 		t.Errorf("should allow exact workDir path: %v", err)
 	}
 
 	// 清理后的路径应正确
-	_, err = validatePath(filepath.Join(tmpDir, "a", ".", "b"), tmpDir)
+	_, _, err = validatePath(filepath.Join(tmpDir, "a", ".", "b"), tmpDir)
 	if err != nil {
 		t.Errorf("should allow cleaned path: %v", err)
 	}
@@ -1541,7 +1556,7 @@ func TestValidatePath_SymlinkProtection(t *testing.T) {
 
 	// 通过符号链接指向的路径应在范围内
 	linkFile := filepath.Join(linkDir, "test.txt")
-	_, err := validatePath(linkFile, tmpDir)
+	_, _, err := validatePath(linkFile, tmpDir)
 	if err != nil {
 		t.Errorf("should allow path through symlink within workDir: %v", err)
 	}

@@ -1,6 +1,6 @@
 //go:build !gui
 
-// Package main 提供AgentPlus的GUI模式桩实现
+// Package main 提供MukaAI的GUI模式桩实现
 // 此文件在非 gui 构建标签下编译，当用户尝试运行 gui 子命令时给出提示。
 package main
 

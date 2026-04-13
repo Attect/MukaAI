@@ -6,9 +6,9 @@ import (
 	"sync"
 	"testing"
 
-	"agentplus/internal/model"
-	"agentplus/internal/state"
-	"agentplus/internal/tools"
+	"github.com/Attect/MukaAI/internal/model"
+	"github.com/Attect/MukaAI/internal/state"
+	"github.com/Attect/MukaAI/internal/tools"
 )
 
 // setupMinimalAgent 创建最小化的Agent实例，用于回调测试

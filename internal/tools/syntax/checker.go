@@ -147,6 +147,10 @@ func detectLanguage(filePath string) string {
 	case ".java":
 		return "java"
 	case ".kt", ".kts":
+		// .gradle.kts 应识别为 gradle 而非 kotlin
+		if strings.HasSuffix(strings.ToLower(filePath), ".gradle.kts") {
+			return "gradle"
+		}
 		return "kotlin"
 	case ".rs":
 		return "rust"
@@ -158,6 +162,14 @@ func detectLanguage(filePath string) string {
 		return "batch"
 	case ".gradle":
 		return "gradle"
+	case ".toml":
+		return "toml"
+	case ".css":
+		return "css"
+	case ".sql":
+		return "sql"
+	case ".properties":
+		return "properties"
 	default:
 		return strings.TrimPrefix(ext, ".")
 	}

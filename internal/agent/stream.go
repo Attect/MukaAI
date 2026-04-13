@@ -1,7 +1,7 @@
 package agent
 
 import (
-	"agentplus/internal/model"
+	"github.com/Attect/MukaAI/internal/model"
 )
 
 // StreamHandler 流式消息处理器接口
@@ -37,6 +37,15 @@ type StreamHandler interface {
 	// 当整个任务（包括所有迭代）完成后调用，无论成功还是失败
 	// 与 OnComplete 的区别：OnComplete 是单次推理完成，OnTaskDone 是整个任务完成
 	OnTaskDone()
+}
+
+// SupervisorResultHandler 监督结果处理器接口
+// StreamHandler实现者可选择同时实现此接口以接收监督结果事件
+// 用于将Supervisor检查结果推送到GUI等前端
+type SupervisorResultHandler interface {
+	// OnSupervisorResult 处理监督结果
+	// 当Supervisor完成一次检查后调用
+	OnSupervisorResult(result *SupervisionResult)
 }
 
 // ToolCallInfo 工具调用信息

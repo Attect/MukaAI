@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"agentplus/internal/agent"
+	"github.com/Attect/MukaAI/internal/agent"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -215,4 +215,33 @@ func (b *StreamBridge) OnTaskDone() {
 
 	runtime.EventsEmit(b.ctx, "stream:done")
 	runtime.EventsEmit(b.ctx, "conversation:updated", b.app.GetConversationData())
+}
+
+// OnSupervisorResult 处理监督结果
+// 实现agent.SupervisorResultHandler接口
+// 将Supervisor检查结果作为系统事件推送到前端
+func (b *StreamBridge) OnSupervisorResult(result *agent.SupervisionResult) {
+	if b.ctx == nil {
+		return
+	}
+
+	eventData := map[string]interface{}{
+		"status":            result.Status,
+		"summary":           result.Summary,
+		"intervention_type": result.InterventionType,
+		"issues_count":      len(result.Issues),
+	}
+
+	// 简化issues数据，避免传输过大
+	issues := make([]map[string]interface{}, 0, len(result.Issues))
+	for _, issue := range result.Issues {
+		issues = append(issues, map[string]interface{}{
+			"type":        issue.Type,
+			"severity":    issue.Severity,
+			"description": issue.Description,
+		})
+	}
+	eventData["issues"] = issues
+
+	runtime.EventsEmit(b.ctx, "supervisor:result", eventData)
 }
