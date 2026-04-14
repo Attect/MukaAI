@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/Attect/MukaAI/internal/model"
@@ -17,6 +18,11 @@ func (a *Agent) callModel(ctx context.Context) (*modelResponse, error) {
 	// 获取消息历史
 	messages := a.history.GetMessagesRef()
 
+	// 重置重复检测器（每次模型调用前重置状态）
+	if a.repetitionDetector != nil {
+		a.repetitionDetector.Reset()
+	}
+
 	// 使用流式响应
 	streamChan, err := a.modelClient.StreamChatCompletion(ctx, messages, toolSchemas)
 	if err != nil {
@@ -27,6 +33,10 @@ func (a *Agent) callModel(ctx context.Context) (*modelResponse, error) {
 	var contentBuilder strings.Builder
 	var toolCalls []model.ToolCall
 	var currentToolCall *model.ToolCall
+
+	// 重复检测状态
+	var repetitionDetected bool
+	var repetitionPattern string
 
 	// 创建思考标签处理器
 	thinkingProcessor := NewThinkingTagProcessor()
@@ -78,9 +88,24 @@ func (a *Agent) callModel(ctx context.Context) (*modelResponse, error) {
 			// 这确保响应消息中不包含 <thinking> 标签
 			if content != "" {
 				contentBuilder.WriteString(content)
+
+				// 流式重复检测：将每个content chunk送入检测器
+				// 仅在尚未检测到重复时进行检测
+				if !repetitionDetected && a.repetitionDetector != nil {
+					if detected, pattern := a.repetitionDetector.Feed(content); detected {
+						repetitionDetected = true
+						repetitionPattern = pattern
+						// 检测到重复，记录日志但不return error
+						// 流式循环会继续消耗channel中的事件直到结束
+						if a.logger != nil {
+							a.logger.LogError(fmt.Sprintf("流式重复检测触发，模式: %q", truncatePattern(pattern, 80)))
+						}
+					}
+				}
 			}
 
 			// 调用流式处理器回调
+			// 即使检测到重复，仍然将内容传递给handler以保持UI连贯性
 			if handler != nil {
 				if thinking != "" {
 					handler.OnThinking(thinking)
@@ -178,6 +203,34 @@ func (a *Agent) callModel(ctx context.Context) (*modelResponse, error) {
 		handler.OnComplete(usage)
 	}
 
+	// 如果流式阶段检测到重复，返回带重复标记的响应
+	if repetitionDetected {
+		return &modelResponse{
+			Content:            "", // 重复内容不保留
+			ToolCalls:          nil,
+			Usage:              usage,
+			RepetitionDetected: true,
+			RepetitionPattern:  repetitionPattern,
+		}, nil
+	}
+
+	// 后置检测：对流式阶段未触发但内容异常长的响应进行全量检测
+	if a.repetitionDetector != nil && len(contentBuilder.String()) > 0 {
+		fullContent := contentBuilder.String()
+		if detected, pattern, _ := a.repetitionDetector.CheckFullContent(fullContent); detected {
+			if a.logger != nil {
+				a.logger.LogError(fmt.Sprintf("后置重复检测触发，模式: %q", truncatePattern(pattern, 80)))
+			}
+			return &modelResponse{
+				Content:            "", // 重复内容不保留
+				ToolCalls:          toolCalls,
+				Usage:              usage,
+				RepetitionDetected: true,
+				RepetitionPattern:  pattern,
+			}, nil
+		}
+	}
+
 	return &modelResponse{
 		Content:   contentBuilder.String(),
 		ToolCalls: toolCalls,
@@ -185,9 +238,25 @@ func (a *Agent) callModel(ctx context.Context) (*modelResponse, error) {
 	}, nil
 }
 
+// truncatePattern 截断重复模式用于日志输出
+// 防止日志中出现超长的重复模式内容
+func truncatePattern(pattern string, maxLen int) string {
+	if len(pattern) <= maxLen {
+		return pattern
+	}
+	return pattern[:maxLen] + "..."
+}
+
 // modelResponse 模型响应
 type modelResponse struct {
 	Content   string
 	ToolCalls []model.ToolCall
 	Usage     int // token 用量（估算）
+
+	// RepetitionDetected 标识本次模型响应是否检测到重复输出
+	// 当为true时，Content为空，不应记录到对话历史
+	RepetitionDetected bool
+	// RepetitionPattern 检测到的重复模式内容摘要
+	// 用于生成防重复提示
+	RepetitionPattern string
 }

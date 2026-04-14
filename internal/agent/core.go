@@ -35,6 +35,10 @@ type Agent struct {
 	verifier  *Verifier      // 成果校验器
 	corrector *SelfCorrector // 自我修正器
 
+	// 重复检测组件
+	repetitionDetector *RepetitionDetector // 模型输出重复检测器
+	repetitionRetries  int                 // 当前重复重试次数（独立于主迭代计数）
+
 	// 监督组件
 	supervisor Supervisor // Agent监督器（可选，通过接口解耦）
 
@@ -158,6 +162,9 @@ func NewAgent(config *Config) (*Agent, error) {
 	// 初始化自我修正器
 	corrector := NewSelfCorrector(config.CorrectorConfig)
 
+	// 初始化重复检测器
+	repetitionDetector := NewRepetitionDetector(DefaultRepetitionConfig())
+
 	// 初始化日志记录器
 	logger, err := NewAgentLogger(config.LogPath)
 	if err != nil {
@@ -165,21 +172,22 @@ func NewAgent(config *Config) (*Agent, error) {
 	}
 
 	return &Agent{
-		modelClient:     config.ModelClient,
-		toolRegistry:    config.ToolRegistry,
-		stateManager:    config.StateManager,
-		executor:        NewToolExecutor(config.ToolRegistry),
-		history:         NewHistoryManager(),
-		reviewer:        reviewer,
-		verifier:        verifier,
-		corrector:       corrector,
-		supervisor:      config.Supervisor,
-		contextInjector: config.ContextInjector,
-		logger:          logger,
-		maxIterations:   maxIterations,
-		systemPrompt:    systemPrompt,
-		promptType:      promptType,
-		workDir:         config.WorkDir,
+		modelClient:        config.ModelClient,
+		toolRegistry:       config.ToolRegistry,
+		stateManager:       config.StateManager,
+		executor:           NewToolExecutor(config.ToolRegistry),
+		history:            NewHistoryManager(),
+		reviewer:           reviewer,
+		verifier:           verifier,
+		corrector:          corrector,
+		supervisor:         config.Supervisor,
+		contextInjector:    config.ContextInjector,
+		logger:             logger,
+		maxIterations:      maxIterations,
+		systemPrompt:       systemPrompt,
+		promptType:         promptType,
+		workDir:            config.WorkDir,
+		repetitionDetector: repetitionDetector,
 	}, nil
 }
 
@@ -225,6 +233,25 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 			if err != nil {
 				return a.handleModelCallError(result, err, totalIterations)
 			}
+
+			// 重复检测处理：当模型输出被检测为重复时，不记录该响应到历史
+			// 而是注入防重复提示并重试
+			if response.RepetitionDetected {
+				ir := a.handleRepetition(response, totalIterations)
+				if ir != nil {
+					switch ir.action {
+					case "return":
+						return ir.result, ir.err
+					case "continue":
+						continue
+					}
+				}
+				// 重试失败兜底，跳过本次迭代
+				continue
+			}
+
+			// 模型正常返回（无重复），重置重复重试计数
+			a.repetitionRetries = 0
 
 			// 记录模型响应到历史
 			a.recordModelResponse(response)
@@ -694,4 +721,45 @@ func (a *Agent) Close() error {
 	}
 
 	return nil
+}
+
+// handleRepetition 处理模型输出重复的情况
+// 当callModel检测到重复输出时调用此方法进行重试决策。
+// 重试时不记录重复的响应到对话历史，而是注入防重复提示。
+// 返回nil表示应continue（继续迭代），非nil包含具体的处理结果。
+func (a *Agent) handleRepetition(response *modelResponse, totalIterations int) *iterationResult {
+	a.repetitionRetries++
+
+	maxRetries := 3 // 默认值
+	if a.repetitionDetector != nil {
+		maxRetries = a.repetitionDetector.GetConfig().MaxRetries
+	}
+
+	if a.logger != nil {
+		a.logger.LogError(fmt.Sprintf("检测到模型输出重复，模式: %q, 重试次数: %d/%d",
+			response.RepetitionPattern, a.repetitionRetries, maxRetries))
+	}
+
+	// 超过最大重试次数，放弃重试
+	if a.repetitionRetries > maxRetries {
+		a.repetitionRetries = 0
+		if a.logger != nil {
+			a.logger.LogError("重复重试次数耗尽，跳过本次迭代")
+		}
+		return &iterationResult{action: "continue"}
+	}
+
+	// 不记录重复的响应到历史（callModel返回空Content，recordModelResponse不会被调用）
+	// 注入防重复提示到对话历史，引导模型改变输出
+	retryPrompt := a.repetitionDetector.BuildRetryPrompt(response.RepetitionPattern, a.repetitionRetries)
+	a.history.AddMessage(model.NewUserMessage(retryPrompt))
+
+	if a.onHistoryAdd != nil {
+		a.onHistoryAdd("user", retryPrompt)
+	}
+	if a.onCorrection != nil {
+		a.onCorrection(retryPrompt)
+	}
+
+	return &iterationResult{action: "continue"}
 }
