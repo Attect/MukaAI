@@ -59,16 +59,18 @@ func (inj *Injector) InjectContext(taskDesc string, messages []model.Message) []
 		return messages
 	}
 
-	// 将上下文注入到系统消息之后
+	// 将上下文注入到系统消息之后，使用user角色
+	// 注意：不能使用system角色，因为llama.cpp的Jinja聊天模板
+	// 通常要求system消息只能在对话开头且仅有一条，多个system消息会导致500错误
 	result := make([]model.Message, 0, len(messages)+1)
 	injected := false
 	for _, msg := range messages {
 		result = append(result, msg)
 		if msg.Role == model.RoleSystem && !injected {
-			// 在系统消息之后插入上下文消息
+			// 在系统消息之后插入上下文消息（使用user角色避免模板错误）
 			result = append(result, model.Message{
-				Role:    model.RoleSystem,
-				Content: contextText,
+				Role:    model.RoleUser,
+				Content: "[Project Context]\n" + contextText,
 			})
 			injected = true
 		}
@@ -77,8 +79,8 @@ func (inj *Injector) InjectContext(taskDesc string, messages []model.Message) []
 	// 如果没有系统消息，在开头插入
 	if !injected {
 		result = append([]model.Message{{
-			Role:    model.RoleSystem,
-			Content: contextText,
+			Role:    model.RoleUser,
+			Content: "[Project Context]\n" + contextText,
 		}}, result...)
 	}
 
@@ -222,9 +224,10 @@ func (inj *Injector) InjectIntoHistory(taskDesc string, addMessage func(msg mode
 		return nil
 	}
 
+	// 使用user角色而非system角色，避免llama.cpp聊天模板的"system消息必须在开头"约束
 	addMessage(model.Message{
-		Role:    model.RoleSystem,
-		Content: contextText,
+		Role:    model.RoleUser,
+		Content: "[Project Context]\n" + contextText,
 	})
 
 	return files
