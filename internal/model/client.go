@@ -34,7 +34,7 @@ func NewClient(config *Config) (*Client, error) {
 	return &Client{
 		config: config,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Minute, // 适配慢速本地模型的长代码生成
+			Timeout: 60 * time.Minute, // 适配慢速本地模型的长代码生成
 		},
 	}, nil
 }
