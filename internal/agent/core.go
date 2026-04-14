@@ -253,6 +253,16 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 			// 模型正常返回（无重复），重置重复重试计数
 			a.repetitionRetries = 0
 
+			// 跳过空响应：当模型只返回thinking而没有任何content和tool_calls时，
+			// 不记录到对话历史，因为空的assistant消息会导致某些LLM服务端（如llama.cpp）
+			// 返回400错误（Jinja模板校验失败）
+			if response.Content == "" && len(response.ToolCalls) == 0 {
+				if a.logger != nil {
+					a.logger.LogMessage("system", "[模型返回空响应（仅thinking），跳过记录]")
+				}
+				continue
+			}
+
 			// 记录模型响应到历史
 			a.recordModelResponse(response)
 
