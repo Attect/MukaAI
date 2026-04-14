@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -122,7 +123,7 @@ func DefaultReviewConfig() *ReviewConfig {
 		MaxConsecutiveFailures:       3,
 		FailureResetInterval:         60,
 		EnableFabricationCheck:       true,
-		MaxIterationsWithoutProgress: 5,
+		MaxIterationsWithoutProgress: 10, // 从5提高到10，给模型更多时间推进任务
 		ProgressCheckWindow:          3,
 		MaxFileChecksPerReview:       10,
 		ExplorationPeriodIterations:  3,   // 前3次迭代为探索期
@@ -135,6 +136,9 @@ func DefaultReviewConfig() *ReviewConfig {
 // 负责审查Agent的输出和行为，检测问题并提供修正建议
 type Reviewer struct {
 	config *ReviewConfig
+
+	// 工作目录（用于文件存在性检查）
+	workDir string
 
 	// 状态跟踪
 	mu sync.RWMutex
@@ -186,6 +190,32 @@ func NewReviewer(config *ReviewConfig) *Reviewer {
 		actionHistory:      make([]ActionRecord, 0),
 		explorationActions: make([]ExplorationAction, 0),
 	}
+}
+
+// SetWorkDir 设置工作目录（用于文件存在性检查）
+func (r *Reviewer) SetWorkDir(workDir string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.workDir = workDir
+}
+
+// fileExists 检查文件是否存在（优先使用工作目录解析相对路径）
+func (r *Reviewer) fileExists(path string) bool {
+	// 先尝试原始路径
+	if _, err := os.Stat(path); err == nil {
+		return true
+	}
+	// 如果是相对路径，尝试相对于工作目录
+	r.mu.RLock()
+	wd := r.workDir
+	r.mu.RUnlock()
+	if wd != "" && !filepath.IsAbs(path) {
+		fullPath := filepath.Join(wd, path)
+		if _, err := os.Stat(fullPath); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // ReviewOutput 审查模型输出
@@ -473,8 +503,8 @@ func (r *Reviewer) checkFabrication(output string, toolCalls []model.ToolCall) [
 			break
 		}
 
-		// 检查文件是否存在
-		if _, err := os.Stat(path); os.IsNotExist(err) {
+		// 检查文件是否存在（使用工作目录解析相对路径）
+		if !r.fileExists(path) {
 			issues = append(issues, ReviewIssue{
 				Type:        IssueTypeFabrication,
 				Severity:    "high",
@@ -526,6 +556,7 @@ func (r *Reviewer) checkFabrication(output string, toolCalls []model.ToolCall) [
 
 // checkProgress 检查进度
 // 验证是否真正推进任务进度
+// 改进：除了依赖taskState.CompletedSteps外，还检测生产性工具调用作为隐式进度
 func (r *Reviewer) checkProgress(taskState *state.TaskState, toolCalls []model.ToolCall) *ReviewIssue {
 	r.mu.Lock()
 	r.iterationCount++
@@ -536,6 +567,17 @@ func (r *Reviewer) checkProgress(taskState *state.TaskState, toolCalls []model.T
 	currentStep := ""
 	if len(taskState.Progress.CompletedSteps) > 0 {
 		currentStep = taskState.Progress.CompletedSteps[len(taskState.Progress.CompletedSteps)-1]
+	}
+
+	// 检查是否有生产性工具调用（隐式进度）
+	hasProductiveAction := r.hasProductiveToolCalls(toolCalls)
+	if hasProductiveAction {
+		// 有生产性工具调用，重置计数
+		r.mu.Lock()
+		r.iterationCount = 0
+		r.lastProgressStep = currentStep
+		r.mu.Unlock()
+		return nil
 	}
 
 	// 检查进度是否停滞
@@ -568,6 +610,31 @@ func (r *Reviewer) checkProgress(taskState *state.TaskState, toolCalls []model.T
 	}
 
 	return nil
+}
+
+// hasProductiveToolCalls 检查是否有生产性的工具调用
+// 生产性工具调用包括：文件写入、文件创建、目录创建、命令执行等
+// 这些操作即使没有显式更新taskState，也代表了任务进度的推进
+func (r *Reviewer) hasProductiveToolCalls(toolCalls []model.ToolCall) bool {
+	productiveTools := map[string]bool{
+		"write_file":       true,
+		"create_file":      true,
+		"edit_file":        true,
+		"create_directory": true,
+		"mkdir":            true,
+		"shell_execute":    true,
+		"execute_command":  true,
+		"run_command":      true,
+		"git_commit":       true,
+		"git_add":          true,
+	}
+
+	for _, tc := range toolCalls {
+		if productiveTools[tc.Function.Name] {
+			return true
+		}
+	}
+	return false
 }
 
 // isExplorationAction 检查是否是环境探索行为

@@ -144,6 +144,11 @@ func NewAgent(config *Config) (*Agent, error) {
 		reviewer = NewReviewer(nil) // 使用默认配置
 	}
 
+	// 设置审查器的工作目录（用于文件存在性检查）
+	if config.WorkDir != "" {
+		reviewer.SetWorkDir(config.WorkDir)
+	}
+
 	// 初始化校验器
 	verifier := config.Verifier
 	if verifier == nil {

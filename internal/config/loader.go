@@ -13,12 +13,18 @@ import (
 
 // Config 完整的应用配置
 type Config struct {
-	Model ModelConfig `yaml:"model"`
-	Agent AgentConfig `yaml:"agent"`
-	State StateConfig `yaml:"state"`
-	Tools ToolsConfig `yaml:"tools"`
-	MCP   MCPConfig   `yaml:"mcp"`
-	LSP   LSPConfig   `yaml:"lsp"`
+	Model   ModelConfig `yaml:"model"`
+	Agent   AgentConfig `yaml:"agent"`
+	State   StateConfig `yaml:"state"`
+	Tools   ToolsConfig `yaml:"tools"`
+	MCP     MCPConfig   `yaml:"mcp"`
+	LSP     LSPConfig   `yaml:"lsp"`
+	Logging LogConfig   `yaml:"logging"`
+}
+
+// LogConfig 日志配置
+type LogConfig struct {
+	LogPath string `yaml:"log_path"` // 对话日志文件路径，为空则不记录
 }
 
 // MCPConfig MCP（Model Context Protocol）配置

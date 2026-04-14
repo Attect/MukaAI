@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -150,6 +151,12 @@ func runCLICommand() {
 		lspManager = initLSPManager(cfg, toolRegistry, workDir)
 	}
 
+	// 解析日志路径（相对于工作目录）
+	logPath := cfg.Logging.LogPath
+	if logPath != "" && !filepath.IsAbs(logPath) {
+		logPath = filepath.Join(workDir, logPath)
+	}
+
 	// 创建Agent
 	ag, err := agent.NewAgent(&agent.Config{
 		ModelClient:   modelClient,
@@ -158,6 +165,7 @@ func runCLICommand() {
 		MaxIterations: cfg.Agent.MaxIterations,
 		PromptType:    agent.PromptTypeOrchestrator,
 		WorkDir:       workDir,
+		LogPath:       logPath,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating agent: %v\n", err)

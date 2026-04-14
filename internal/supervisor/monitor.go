@@ -638,25 +638,9 @@ func (s *Supervisor) checkErrors(
 		s.mu.Unlock()
 	}
 
-	// 检查工具调用失败
-	for _, tc := range output.ToolCalls {
-		reviewResult := s.reviewer.ReviewToolResult(tc.Function.Name, tc.Function.Arguments, "", false)
-		if reviewResult.IsBlocked() {
-			for _, issue := range reviewResult.Issues {
-				issues = append(issues, SupervisionIssue{
-					Type:        IssueTypeError,
-					Severity:    issue.Severity,
-					Description: issue.Description,
-					Evidence:    issue.Evidence,
-					Suggestion:  issue.Suggestion,
-					Timestamp:   issue.Timestamp,
-					Context: map[string]interface{}{
-						"tool_name": tc.Function.Name,
-					},
-				})
-			}
-		}
-	}
+	// 注意：工具调用的结果检查应在工具执行之后进行（由Agent主循环中的ReviewToolResult处理）
+	// 此处不应在工具执行前就以success=false调用ReviewToolResult，
+	// 否则每次迭代都会误报"连续失败"（Bug已修复）
 
 	return issues
 }
