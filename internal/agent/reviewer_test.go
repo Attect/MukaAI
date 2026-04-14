@@ -41,8 +41,8 @@ func TestDefaultReviewConfig(t *testing.T) {
 	if !config.EnableDirectionCheck {
 		t.Error("EnableDirectionCheck should be true by default")
 	}
-	if config.MaxRepeatedActions != 3 {
-		t.Errorf("expected MaxRepeatedActions=3, got %d", config.MaxRepeatedActions)
+	if config.MaxRepeatedActions != 4 {
+		t.Errorf("expected MaxRepeatedActions=4, got %d", config.MaxRepeatedActions)
 	}
 	if config.MaxConsecutiveFailures != 3 {
 		t.Errorf("expected MaxConsecutiveFailures=3, got %d", config.MaxConsecutiveFailures)
@@ -185,13 +185,14 @@ func TestReviewOutputWithInfiniteLoop(t *testing.T) {
 	}
 	reviewer := NewReviewer(config)
 
-	// 模拟重复操作
+	// 模拟重复操作（使用execute_command而非read_file，
+	// 因为read_file已被checkInfiniteLoop豁免）
 	toolCall := model.ToolCall{
 		ID:   "tc-1",
 		Type: "function",
 		Function: model.FunctionCall{
-			Name:      "read_file",
-			Arguments: `{"file_path": "test.txt"}`,
+			Name:      "execute_command",
+			Arguments: `{"command": "echo hello"}`,
 		},
 	}
 

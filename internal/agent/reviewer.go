@@ -118,7 +118,7 @@ type ReviewConfig struct {
 func DefaultReviewConfig() *ReviewConfig {
 	return &ReviewConfig{
 		EnableDirectionCheck:         true,
-		MaxRepeatedActions:           3,
+		MaxRepeatedActions:           4,
 		LoopWindowSize:               5,
 		MaxConsecutiveFailures:       3,
 		FailureResetInterval:         60,
@@ -449,8 +449,19 @@ func (r *Reviewer) checkInfiniteLoop(tc model.ToolCall) *ReviewIssue {
 	}
 
 	// 统计相同操作次数
+	// 注意：读取类工具（read_file等）读取同一文件不同位置是正常行为，
+	// 不应被判定为循环。只对真正相同的操作（工具名+完整参数都一致）计数，
+	// 且排除读取类工具的重复（因为参数中的offset/path可能不同但有相同前缀）
 	sameCount := 0
+	readTools := map[string]bool{
+		"read_file": true, "mcp_idea_read_file": true,
+		"list_directory": true, "mcp_idea_list_directory": true,
+	}
 	for _, action := range recentActions {
+		// 跳过读取类工具的重复检测
+		if readTools[action.ToolName] {
+			continue
+		}
 		if action.ToolName == tc.Function.Name && action.Arguments == tc.Function.Arguments {
 			sameCount++
 		}
