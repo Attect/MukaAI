@@ -724,7 +724,7 @@ func (s *Supervisor) checkBehavior(
 	issues := make([]SupervisionIssue, 0)
 
 	// 检查迭代次数是否过高
-	if output.Iteration > 30 {
+	if output.Iteration > 20 {
 		issues = append(issues, SupervisionIssue{
 			Type:        IssueTypeBehavior,
 			Severity:    "medium",

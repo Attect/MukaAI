@@ -291,10 +291,13 @@ func (c *Client) GetConfig() *Config {
 // CountTokens 估算消息的token数量
 // 使用UTF-8字符数（rune count）进行估算，正确处理中文等多字节字符
 // 粗略估算：平均每4个字符约1个token
+// 计入：Content、ReasoningContent（思考内容）、Name（工具名称）以及ToolCalls
 func (c *Client) CountTokens(messages []Message) int {
 	totalChars := 0
 	for _, msg := range messages {
 		totalChars += utf8.RuneCountInString(msg.Content)
+		totalChars += utf8.RuneCountInString(msg.ReasoningContent)
+		totalChars += utf8.RuneCountInString(msg.Name)
 		for _, tc := range msg.ToolCalls {
 			totalChars += utf8.RuneCountInString(tc.Function.Name) + utf8.RuneCountInString(tc.Function.Arguments)
 		}
@@ -332,4 +335,10 @@ type APIError struct {
 // Error 实现error接口
 func (e *APIError) Error() string {
 	return fmt.Sprintf("API错误 [状态码: %d]: %s", e.StatusCode, e.Message)
+}
+
+// IsRetryable 判断API错误是否可重试
+// 5xx服务器错误和429限流错误可重试，4xx客户端错误不可重试
+func (e *APIError) IsRetryable() bool {
+	return e.StatusCode >= 500 || e.StatusCode == 429
 }

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -38,6 +39,9 @@ type Agent struct {
 	// 重复检测组件
 	repetitionDetector *RepetitionDetector // 模型输出重复检测器
 	repetitionRetries  int                 // 当前重复重试次数（独立于主迭代计数）
+
+	// 上下文压缩组件
+	compressor *Compressor // 上下文压缩器（智能压缩替代粗暴截断）
 
 	// 监督组件
 	supervisor Supervisor // Agent监督器（可选，通过接口解耦）
@@ -165,6 +169,10 @@ func NewAgent(config *Config) (*Agent, error) {
 	// 初始化重复检测器
 	repetitionDetector := NewRepetitionDetector(DefaultRepetitionConfig())
 
+	// 初始化上下文压缩器
+	compressor, _ := NewCompressor(config.ModelClient, DefaultCompressorConfig())
+	// 注意：NewCompressor失败时compressor为nil，preIteration会回退到Truncate
+
 	// 初始化日志记录器
 	logger, err := NewAgentLogger(config.LogPath)
 	if err != nil {
@@ -188,6 +196,7 @@ func NewAgent(config *Config) (*Agent, error) {
 		promptType:         promptType,
 		workDir:            config.WorkDir,
 		repetitionDetector: repetitionDetector,
+		compressor:         compressor,
 	}, nil
 }
 
@@ -228,8 +237,8 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 			// 迭代前处理：回调、日志、上下文截断
 			a.preIteration(totalIterations)
 
-			// 调用模型
-			response, err := a.callModel(runCtx)
+			// 调用模型（含可重试错误的自动重试）
+			response, err := a.callModelWithRetry(runCtx, totalIterations)
 			if err != nil {
 				return a.handleModelCallError(result, err, totalIterations)
 			}
@@ -462,7 +471,7 @@ func (a *Agent) checkCancellation(runCtx context.Context, result *RunResult, tot
 	}
 }
 
-// preIteration 迭代前处理：回调、日志、上下文截断
+// preIteration 迭代前处理：回调、日志、上下文压缩
 func (a *Agent) preIteration(totalIterations int) {
 	if a.onIteration != nil {
 		a.onIteration(totalIterations)
@@ -470,10 +479,49 @@ func (a *Agent) preIteration(totalIterations int) {
 	if a.logger != nil {
 		a.logger.LogIteration(totalIterations, "processing")
 	}
-	// 检查上下文是否超出限制
-	if a.modelClient.IsContextOverflow(a.history.GetMessagesRef()) {
-		config := a.modelClient.GetConfig()
-		a.history.Truncate(int(float64(config.ContextSize)*0.8), a.modelClient.CountTokens)
+
+	// 上下文管理：优先使用智能压缩，回退到简单截断
+	messages := a.history.GetMessagesRef()
+	if len(messages) == 0 {
+		return
+	}
+
+	if a.compressor != nil {
+		// 使用Compressor进行智能压缩
+		shouldCompress, usageRatio := a.compressor.ShouldCompress(messages)
+		if shouldCompress {
+			taskState, _ := a.stateManager.GetState(a.taskID)
+			result, err := a.compressor.Compress(messages, taskState)
+			if err == nil && result.WasCompressed {
+				// 压缩成功，替换历史消息
+				a.history.Clear()
+				a.history.AddMessages(result.CompressedMessages)
+
+				if a.logger != nil {
+					a.logger.LogMessage("system", fmt.Sprintf(
+						"[上下文压缩] 使用率: %.1f%%, 消息: %d→%d, token: %d→%d, 压缩比: %.1f%%, 摘要长度: %d",
+						usageRatio*100,
+						result.OriginalCount, result.CompressedCount,
+						result.OriginalTokens, result.CompressedTokens,
+						result.CompressionRatio*100,
+						len(result.Summary),
+					))
+				}
+			} else if err != nil {
+				// 压缩失败，回退到Truncate
+				if a.logger != nil {
+					a.logger.LogError(fmt.Sprintf("[上下文压缩] 压缩失败，回退到截断: %s", err.Error()))
+				}
+				config := a.modelClient.GetConfig()
+				a.history.Truncate(int(float64(config.ContextSize)*0.8), a.modelClient.CountTokens)
+			}
+		}
+	} else {
+		// 没有Compressor，使用简单截断（向后兼容）
+		if a.modelClient.IsContextOverflow(messages) {
+			config := a.modelClient.GetConfig()
+			a.history.Truncate(int(float64(config.ContextSize)*0.8), a.modelClient.CountTokens)
+		}
 	}
 }
 
@@ -489,6 +537,93 @@ func (a *Agent) handleModelCallError(result *RunResult, err error, totalIteratio
 	}
 	a.finalizeResult(result)
 	return result, fmt.Errorf("model call failed: %w", err)
+}
+
+// callModelWithRetry 调用模型，对可重试的错误自动重试
+// 最多重试3次，递增间隔（5s, 15s, 30s）
+// 不可重试的错误（4xx客户端错误等）直接返回
+func (a *Agent) callModelWithRetry(ctx context.Context, iteration int) (*modelResponse, error) {
+	maxRetries := 3
+	retryDelays := []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second}
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		response, err := a.callModel(ctx)
+		if err == nil {
+			return response, nil
+		}
+
+		// 检查是否可重试
+		if !a.isRetryableError(err) {
+			return nil, err
+		}
+
+		// 已达到最大重试次数
+		if attempt >= maxRetries {
+			if a.logger != nil {
+				a.logger.LogError(fmt.Sprintf("模型调用重试耗尽（%d次）: %s", maxRetries, err.Error()))
+			}
+			return nil, err
+		}
+
+		// 等待后重试
+		delay := retryDelays[attempt]
+		if a.logger != nil {
+			a.logger.LogError(fmt.Sprintf("模型调用失败（可重试），%v后第%d次重试: %s", delay, attempt+1, err.Error()))
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+			// 继续重试
+		}
+	}
+
+	return nil, fmt.Errorf("unreachable")
+}
+
+// isRetryableError 判断错误是否为可重试的临时性错误
+// 可重试：网络断开、连接拒绝、5xx服务器错误、429限流
+// 不可重试：400客户端错误、401认证失败、403禁止等
+func (a *Agent) isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errMsg := err.Error()
+
+	// 网络和连接类错误（可重试）
+	retryablePatterns := []string{
+		"wsarecv:", // Windows socket recv error
+		"wsasend:", // Windows socket send error
+		"connection refused",
+		"connection reset",
+		"forcibly closed", // connection forcibly closed
+		"broken pipe",
+		"i/o timeout",
+		"EOF",           // unexpected EOF
+		"no such host",  // DNS failure
+		"TLS handshake", // TLS issues
+	}
+	for _, pattern := range retryablePatterns {
+		if strings.Contains(errMsg, pattern) {
+			return true
+		}
+	}
+
+	// API错误：检查状态码
+	var apiErr *model.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.IsRetryable()
+	}
+
+	// RequestError可能包装了可重试的底层错误，递归检查
+	var reqErr *model.RequestError
+	if errors.As(err, &reqErr) && reqErr.Err != nil {
+		return a.isRetryableError(reqErr.Err)
+	}
+
+	return false
 }
 
 // recordModelResponse 记录模型响应到历史
