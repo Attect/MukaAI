@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Attect/MukaAI/internal/model"
 	"github.com/Attect/MukaAI/internal/state"
@@ -38,6 +40,10 @@ type CompressorConfig struct {
 	// SummaryMaxLength 摘要的最大长度（字符数）
 	// 用于限制生成的摘要大小，默认2000
 	SummaryMaxLength int
+
+	// LLMSummaryTimeout LLM生成摘要的超时时间（秒）
+	// 超时则回退到规则提取，默认10秒
+	LLMSummaryTimeout int
 }
 
 // DefaultCompressorConfig 返回默认的压缩器配置
@@ -50,6 +56,7 @@ func DefaultCompressorConfig() *CompressorConfig {
 		KeepRecentToolCalls:          3,
 		EnableProgressiveCompression: true,
 		SummaryMaxLength:             2000,
+		LLMSummaryTimeout:            10,
 	}
 }
 
@@ -101,19 +108,26 @@ type CompressionResult struct {
 	WasCompressed bool
 }
 
+// LLMSummaryFunc LLM摘要生成函数类型
+// 接收消息列表和提示词，返回摘要文本
+// 调用方负责超时控制，失败时返回空字符串
+type LLMSummaryFunc func(ctx context.Context, messages []model.Message, prompt string) string
+
 // Compressor 上下文压缩器
 // 负责在上下文过长时压缩消息历史，保留关键信息
 type Compressor struct {
-	mu          sync.RWMutex
-	modelClient *model.Client
-	config      *CompressorConfig
+	mu           sync.RWMutex
+	modelClient  *model.Client
+	config       *CompressorConfig
+	llmSummarize LLMSummaryFunc // LLM摘要生成函数（可选，为nil则只使用规则提取）
 }
 
 // NewCompressor 创建新的上下文压缩器
 // 参数：
 //   - modelClient: 模型客户端，用于计算token数量
 //   - config: 压缩器配置，如果为nil则使用默认配置
-func NewCompressor(modelClient *model.Client, config *CompressorConfig) (*Compressor, error) {
+//   - llmSummarize: LLM摘要生成函数（可选，为nil则只使用规则提取）
+func NewCompressor(modelClient *model.Client, config *CompressorConfig, llmSummarize ...LLMSummaryFunc) (*Compressor, error) {
 	if modelClient == nil {
 		return nil, fmt.Errorf("model client cannot be nil")
 	}
@@ -126,9 +140,20 @@ func NewCompressor(modelClient *model.Client, config *CompressorConfig) (*Compre
 		return nil, fmt.Errorf("invalid compressor config: %w", err)
 	}
 
+	// 设置LLM摘要超时默认值
+	if config.LLMSummaryTimeout <= 0 {
+		config.LLMSummaryTimeout = 10
+	}
+
+	var summarizeFn LLMSummaryFunc
+	if len(llmSummarize) > 0 && llmSummarize[0] != nil {
+		summarizeFn = llmSummarize[0]
+	}
+
 	return &Compressor{
-		modelClient: modelClient,
-		config:      config,
+		modelClient:  modelClient,
+		config:       config,
+		llmSummarize: summarizeFn,
 	}, nil
 }
 
@@ -432,54 +457,150 @@ func (c *Compressor) extractRecentToolMessages(messages []model.Message, count i
 	return toolMessages
 }
 
-// mergeMessagesInOrder 按顺序合并消息
-// 确保工具调用和结果的顺序正确
+// mergeMessagesInOrder 按原始消息顺序合并recent和toolMessages
+// 确保消息按照它们在原始对话中的出现顺序排列
 func (c *Compressor) mergeMessagesInOrder(base, recent, toolMessages []model.Message) []model.Message {
-	// 创建工具消息的索引
-	toolMsgSet := make(map[int]bool)
+	if len(recent) == 0 && len(toolMessages) == 0 {
+		return base
+	}
+
+	// 使用消息内容哈希来标识消息，记录每条消息在原始otherMessages中的位置
+	type indexedMsg struct {
+		msg   model.Message
+		order int // 基于内容的唯一标识来推断顺序
+	}
+
+	// 收集所有需要合并的消息
+	var allMsgs []indexedMsg
+
+	// 为recent消息分配顺序：使用消息在recent切片中的位置
+	for i, msg := range recent {
+		allMsgs = append(allMsgs, indexedMsg{msg: msg, order: i})
+	}
+
+	// 为toolMessages分配顺序：需要找到它们在recent中的相对位置
+	// 工具调用消息应该在对应的assistant消息之后
+	toolOffset := len(recent)
 	for i, msg := range toolMessages {
-		toolMsgSet[i] = true
-		_ = msg // 避免未使用警告
-	}
-
-	// 将recent和toolMessages合并，按原始顺序
-	// 这里简化处理：先添加recent，再添加toolMessages
-	// 实际应用中可能需要更复杂的排序逻辑
-
-	result := append(base, recent...)
-
-	// 去重：避免重复添加已经在recent中的工具消息
-	seenToolCallIDs := make(map[string]bool)
-	for _, msg := range recent {
+		// 检查这条工具消息是否已经在recent中存在（避免重复）
+		isDuplicate := false
 		if msg.Role == model.RoleTool {
-			seenToolCallIDs[msg.ToolCallID] = true
-		}
-	}
-
-	for _, msg := range toolMessages {
-		if msg.Role == model.RoleTool && !seenToolCallIDs[msg.ToolCallID] {
-			result = append(result, msg)
-		} else if msg.Role == model.RoleAssistant && len(msg.ToolCalls) > 0 {
-			// 检查工具调用是否已经存在
-			allExists := true
-			for _, tc := range msg.ToolCalls {
-				if !seenToolCallIDs[tc.ID] {
-					allExists = false
+			for _, rMsg := range recent {
+				if rMsg.Role == model.RoleTool && rMsg.ToolCallID == msg.ToolCallID {
+					isDuplicate = true
 					break
 				}
 			}
-			if !allExists {
-				result = append(result, msg)
+		} else if msg.Role == model.RoleAssistant && len(msg.ToolCalls) > 0 {
+			// 检查assistant消息的工具调用是否已在recent中
+			for _, rMsg := range recent {
+				if rMsg.Role == model.RoleAssistant && len(rMsg.ToolCalls) > 0 {
+					for _, tc := range msg.ToolCalls {
+						for _, rtc := range rMsg.ToolCalls {
+							if tc.ID == rtc.ID {
+								isDuplicate = true
+								break
+							}
+						}
+						if isDuplicate {
+							break
+						}
+					}
+				}
+				if isDuplicate {
+					break
+				}
 			}
 		}
+
+		if !isDuplicate {
+			allMsgs = append(allMsgs, indexedMsg{msg: msg, order: toolOffset + i})
+		}
+	}
+
+	// 按order排序（稳定排序保持相同order的相对顺序）
+	// 由于我们按顺序添加，已经是排序好的，直接追加到base即可
+	result := make([]model.Message, len(base), len(base)+len(allMsgs))
+	copy(result, base)
+	for _, im := range allMsgs {
+		result = append(result, im.msg)
 	}
 
 	return result
 }
 
 // generateContextSummary 生成上下文摘要
-// 提取关键信息，生成简洁的摘要
+// 先使用规则提取生成基础摘要，然后尝试用LLM生成语义摘要
+// 如果LLM失败则回退到规则提取结果
 func (c *Compressor) generateContextSummary(messages []model.Message, taskState *state.TaskState) string {
+	// 先用规则提取方法生成基础摘要（作为降级方案）
+	ruleSummary := c.generateRuleBasedSummary(messages, taskState)
+
+	// 尝试调用LLM生成语义摘要
+	if c.llmSummarize != nil {
+		prompt := buildSummaryPrompt("简洁", messages, taskState)
+		llmSummary := c.callLLMSummary(messages, prompt)
+		if llmSummary != "" {
+			// LLM成功，截断到最大长度
+			if len(llmSummary) > c.config.SummaryMaxLength {
+				llmSummary = llmSummary[:c.config.SummaryMaxLength] + "..."
+			}
+			return llmSummary
+		}
+	}
+
+	// LLM失败或未配置，使用规则摘要
+	if len(ruleSummary) > c.config.SummaryMaxLength {
+		ruleSummary = ruleSummary[:c.config.SummaryMaxLength] + "..."
+	}
+	return ruleSummary
+}
+
+// generateDetailedSummary 生成详细摘要
+// 用于深度压缩时提供更完整的上下文信息
+// 先使用规则提取，然后尝试用LLM生成语义摘要
+func (c *Compressor) generateDetailedSummary(messages []model.Message, taskState *state.TaskState) string {
+	// 先用规则提取方法生成基础摘要（作为降级方案）
+	ruleSummary := c.generateRuleBasedDetailedSummary(messages, taskState)
+
+	// 尝试调用LLM生成语义摘要
+	if c.llmSummarize != nil {
+		prompt := buildSummaryPrompt("详细", messages, taskState)
+		llmSummary := c.callLLMSummary(messages, prompt)
+		if llmSummary != "" {
+			// LLM成功，截断到最大长度
+			if len(llmSummary) > c.config.SummaryMaxLength {
+				llmSummary = llmSummary[:c.config.SummaryMaxLength] + "..."
+			}
+			return llmSummary
+		}
+	}
+
+	// LLM失败或未配置，使用规则摘要
+	if len(ruleSummary) > c.config.SummaryMaxLength {
+		ruleSummary = ruleSummary[:c.config.SummaryMaxLength] + "..."
+	}
+	return ruleSummary
+}
+
+// callLLMSummary 调用LLM生成摘要，带超时控制
+// 返回空字符串表示失败（调用方应回退到规则提取）
+func (c *Compressor) callLLMSummary(messages []model.Message, prompt string) string {
+	timeout := time.Duration(c.config.LLMSummaryTimeout) * time.Second
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	result := c.llmSummarize(ctx, messages, prompt)
+	return result
+}
+
+// generateRuleBasedSummary 使用规则提取生成基础上下文摘要
+// 这是LLM摘要的降级方案
+func (c *Compressor) generateRuleBasedSummary(messages []model.Message, taskState *state.TaskState) string {
 	var summary strings.Builder
 
 	// 1. 从任务状态获取基本信息
@@ -509,18 +630,12 @@ func (c *Compressor) generateContextSummary(messages []model.Message, taskState 
 		}
 	}
 
-	// 限制摘要长度
-	result := summary.String()
-	if len(result) > c.config.SummaryMaxLength {
-		result = result[:c.config.SummaryMaxLength] + "..."
-	}
-
-	return result
+	return summary.String()
 }
 
-// generateDetailedSummary 生成详细摘要
-// 用于深度压缩时提供更完整的上下文信息
-func (c *Compressor) generateDetailedSummary(messages []model.Message, taskState *state.TaskState) string {
+// generateRuleBasedDetailedSummary 使用规则提取生成详细摘要
+// 这是LLM摘要的降级方案，用于深度压缩
+func (c *Compressor) generateRuleBasedDetailedSummary(messages []model.Message, taskState *state.TaskState) string {
 	var summary strings.Builder
 
 	// 1. 任务目标和状态
@@ -580,13 +695,77 @@ func (c *Compressor) generateDetailedSummary(messages []model.Message, taskState
 		}
 	}
 
-	// 限制摘要长度
-	result := summary.String()
-	if len(result) > c.config.SummaryMaxLength {
-		result = result[:c.config.SummaryMaxLength] + "..."
+	return summary.String()
+}
+
+// buildSummaryPrompt 构建LLM摘要生成的提示词
+// level: "简洁" 或 "详细"
+func buildSummaryPrompt(level string, messages []model.Message, taskState *state.TaskState) string {
+	var prompt strings.Builder
+
+	if level == "简洁" {
+		prompt.WriteString("请根据以下对话历史，生成一份简洁的中文摘要。摘要应包含：已完成的工作、当前状态、下一步计划、关键发现。\n\n")
+	} else {
+		prompt.WriteString("请根据以下对话历史，生成一份详细的中文摘要。摘要应包含：已完成的工作（列出具体步骤）、当前状态、下一步计划、关键发现、技术决策、遇到的问题及解决方案。\n\n")
 	}
 
-	return result
+	// 添加任务状态信息
+	if taskState != nil {
+		prompt.WriteString(fmt.Sprintf("任务目标: %s\n", taskState.Task.Goal))
+		prompt.WriteString(fmt.Sprintf("当前状态: %s\n", taskState.Task.Status))
+		prompt.WriteString(fmt.Sprintf("当前阶段: %s\n", taskState.Progress.CurrentPhase))
+		prompt.WriteString("\n")
+	}
+
+	// 添加消息摘要（只发送角色+内容前200字+工具调用名，避免消耗过多token）
+	prompt.WriteString("对话历史摘要:\n")
+	for i, msg := range messages {
+		if i > 50 {
+			// 最多50条消息摘要
+			prompt.WriteString("...(省略更早的消息)\n")
+			break
+		}
+
+		content := msg.Content
+		if len(content) > 200 {
+			content = content[:200] + "..."
+		}
+
+		switch msg.Role {
+		case model.RoleSystem:
+			prompt.WriteString(fmt.Sprintf("[系统] %s\n", content))
+		case model.RoleUser:
+			prompt.WriteString(fmt.Sprintf("[用户] %s\n", content))
+		case model.RoleAssistant:
+			prompt.WriteString(fmt.Sprintf("[助手] %s", content))
+			if len(msg.ToolCalls) > 0 {
+				toolNames := make([]string, len(msg.ToolCalls))
+				for j, tc := range msg.ToolCalls {
+					toolNames[j] = tc.Function.Name
+				}
+				prompt.WriteString(fmt.Sprintf(" [调用工具: %s]", strings.Join(toolNames, ", ")))
+			}
+			prompt.WriteString("\n")
+		case model.RoleTool:
+			resultSummary := content
+			if len(resultSummary) > 100 {
+				resultSummary = resultSummary[:100] + "..."
+			}
+			prompt.WriteString(fmt.Sprintf("[工具结果 %s] %s\n", msg.Name, resultSummary))
+		}
+	}
+
+	prompt.WriteString("\n请直接输出摘要内容，不要包含额外的格式标记。")
+
+	return prompt.String()
+}
+
+// SetLLMSummarize 设置LLM摘要生成函数
+// 用于在创建Compressor后注入LLM能力
+func (c *Compressor) SetLLMSummarize(fn LLMSummaryFunc) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.llmSummarize = fn
 }
 
 // ExtractKeyInfo 提取关键信息
@@ -616,7 +795,11 @@ type KeyInfo struct {
 func (c *Compressor) extractKeyDecisions(messages []model.Message) []string {
 	var decisions []string
 
-	keywords := []string{"决定", "选择", "采用", "使用", "方案", "策略", "decision", "choose", "select", "use"}
+	keywords := []string{
+		"决定", "选择", "采用", "使用", "方案", "策略",
+		"decision", "choose", "select", "use", "decided", "will use", "approach", "strategy",
+		"fix", "fixed", "implement", "implemented", "resolve", "resolved",
+	}
 
 	for _, msg := range messages {
 		if msg.Role != model.RoleAssistant {
@@ -674,26 +857,51 @@ func (c *Compressor) extractRecentActions(messages []model.Message, count int) [
 }
 
 // extractToolHistory 提取工具调用历史
+// 保留最近N次调用（按时间倒序），最多20条记录
+// 格式：工具名(参数摘要) [第N次调用]
 func (c *Compressor) extractToolHistory(messages []model.Message) []string {
-	var history []string
-	seen := make(map[string]bool)
+	const maxEntries = 20
 
-	for _, msg := range messages {
+	// 收集所有工具调用，记录每个工具名的调用次数（从后向前计数）
+	type toolEntry struct {
+		text      string
+		callIndex int // 该工具名的第几次调用（从后向前计数）
+	}
+	var entries []toolEntry
+	toolCallCounts := make(map[string]int) // 工具名 -> 从后向前的累计调用次数
+
+	// 从后向前遍历，保留最近的调用
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
 		if msg.Role == model.RoleAssistant && len(msg.ToolCalls) > 0 {
 			for _, tc := range msg.ToolCalls {
-				key := tc.Function.Name
-				if !seen[key] {
-					// 解析参数摘要
-					argsSummary := c.summarizeArguments(tc.Function.Arguments)
-					entry := fmt.Sprintf("%s(%s)", tc.Function.Name, argsSummary)
-					history = append(history, entry)
-					seen[key] = true
+				toolCallCounts[tc.Function.Name]++
+				argsSummary := c.summarizeArguments(tc.Function.Arguments)
+				entry := toolEntry{
+					text:      fmt.Sprintf("%s(%s) [第%d次调用]", tc.Function.Name, argsSummary, toolCallCounts[tc.Function.Name]),
+					callIndex: toolCallCounts[tc.Function.Name],
 				}
+				entries = append(entries, entry)
 			}
 		}
 	}
 
-	return history
+	// entries 是按时间倒序的，反转为正序
+	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
+		entries[i], entries[j] = entries[j], entries[i]
+	}
+
+	// 限制最多 maxEntries 条
+	if len(entries) > maxEntries {
+		entries = entries[len(entries)-maxEntries:]
+	}
+
+	result := make([]string, len(entries))
+	for i, e := range entries {
+		result[i] = e.text
+	}
+
+	return result
 }
 
 // extractSentencesWithKeyword 提取包含关键词的句子

@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/Attect/MukaAI/internal/model"
 	"github.com/Attect/MukaAI/internal/state"
@@ -674,5 +676,442 @@ func createAssistantMessageWithToolCalls(content string, toolCalls []model.ToolC
 		Role:      model.RoleAssistant,
 		Content:   content,
 		ToolCalls: toolCalls,
+	}
+}
+
+// === C1: 中英文关键词测试 ===
+
+func TestExtractKeyDecisions_EnglishKeywords(t *testing.T) {
+	config := &model.Config{
+		Endpoint:    "http://localhost:8080/v1/",
+		APIKey:      "test-key",
+		ModelName:   "test-model",
+		ContextSize: 4096,
+	}
+	client, _ := model.NewClient(config)
+	compressor, _ := NewCompressor(client, nil)
+
+	tests := []struct {
+		name      string
+		message   string
+		wantMatch bool
+	}{
+		{"中文决定", "我决定使用Go语言实现", true},
+		{"中文选择", "选择Gin框架作为Web框架", true},
+		{"中文方案", "这是一个好的方案", true},
+		{"英文decision", "I made the decision to use REST API", true},
+		{"英文decided", "We decided to implement caching", true},
+		{"英文will use", "I will use PostgreSQL for storage", true},
+		{"英文approach", "The approach we take is microservices", true},
+		{"英文fix", "I will fix the authentication bug", true},
+		{"英文fixed", "The issue has been fixed in the latest commit", true},
+		{"英文implement", "I plan to implement rate limiting", true},
+		{"英文resolved", "The conflict has been resolved", true},
+		{"无关键词", "This is a normal message", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			messages := []model.Message{
+				model.NewAssistantMessage(tt.message),
+			}
+			decisions := compressor.ExtractKeyInfo(messages).Decisions
+			if tt.wantMatch && len(decisions) == 0 {
+				t.Errorf("Expected to extract decision from %q, got none", tt.message)
+			}
+			if !tt.wantMatch && len(decisions) > 0 {
+				t.Errorf("Did not expect decision from %q, got: %v", tt.message, decisions)
+			}
+		})
+	}
+}
+
+// === C2: LLM摘要测试（使用mock） ===
+
+// mockLLMSummaryFunc 创建mock LLM摘要函数
+func mockLLMSummaryFunc(returnValue string, callCount *int) LLMSummaryFunc {
+	return func(ctx context.Context, messages []model.Message, prompt string) string {
+		if callCount != nil {
+			*callCount++
+		}
+		return returnValue
+	}
+}
+
+// mockLLMSummaryFuncWithError 创建mock LLM摘要函数（模拟失败）
+func mockLLMSummaryFuncWithError() LLMSummaryFunc {
+	return func(ctx context.Context, messages []model.Message, prompt string) string {
+		return "" // 模拟LLM失败
+	}
+}
+
+// mockLLMSummaryFuncWithDelay 创建mock LLM摘要函数（模拟超时）
+func mockLLMSummaryFuncWithDelay() LLMSummaryFunc {
+	return func(ctx context.Context, messages []model.Message, prompt string) string {
+		select {
+		case <-ctx.Done():
+			return "" // 超时返回空
+		case <-time.After(30 * time.Second):
+			return "delayed summary"
+		}
+	}
+}
+
+func TestCompressor_LLMSummarySuccess(t *testing.T) {
+	config := &model.Config{
+		Endpoint:    "http://localhost:8080/v1/",
+		APIKey:      "test-key",
+		ModelName:   "test-model",
+		ContextSize: 500,
+	}
+	client, _ := model.NewClient(config)
+
+	compressorConfig := &CompressorConfig{
+		TriggerThreshold:             0.8,
+		MinMessagesToKeep:            5,
+		MaxMessagesToKeep:            10,
+		KeepRecentToolCalls:          2,
+		SummaryMaxLength:             1000,
+		LLMSummaryTimeout:            5,
+		EnableProgressiveCompression: true,
+	}
+
+	callCount := 0
+	mockSummary := "LLM摘要: 已完成用户登录功能，当前正在进行订单模块开发。"
+	compressor, _ := NewCompressor(client, compressorConfig, mockLLMSummaryFunc(mockSummary, &callCount))
+
+	taskState := state.NewTaskState("test-task", "测试任务")
+	result, err := compressor.Compress(generateLargeMessages(50), taskState)
+	if err != nil {
+		t.Fatalf("Compress() error = %v", err)
+	}
+
+	if !result.WasCompressed {
+		t.Error("Expected compression to occur")
+	}
+
+	// 验证LLM被调用了
+	if callCount == 0 {
+		t.Error("Expected LLM summary to be called")
+	}
+
+	// 验证摘要包含LLM生成的内容
+	if result.Summary != mockSummary {
+		t.Errorf("Summary = %q, want %q", result.Summary, mockSummary)
+	}
+}
+
+func TestCompressor_LLMSummaryFallback(t *testing.T) {
+	config := &model.Config{
+		Endpoint:    "http://localhost:8080/v1/",
+		APIKey:      "test-key",
+		ModelName:   "test-model",
+		ContextSize: 500,
+	}
+	client, _ := model.NewClient(config)
+
+	compressorConfig := &CompressorConfig{
+		TriggerThreshold:             0.8,
+		MinMessagesToKeep:            5,
+		MaxMessagesToKeep:            10,
+		KeepRecentToolCalls:          2,
+		SummaryMaxLength:             1000,
+		LLMSummaryTimeout:            5,
+		EnableProgressiveCompression: true,
+	}
+
+	// 使用会失败的mock
+	compressor, _ := NewCompressor(client, compressorConfig, mockLLMSummaryFuncWithError())
+
+	taskState := state.NewTaskState("test-task", "测试任务")
+	taskState.AddDecision("决定使用Go语言实现")
+	result, err := compressor.Compress(generateLargeMessages(50), taskState)
+	if err != nil {
+		t.Fatalf("Compress() error = %v", err)
+	}
+
+	if !result.WasCompressed {
+		t.Error("Expected compression to occur")
+	}
+
+	// 验证回退到规则提取（摘要不为空）
+	if result.Summary == "" {
+		t.Error("Expected fallback to rule-based summary, got empty summary")
+	}
+}
+
+func TestCompressor_LLMSummaryTimeout(t *testing.T) {
+	config := &model.Config{
+		Endpoint:    "http://localhost:8080/v1/",
+		APIKey:      "test-key",
+		ModelName:   "test-model",
+		ContextSize: 500,
+	}
+	client, _ := model.NewClient(config)
+
+	compressorConfig := &CompressorConfig{
+		TriggerThreshold:             0.8,
+		MinMessagesToKeep:            5,
+		MaxMessagesToKeep:            10,
+		KeepRecentToolCalls:          2,
+		SummaryMaxLength:             1000,
+		LLMSummaryTimeout:            1, // 1秒超时
+		EnableProgressiveCompression: true,
+	}
+
+	// 使用会超时的mock
+	compressor, _ := NewCompressor(client, compressorConfig, mockLLMSummaryFuncWithDelay())
+
+	taskState := state.NewTaskState("test-task", "测试任务")
+	taskState.AddDecision("决定使用Go语言实现")
+
+	start := time.Now()
+	result, err := compressor.Compress(generateLargeMessages(50), taskState)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("Compress() error = %v", err)
+	}
+
+	// 超时应该快速返回，不应该等30秒
+	if elapsed > 5*time.Second {
+		t.Errorf("Compress took too long: %v, expected < 5s with 1s timeout", elapsed)
+	}
+
+	// 应该回退到规则提取
+	if result.Summary == "" {
+		t.Error("Expected fallback to rule-based summary after timeout")
+	}
+}
+
+func TestCompressor_NoLLMStillWorks(t *testing.T) {
+	config := &model.Config{
+		Endpoint:    "http://localhost:8080/v1/",
+		APIKey:      "test-key",
+		ModelName:   "test-model",
+		ContextSize: 500,
+	}
+	client, _ := model.NewClient(config)
+
+	compressorConfig := &CompressorConfig{
+		TriggerThreshold:             0.8,
+		MinMessagesToKeep:            5,
+		MaxMessagesToKeep:            10,
+		KeepRecentToolCalls:          2,
+		SummaryMaxLength:             1000,
+		EnableProgressiveCompression: true,
+	}
+
+	// 不传入LLM函数
+	compressor, _ := NewCompressor(client, compressorConfig)
+
+	taskState := state.NewTaskState("test-task", "测试任务")
+	taskState.AddDecision("决定使用Go语言实现")
+	result, err := compressor.Compress(generateLargeMessages(50), taskState)
+	if err != nil {
+		t.Fatalf("Compress() error = %v", err)
+	}
+
+	if !result.WasCompressed {
+		t.Error("Expected compression to occur")
+	}
+
+	// 规则提取应该仍然工作
+	if result.Summary == "" {
+		t.Error("Expected rule-based summary when no LLM function provided")
+	}
+}
+
+// === C3: 工具历史保留最近N次测试 ===
+
+func TestExtractToolHistory_KeepRecentN(t *testing.T) {
+	config := &model.Config{
+		Endpoint:    "http://localhost:8080/v1/",
+		APIKey:      "test-key",
+		ModelName:   "test-model",
+		ContextSize: 4096,
+	}
+	client, _ := model.NewClient(config)
+	compressor, _ := NewCompressor(client, nil)
+
+	// 创建多个相同工具的调用
+	messages := []model.Message{
+		model.NewSystemMessage("You are a helpful assistant."),
+		// 第一次 read_file 调用
+		createAssistantMessageWithToolCalls("", []model.ToolCall{
+			{ID: "call-1", Type: "function", Function: model.FunctionCall{Name: "read_file", Arguments: `{"path": "a.go"}`}},
+		}),
+		model.NewToolResultMessage("call-1", "read_file", "content of a.go"),
+		// 第二次 read_file 调用
+		createAssistantMessageWithToolCalls("", []model.ToolCall{
+			{ID: "call-2", Type: "function", Function: model.FunctionCall{Name: "read_file", Arguments: `{"path": "b.go"}`}},
+		}),
+		model.NewToolResultMessage("call-2", "read_file", "content of b.go"),
+		// 第三次 read_file 调用
+		createAssistantMessageWithToolCalls("", []model.ToolCall{
+			{ID: "call-3", Type: "function", Function: model.FunctionCall{Name: "read_file", Arguments: `{"path": "c.go"}`}},
+		}),
+		model.NewToolResultMessage("call-3", "read_file", "content of c.go"),
+		// write_file 调用
+		createAssistantMessageWithToolCalls("", []model.ToolCall{
+			{ID: "call-4", Type: "function", Function: model.FunctionCall{Name: "write_file", Arguments: `{"path": "d.go"}`}},
+		}),
+		model.NewToolResultMessage("call-4", "write_file", "file written"),
+	}
+
+	keyInfo := compressor.ExtractKeyInfo(messages)
+
+	// 应该保留所有工具调用（read_file 3次 + write_file 1次 = 4条）
+	if len(keyInfo.ToolHistory) != 4 {
+		t.Errorf("Expected 4 tool history entries, got %d: %v", len(keyInfo.ToolHistory), keyInfo.ToolHistory)
+	}
+
+	// 验证包含调用次数标记
+	for _, entry := range keyInfo.ToolHistory {
+		if !containsString(entry, "次调用") {
+			t.Errorf("Tool history entry should contain call count: %q", entry)
+		}
+	}
+
+	// 验证read_file有3次调用
+	readFileCount := 0
+	for _, entry := range keyInfo.ToolHistory {
+		if containsString(entry, "read_file") {
+			readFileCount++
+		}
+	}
+	if readFileCount != 3 {
+		t.Errorf("Expected 3 read_file entries, got %d", readFileCount)
+	}
+}
+
+func TestExtractToolHistory_Max20Limit(t *testing.T) {
+	config := &model.Config{
+		Endpoint:    "http://localhost:8080/v1/",
+		APIKey:      "test-key",
+		ModelName:   "test-model",
+		ContextSize: 4096,
+	}
+	client, _ := model.NewClient(config)
+	compressor, _ := NewCompressor(client, nil)
+
+	// 创建25次工具调用（超过20条限制）
+	var messages []model.Message
+	for i := 0; i < 25; i++ {
+		toolCallID := fmt.Sprintf("call-%d", i)
+		messages = append(messages,
+			createAssistantMessageWithToolCalls("", []model.ToolCall{
+				{ID: toolCallID, Type: "function", Function: model.FunctionCall{
+					Name:      fmt.Sprintf("tool_%d", i%5),
+					Arguments: fmt.Sprintf(`{"arg": "value_%d"}`, i),
+				}},
+			}),
+			model.NewToolResultMessage(toolCallID, fmt.Sprintf("tool_%d", i%5), fmt.Sprintf("result_%d", i)),
+		)
+	}
+
+	keyInfo := compressor.ExtractKeyInfo(messages)
+
+	// 应该最多保留20条
+	if len(keyInfo.ToolHistory) > 20 {
+		t.Errorf("Expected at most 20 tool history entries, got %d", len(keyInfo.ToolHistory))
+	}
+}
+
+// === C4: 消息顺序测试 ===
+
+func TestMergeMessagesInOrder(t *testing.T) {
+	config := &model.Config{
+		Endpoint:    "http://localhost:8080/v1/",
+		APIKey:      "test-key",
+		ModelName:   "test-model",
+		ContextSize: 4096,
+	}
+	client, _ := model.NewClient(config)
+	compressor, _ := NewCompressor(client, nil)
+
+	base := []model.Message{
+		model.NewSystemMessage("system"),
+	}
+
+	recent := []model.Message{
+		model.NewUserMessage("user msg 1"),
+		model.NewAssistantMessage("assistant msg 1"),
+	}
+
+	toolMessages := []model.Message{
+		createAssistantMessageWithToolCalls("", []model.ToolCall{
+			{ID: "call-1", Type: "function", Function: model.FunctionCall{Name: "read_file", Arguments: `{}`}},
+		}),
+		model.NewToolResultMessage("call-1", "read_file", "result"),
+	}
+
+	result := compressor.mergeMessagesInOrder(base, recent, toolMessages)
+
+	// 应该有: system + user1 + assistant1 + tool_call + tool_result = 5
+	if len(result) != 5 {
+		t.Errorf("Expected 5 messages, got %d", len(result))
+	}
+
+	// 第一个应该是system消息
+	if result[0].Role != model.RoleSystem {
+		t.Errorf("First message should be system, got %s", result[0].Role)
+	}
+}
+
+// === C5: 配置可调测试 ===
+
+func TestConfigCompressorConfig(t *testing.T) {
+	// 测试config包的CompressorConfig
+	cfg := DefaultCompressorConfig()
+	if cfg.TriggerThreshold != 0.8 {
+		t.Errorf("Default TriggerThreshold = %f, want 0.8", cfg.TriggerThreshold)
+	}
+	if cfg.MinMessagesToKeep != 10 {
+		t.Errorf("Default MinMessagesToKeep = %d, want 10", cfg.MinMessagesToKeep)
+	}
+	if cfg.MaxMessagesToKeep != 20 {
+		t.Errorf("Default MaxMessagesToKeep = %d, want 20", cfg.MaxMessagesToKeep)
+	}
+	if cfg.KeepRecentToolCalls != 3 {
+		t.Errorf("Default KeepRecentToolCalls = %d, want 3", cfg.KeepRecentToolCalls)
+	}
+	if cfg.SummaryMaxLength != 2000 {
+		t.Errorf("Default SummaryMaxLength = %d, want 2000", cfg.SummaryMaxLength)
+	}
+	if cfg.LLMSummaryTimeout != 10 {
+		t.Errorf("Default LLMSummaryTimeout = %d, want 10", cfg.LLMSummaryTimeout)
+	}
+}
+
+// === SetLLMSummarize 测试 ===
+
+func TestSetLLMSummarize(t *testing.T) {
+	config := &model.Config{
+		Endpoint:    "http://localhost:8080/v1/",
+		APIKey:      "test-key",
+		ModelName:   "test-model",
+		ContextSize: 4096,
+	}
+	client, _ := model.NewClient(config)
+	compressor, _ := NewCompressor(client, nil)
+
+	// 初始时没有LLM函数
+	ctx := context.Background()
+	result := compressor.summarizeWithLLM(ctx, nil, "test")
+	if result != "" {
+		t.Error("Expected empty result when no LLM function set")
+	}
+
+	// 设置LLM函数
+	callCount := 0
+	compressor.SetLLMSummarize(mockLLMSummaryFunc("mock summary", &callCount))
+
+	result = compressor.summarizeWithLLM(ctx, nil, "test")
+	if result != "mock summary" {
+		t.Errorf("Expected 'mock summary', got %q", result)
+	}
+	if callCount != 1 {
+		t.Errorf("Expected 1 call, got %d", callCount)
 	}
 }

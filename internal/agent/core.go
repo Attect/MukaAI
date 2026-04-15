@@ -170,7 +170,7 @@ func NewAgent(config *Config) (*Agent, error) {
 	repetitionDetector := NewRepetitionDetector(DefaultRepetitionConfig())
 
 	// 初始化上下文压缩器
-	compressor, _ := NewCompressor(config.ModelClient, DefaultCompressorConfig())
+	compressor, _ := NewCompressor(config.ModelClient, DefaultCompressorConfig(), newLLMSummaryFunc(config.ModelClient))
 	// 注意：NewCompressor失败时compressor为nil，preIteration会回退到Truncate
 
 	// 初始化日志记录器

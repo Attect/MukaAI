@@ -11,15 +11,38 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// CompressorConfig 上下文压缩器配置
+type CompressorConfig struct {
+	TriggerThreshold    float64 `yaml:"trigger_threshold"`      // 触发压缩的上下文使用阈值（0.0-1.0），默认0.8
+	MinMessagesToKeep   int     `yaml:"min_messages_to_keep"`   // 压缩后保留的最小消息数量，默认10
+	MaxMessagesToKeep   int     `yaml:"max_messages_to_keep"`   // 压缩后保留的最大消息数量，默认20
+	KeepRecentToolCalls int     `yaml:"keep_recent_tool_calls"` // 保留最近N次工具调用，默认3
+	SummaryMaxLength    int     `yaml:"summary_max_length"`     // 摘要的最大长度（字符数），默认2000
+	LLMSummaryTimeout   int     `yaml:"llm_summary_timeout"`    // LLM摘要超时时间（秒），默认10
+}
+
+// DefaultCompressorConfig 返回默认的压缩器配置
+func DefaultCompressorConfig() CompressorConfig {
+	return CompressorConfig{
+		TriggerThreshold:    0.8,
+		MinMessagesToKeep:   10,
+		MaxMessagesToKeep:   20,
+		KeepRecentToolCalls: 3,
+		SummaryMaxLength:    2000,
+		LLMSummaryTimeout:   10,
+	}
+}
+
 // Config 完整的应用配置
 type Config struct {
-	Model   ModelConfig `yaml:"model"`
-	Agent   AgentConfig `yaml:"agent"`
-	State   StateConfig `yaml:"state"`
-	Tools   ToolsConfig `yaml:"tools"`
-	MCP     MCPConfig   `yaml:"mcp"`
-	LSP     LSPConfig   `yaml:"lsp"`
-	Logging LogConfig   `yaml:"logging"`
+	Model      ModelConfig      `yaml:"model"`
+	Agent      AgentConfig      `yaml:"agent"`
+	State      StateConfig      `yaml:"state"`
+	Tools      ToolsConfig      `yaml:"tools"`
+	MCP        MCPConfig        `yaml:"mcp"`
+	LSP        LSPConfig        `yaml:"lsp"`
+	Logging    LogConfig        `yaml:"logging"`
+	Compressor CompressorConfig `yaml:"compressor"`
 }
 
 // LogConfig 日志配置
@@ -140,6 +163,7 @@ func DefaultConfig() *Config {
 				"python":     {Command: "pylsp"},
 			},
 		},
+		Compressor: DefaultCompressorConfig(),
 	}
 }
 

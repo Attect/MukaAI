@@ -655,9 +655,9 @@ func TestInjector_InjectContext(t *testing.T) {
 		t.Errorf("InjectContext() result length = %d, want %d", len(result), len(messages)+1)
 	}
 
-	// 第二条消息应该是系统消息（上下文）
-	if result[1].Role != "system" {
-		t.Errorf("Injected message role = %q, want 'system'", result[1].Role)
+	// 第二条消息应该是用户消息（上下文注入使用user角色，兼容llama.cpp的Jinja模板）
+	if result[1].Role != "user" {
+		t.Errorf("Injected message role = %q, want 'user'", result[1].Role)
 	}
 
 	// 上下文内容应包含项目信息
