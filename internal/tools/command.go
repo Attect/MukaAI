@@ -743,3 +743,43 @@ func RegisterCommandToolsWithSecurity(registry *ToolRegistry, allowedCommands []
 	}
 	return nil
 }
+
+// RegisterCommandToolsWithSecurityAndEvaluator 注册带安全审查和评估器的命令执行工具
+// 扩展版本，支持：
+//   - 静态白名单快速通道
+//   - 动态白名单持久化
+//   - 危险模式快速检测
+//   - 安全评估器自动评估非白名单命令
+//
+// stateDir: 持久化目录，动态白名单存储于此（为空则不持久化）
+// evaluator: 安全评估器，用于LLM评估（为nil则非危险命令默认放行）
+func RegisterCommandToolsWithSecurityAndEvaluator(registry *ToolRegistry, allowedCommands []string, workDir string, stateDir string, evaluator SecurityEvaluator, userApproveFunc func(command, reason string) bool) error {
+	var checker *CommandSecurityChecker
+	if stateDir != "" {
+		checker = NewCommandSecurityCheckerWithState(workDir, allowedCommands, stateDir)
+	} else {
+		checker = NewCommandSecurityChecker(workDir, allowedCommands)
+	}
+
+	if userApproveFunc != nil {
+		checker.SetUserApproveFunc(userApproveFunc)
+	}
+
+	// 注入安全评估器
+	if evaluator != nil {
+		checker.SetEvaluator(evaluator)
+	}
+
+	execTool := NewExecuteCommandToolWithAllowedCommands(allowedCommands)
+	execTool.securityChecker = checker
+
+	shellTool := NewShellExecuteToolWithAllowedCommands(allowedCommands)
+	shellTool.securityChecker = checker
+
+	for _, tool := range []Tool{execTool, shellTool} {
+		if err := registry.RegisterTool(tool); err != nil {
+			return fmt.Errorf("failed to register tool %s: %w", tool.Name(), err)
+		}
+	}
+	return nil
+}

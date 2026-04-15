@@ -73,7 +73,7 @@ func runGUICommand() {
 	}
 
 	// 初始化工具注册中心
-	toolRegistry, err := initToolRegistry(workDir, cfg.Tools.AllowCommands)
+	toolRegistry, err := initToolRegistry(workDir, cfg.Tools.AllowCommands, stateDir, modelClient)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "初始化工具注册中心失败: %v\n", err)
 		os.Exit(1)

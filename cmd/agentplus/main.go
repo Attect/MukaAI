@@ -113,7 +113,7 @@ func runCLICommand() {
 		os.Exit(1)
 	}
 
-	toolRegistry, err := initToolRegistry(workDir, cfg.Tools.AllowCommands)
+	toolRegistry, err := initToolRegistry(workDir, cfg.Tools.AllowCommands, stateDir, modelClient)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error initializing tool registry: %v\n", err)
 		os.Exit(1)
@@ -375,7 +375,9 @@ func initModelClient(cfg *config.Config) (*model.Client, error) {
 // initToolRegistry 初始化工具注册中心
 // workDir: 工作目录
 // allowCommands: 允许执行的命令白名单，为空时不做限制
-func initToolRegistry(workDir string, allowCommands []string) (*tools.ToolRegistry, error) {
+// stateDir: 状态持久化目录，用于动态白名单存储
+// modelClient: 模型客户端，用于安全评估器（可为nil）
+func initToolRegistry(workDir string, allowCommands []string, stateDir string, modelClient *model.Client) (*tools.ToolRegistry, error) {
 	registry := tools.NewToolRegistry()
 
 	// 注册文件系统工具（带工作目录限制）
@@ -383,8 +385,8 @@ func initToolRegistry(workDir string, allowCommands []string) (*tools.ToolRegist
 		return nil, fmt.Errorf("failed to register filesystem tools: %w", err)
 	}
 
-	// 注册命令执行工具（带安全审查系统）
-	if err := tools.RegisterCommandToolsWithSecurity(registry, allowCommands, workDir, func(command, reason string) bool {
+	// 注册命令执行工具（带安全审查系统 + LLM安全评估器）
+	if err := tools.RegisterCommandToolsWithSecurityAndEvaluator(registry, allowCommands, workDir, stateDir, tools.NewSecurityAgentEvaluator(modelClient), func(command, reason string) bool {
 		fmt.Printf("\n\033[33m⚠ 命令安全确认\033[0m\n")
 		fmt.Printf("  命令: %s\n", command)
 		fmt.Printf("  原因: %s\n", reason)
