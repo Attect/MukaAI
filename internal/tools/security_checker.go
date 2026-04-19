@@ -45,6 +45,7 @@ type SecurityEvaluator interface {
 // 提取接口使 SecurityAgentEvaluator 可测试，无需依赖具体的 *model.Client
 type ModelCaller interface {
 	ChatCompletion(ctx context.Context, messages []model.Message, tools []model.Tool) (*model.ChatCompletionResponse, error)
+	ChatCompletionWithRetry(ctx context.Context, messages []model.Message, tools []model.Tool, retryConfig *model.RetryConfig) (*model.ChatCompletionResponse, error)
 }
 
 // SecurityAgentEvaluator 基于LLM的安全评估器
@@ -120,14 +121,23 @@ Respond ONLY with valid JSON in this exact format (no markdown, no extra text):
 
 	userPrompt := fmt.Sprintf("Evaluate this command: %s", fullCmdDisplay)
 
-	// 带超时调用LLM（5秒超时，fail-open避免阻塞）
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// 带超时和重试调用 LLM（60 秒超时，fail-open 避免阻塞）
+	// 调整超时时间以适配本地模型服务的响应特性
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	resp, err := e.modelClient.ChatCompletion(ctx, []model.Message{
+	// 使用带重试的请求
+	retryConfig := &model.RetryConfig{
+		MaxRetries:      3,
+		InitialDelay:    2 * time.Second,
+		MaxDelay:        30 * time.Second,
+		BackoffFactor:   2.0,
+		RetryableErrors: []string{"connection refused", "connection reset", "timeout", "deadline exceeded", "EOF"},
+	}
+	resp, err := e.modelClient.ChatCompletionWithRetry(ctx, []model.Message{
 		model.NewSystemMessage(systemPrompt),
 		model.NewUserMessage(userPrompt),
-	}, nil)
+	}, nil, retryConfig)
 	if err != nil {
 		// LLM调用失败，记录日志，返回nil让调用方使用默认行为（fail-open）
 		log.Printf("[SecurityEvaluator] LLM评估失败(fail-open): %v", err)

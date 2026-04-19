@@ -453,6 +453,11 @@ func (m *mockModelCaller) ChatCompletion(ctx context.Context, messages []model.M
 	return m.response, m.err
 }
 
+func (m *mockModelCaller) ChatCompletionWithRetry(ctx context.Context, messages []model.Message, tools []model.Tool, retryConfig *model.RetryConfig) (*model.ChatCompletionResponse, error) {
+	// 简单委托给 ChatCompletion
+	return m.ChatCompletion(ctx, messages, tools)
+}
+
 func (m *mockModelCaller) getCalled() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
