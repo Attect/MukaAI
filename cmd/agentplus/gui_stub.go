@@ -18,3 +18,8 @@ func runGUICommand() {
 	fmt.Fprintf(os.Stderr, "或使用 wails build 进行完整构建。\n")
 	os.Exit(1)
 }
+
+// runDefaultCommand CLI构建默认运行CLI模式
+func runDefaultCommand() {
+	runCLICommand()
+}

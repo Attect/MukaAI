@@ -1,7 +1,7 @@
 //go:build gui
 
-// Package main 提供MukaAI的GUI模式入口
-// 此文件仅在 gui 构建标签下编译，包含Wails GUI相关的初始化和启动逻辑。
+// Package main 提供 MukaAI 的 GUI 模式入口
+// 此文件仅在 gui 构建标签下编译，包含 Wails GUI 相关的初始化和启动逻辑。
 package main
 
 import (
@@ -12,7 +12,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/Attect/MukaAI"
+	mukaai "github.com/Attect/MukaAI"
 	"github.com/Attect/MukaAI/internal/agent"
 	"github.com/Attect/MukaAI/internal/config"
 	ctxpkg "github.com/Attect/MukaAI/internal/context"
@@ -27,22 +27,26 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 )
 
-// GUIOptions GUI模式的命令行参数
+// GUIOptions GUI 模式的命令行参数
 type GUIOptions struct {
 	ConfigPath string
 	WorkDir    string
+	// 新增字段：初始任务支持
+	InitialTask string // 初始任务描述
+	LogPath     string // 日志文件路径
+	AutoSend    bool   // 是否自动发送初始任务
 }
 
 // runGUICommand 运行 GUI 模式
-// 加载配置、初始化Agent和工具、创建Wails应用并启动
+// 加载配置、初始化 Agent 和工具、创建 Wails 应用并启动
 func runGUICommand() {
-	// 解析GUI子命令的参数（os.Args[2:]为gui之后的参数）
+	// 解析 GUI 子命令的参数（os.Args[2:]为 gui 之后的参数）
 	opts := parseGUIFlags()
 
-	// 加载配置（与CLI模式相同的配置加载逻辑）
+	// 加载配置（与 CLI 模式相同的配置加载逻辑）
 	cfg, err := config.LoadConfig(opts.ConfigPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "加载配置失败: %v\n", err)
+		fmt.Fprintf(os.Stderr, "加载配置失败：%v\n", err)
 		os.Exit(1)
 	}
 
@@ -54,28 +58,28 @@ func runGUICommand() {
 	// 获取绝对工作目录
 	workDir, err := cfg.GetAbsoluteWorkDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "获取工作目录失败: %v\n", err)
+		fmt.Fprintf(os.Stderr, "获取工作目录失败：%v\n", err)
 		os.Exit(1)
 	}
 
 	// 获取绝对状态目录
 	stateDir, err := cfg.GetAbsoluteStateDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "获取状态目录失败: %v\n", err)
+		fmt.Fprintf(os.Stderr, "获取状态目录失败：%v\n", err)
 		os.Exit(1)
 	}
 
 	// 初始化模型客户端
 	modelClient, err := initModelClient(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "初始化模型客户端失败: %v\n", err)
+		fmt.Fprintf(os.Stderr, "初始化模型客户端失败：%v\n", err)
 		os.Exit(1)
 	}
 
 	// 初始化工具注册中心
 	toolRegistry, err := initToolRegistry(workDir, cfg.Tools.AllowCommands, stateDir, modelClient)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "初始化工具注册中心失败: %v\n", err)
+		fmt.Fprintf(os.Stderr, "初始化工具注册中心失败：%v\n", err)
 		os.Exit(1)
 	}
 
@@ -87,11 +91,11 @@ func runGUICommand() {
 	}
 	stateManager, err := state.NewStateManagerWithCleanup(stateDir, cfg.State.AutoSave, cleanupConfig)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "初始化状态管理器失败: %v\n", err)
+		fmt.Fprintf(os.Stderr, "初始化状态管理器失败：%v\n", err)
 		os.Exit(1)
 	}
 
-	// 创建Agent实例
+	// 创建 Agent 实例
 	ag, err := agent.NewAgent(&agent.Config{
 		ModelClient:   modelClient,
 		ToolRegistry:  toolRegistry,
@@ -99,13 +103,14 @@ func runGUICommand() {
 		MaxIterations: cfg.Agent.MaxIterations,
 		PromptType:    agent.PromptTypeOrchestrator,
 		WorkDir:       workDir,
+		PromptsPath:   workDir + "/prompts", // 提示词文件目录
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "创建Agent失败: %v\n", err)
+		fmt.Fprintf(os.Stderr, "创建 Agent 失败：%v\n", err)
 		os.Exit(1)
 	}
 
-	// 创建Supervisor监督器（GUI模式默认启用）
+	// 创建 Supervisor 监督器（GUI 模式默认启用）
 	supInstance, err := supervisor.NewSupervisor(
 		modelClient,
 		toolRegistry,
@@ -133,10 +138,21 @@ func runGUICommand() {
 	injector := ctxpkg.NewInjectorFromContextSize(indexer, cfg.Model.ContextSize)
 	ag.SetContextInjector(injector)
 
-	// 创建GUI App实例
+	// 创建 GUI App 实例
 	app := gui.NewApp()
 	app.SetAgent(ag)
 	app.SetConfigPath(opts.ConfigPath)
+
+	// 设置命令行参数传递的初始任务和日志配置
+	if opts.InitialTask != "" {
+		log.Printf("Initial task configured: %s", opts.InitialTask)
+	}
+	if opts.LogPath != "" {
+		log.Printf("Log path configured: %s", opts.LogPath)
+	}
+	if opts.AutoSend {
+		log.Printf("Auto-send enabled")
+	}
 
 	// 创建终端管理器和 WebSocket 服务器
 	terminalManager := terminal.NewTerminalManager("", workDir)
@@ -147,11 +163,11 @@ func runGUICommand() {
 		log.Printf("Warning: failed to register terminal tools: %v", err)
 	}
 
-	// 创建StreamBridge，将Agent流式事件桥接到Wails前端事件系统
+	// 创建 StreamBridge，将 Agent 流式事件桥接到 Wails 前端事件系统
 	bridge := gui.NewStreamBridge(app)
 	ag.SetStreamHandler(bridge)
 
-	// 启动Wails应用
+	// 启动 Wails 应用
 	if err := wails.Run(&options.App{
 		Title:     "MukaAI",
 		Width:     1024,
@@ -173,6 +189,22 @@ func runGUICommand() {
 			} else {
 				app.SetTerminalWSUrl(wsServer.GetWSUrl())
 			}
+
+			// 如果配置了自动发送初始任务，在应用初始化后执行
+			if opts.AutoSend && opts.InitialTask != "" {
+				go func() {
+					// 等待一小段时间确保 GUI 完全加载
+					time.Sleep(2 * time.Second)
+
+					// 发送初始任务
+					if err := app.SendMessage(opts.InitialTask); err != nil {
+						log.Printf("Failed to send initial task: %v", err)
+						return
+					}
+
+					log.Printf("自动发送初始任务：%s", opts.InitialTask)
+				}()
+			}
 		},
 		Bind: []interface{}{
 			app,
@@ -182,22 +214,29 @@ func runGUICommand() {
 			WindowIsTranslucent:  false,
 		},
 	}); err != nil {
-		// 即使出错也要停止清理goroutine
+		// 即使出错也要停止清理 goroutine
 		stateManager.StopCleanup()
 		wsServer.Stop()
 		terminalManager.Stop()
-		fmt.Fprintf(os.Stderr, "启动GUI失败: %v\n", err)
+		fmt.Fprintf(os.Stderr, "启动 GUI 失败：%v\n", err)
 		os.Exit(1)
 	}
 
-	// 正常退出时停止清理goroutine
+	// 正常退出时停止清理 goroutine
 	stateManager.StopCleanup()
 	wsServer.Stop()
 	terminalManager.Stop()
 }
 
-// parseGUIFlags 解析GUI子命令的命令行参数
-// 从os.Args[2:]中解析，因为os.Args[1]是"gui"子命令
+// runDefaultCommand GUI构建默认运行GUI模式
+func runDefaultCommand() {
+	runGUICommand()
+}
+
+// parseGUIFlags 解析 GUI 子命令的命令行参数
+// 支持两种调用方式：
+// 1. mukaai-gui.exe [options] - 直接运行GUI
+// 2. mukaai gui [options] - 通过gui子命令运行
 func parseGUIFlags() *GUIOptions {
 	opts := &GUIOptions{}
 
@@ -207,14 +246,28 @@ func parseGUIFlags() *GUIOptions {
 	guiFlagSet.StringVar(&opts.WorkDir, "w", "", "工作目录")
 	guiFlagSet.StringVar(&opts.WorkDir, "workdir", "", "工作目录")
 
+	// 新增：初始任务相关参数
+	guiFlagSet.StringVar(&opts.InitialTask, "task", "", "初始任务描述")
+	guiFlagSet.StringVar(&opts.LogPath, "log-path", "", "日志文件路径（默认：ai/logs/gui-log-时间戳.log）")
+	guiFlagSet.BoolVar(&opts.AutoSend, "auto-send", false, "启动后自动发送初始任务")
+
 	guiFlagSet.Usage = func() {
 		fmt.Fprintf(os.Stderr, "MukaAI GUI Mode\n\n")
-		fmt.Fprintf(os.Stderr, "Usage: mukaai gui [options]\n\n")
+		fmt.Fprintf(os.Stderr, "Usage: mukaai-gui [options]\n")
+		fmt.Fprintf(os.Stderr, "       mukaai gui [options]\n\n")
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		guiFlagSet.PrintDefaults()
 	}
 
-	guiFlagSet.Parse(os.Args[2:])
+	// 判断调用方式：如果第一个参数是"gui"子命令，则从os.Args[2:]解析
+	// 否则从os.Args[1:]解析
+	var argsToParse []string
+	if len(os.Args) > 1 && os.Args[1] == "gui" {
+		argsToParse = os.Args[2:]
+	} else {
+		argsToParse = os.Args[1:]
+	}
+	guiFlagSet.Parse(argsToParse)
 
 	return opts
 }

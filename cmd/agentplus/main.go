@@ -66,10 +66,17 @@ func main() {
 			fmt.Printf("%s v%s\n", Name, Version)
 			return
 		}
+
+		// 检查是否为 cli 子命令（显式指定CLI模式）
+		if cmd == "cli" {
+			runCLICommand()
+			return
+		}
 	}
 
-	// 默认运行 CLI 模式
-	runCLICommand()
+	// 根据构建标签决定默认模式
+	// GUI构建默认启动GUI，CLI构建默认启动CLI
+	runDefaultCommand()
 }
 
 // runCLICommand 运行 CLI 模式
@@ -315,6 +322,9 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "\nGUI Mode Options:\n")
 	fmt.Fprintf(os.Stderr, "  -c, --config <file>               配置文件路径 (default: ./configs/config.yaml)\n")
 	fmt.Fprintf(os.Stderr, "  -w, --workdir <dir>               工作目录\n")
+	fmt.Fprintf(os.Stderr, "  --task <description>              初始任务描述\n")
+	fmt.Fprintf(os.Stderr, "  --log-path <file>                 日志文件路径\n")
+	fmt.Fprintf(os.Stderr, "  --auto-send                       启动后自动发送初始任务\n")
 	fmt.Fprintf(os.Stderr, "\nExamples:\n")
 	fmt.Fprintf(os.Stderr, "  # CLI 模式\n")
 	fmt.Fprintf(os.Stderr, "  mukaai \"创建一个Hello World程序\"\n")
