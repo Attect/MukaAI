@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -18,6 +19,7 @@ import (
 type Client struct {
 	config     *Config
 	httpClient *http.Client
+	mu         sync.RWMutex // 保护config字段的并发读写
 }
 
 // NewClient 创建新的模型客户端
@@ -39,36 +41,72 @@ func NewClient(config *Config) (*Client, error) {
 	}, nil
 }
 
+// getConfig 获取当前配置的快照（深拷贝）
+// 使用读锁保护，确保并发安全
+// 每个请求方法应在开头获取一次快照，在方法内使用快照保证单次请求内配置一致性
+func (c *Client) getConfig() *Config {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.config.Clone()
+}
+
+// UpdateConfig 运行时安全更新配置
+// 验证新配置后获取写锁替换config，仅支持model_name和context_size的热更新
+// endpoint和api_key变更需要重建httpClient，调用方应在热更新前保留当前值
+func (c *Client) UpdateConfig(newCfg *Config) error {
+	if err := newCfg.Validate(); err != nil {
+		return fmt.Errorf("配置验证失败: %w", err)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// 检测不支持热更新的字段变更
+	// endpoint变更需要重建httpClient，暂不支持运行时更新
+	if c.config.Endpoint != newCfg.Endpoint {
+		return fmt.Errorf("endpoint变更需要重启应用才能生效")
+	}
+	// api_key变更需要重建httpClient，暂不支持运行时更新
+	if c.config.APIKey != newCfg.APIKey {
+		return fmt.Errorf("api_key变更需要重启应用才能生效")
+	}
+
+	c.config = newCfg.Clone()
+	return nil
+}
+
 // ChatCompletion 发送聊天补全请求
 // ctx: 上下文，用于取消请求
 // messages: 消息历史
 // tools: 可用工具列表（可选）
 func (c *Client) ChatCompletion(ctx context.Context, messages []Message, tools []Tool) (*ChatCompletionResponse, error) {
+	cfg := c.getConfig()
 	req := ChatCompletionRequest{
-		Model:    c.config.ModelName,
+		Model:    cfg.ModelName,
 		Messages: messages,
 		Tools:    tools,
 		Stream:   false,
 	}
 
-	return c.doChatCompletion(ctx, &req)
+	return c.doChatCompletion(ctx, &req, cfg)
 }
 
 // ChatCompletionWithTemperature 发送带温度参数的聊天补全请求
 func (c *Client) ChatCompletionWithTemperature(ctx context.Context, messages []Message, tools []Tool, temperature float64) (*ChatCompletionResponse, error) {
+	cfg := c.getConfig()
 	req := ChatCompletionRequest{
-		Model:       c.config.ModelName,
+		Model:       cfg.ModelName,
 		Messages:    messages,
 		Tools:       tools,
 		Temperature: temperature,
 		Stream:      false,
 	}
 
-	return c.doChatCompletion(ctx, &req)
+	return c.doChatCompletion(ctx, &req, cfg)
 }
 
 // doChatCompletion 执行聊天补全请求
-func (c *Client) doChatCompletion(ctx context.Context, req *ChatCompletionRequest) (*ChatCompletionResponse, error) {
+// cfg: 配置快照，确保单次请求内配置一致性
+func (c *Client) doChatCompletion(ctx context.Context, req *ChatCompletionRequest, cfg *Config) (*ChatCompletionResponse, error) {
 	// 序列化请求
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -76,13 +114,13 @@ func (c *Client) doChatCompletion(ctx context.Context, req *ChatCompletionReques
 	}
 
 	// 创建HTTP请求
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.config.Endpoint+"chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", cfg.Endpoint+"chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, &RequestError{Operation: "create_request", Err: err}
 	}
 
 	// 设置请求头
-	c.setHeaders(httpReq)
+	c.setHeaders(httpReq, cfg)
 
 	// 发送请求
 	resp, err := c.httpClient.Do(httpReq)
@@ -120,14 +158,15 @@ func (c *Client) doChatCompletion(ctx context.Context, req *ChatCompletionReques
 // StreamChatCompletion 流式聊天补全
 // 返回一个通道，每次收到流式数据时发送到通道
 func (c *Client) StreamChatCompletion(ctx context.Context, messages []Message, tools []Tool) (<-chan StreamEvent, error) {
+	cfg := c.getConfig()
 	req := ChatCompletionRequest{
-		Model:    c.config.ModelName,
+		Model:    cfg.ModelName,
 		Messages: messages,
 		Tools:    tools,
 		Stream:   true,
 	}
 
-	return c.doStreamChatCompletion(ctx, &req)
+	return c.doStreamChatCompletion(ctx, &req, cfg)
 }
 
 // StreamEvent 流式事件
@@ -138,7 +177,8 @@ type StreamEvent struct {
 }
 
 // doStreamChatCompletion 执行流式聊天补全请求
-func (c *Client) doStreamChatCompletion(ctx context.Context, req *ChatCompletionRequest) (<-chan StreamEvent, error) {
+// cfg: 配置快照，确保单次请求内配置一致性
+func (c *Client) doStreamChatCompletion(ctx context.Context, req *ChatCompletionRequest, cfg *Config) (<-chan StreamEvent, error) {
 	// 序列化请求
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -146,13 +186,13 @@ func (c *Client) doStreamChatCompletion(ctx context.Context, req *ChatCompletion
 	}
 
 	// 创建HTTP请求
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.config.Endpoint+"chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", cfg.Endpoint+"chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, &RequestError{Operation: "create_request", Err: err}
 	}
 
 	// 设置请求头
-	c.setHeaders(httpReq)
+	c.setHeaders(httpReq, cfg)
 	httpReq.Header.Set("Accept", "text/event-stream")
 
 	// 发送请求
@@ -229,9 +269,10 @@ func (c *Client) processSSEStream(resp *http.Response, eventChan chan<- StreamEv
 }
 
 // setHeaders 设置HTTP请求头
-func (c *Client) setHeaders(req *http.Request) {
+// cfg: 配置快照，由调用方传入以确保单次请求内配置一致性
+func (c *Client) setHeaders(req *http.Request, cfg *Config) {
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.config.APIKey)
+	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 }
 
 // processThinkingTags 处理思考标签
@@ -283,9 +324,10 @@ func cleanThinkingTags(content string) string {
 	return strings.TrimSpace(content)
 }
 
-// GetConfig 获取客户端配置
+// GetConfig 获取客户端配置的快照（深拷贝）
+// 使用读锁保护，确保并发安全
 func (c *Client) GetConfig() *Config {
-	return c.config
+	return c.getConfig()
 }
 
 // CountTokens 估算消息的token数量
@@ -307,7 +349,8 @@ func (c *Client) CountTokens(messages []Message) int {
 
 // IsContextOverflow 检查是否超出上下文限制
 func (c *Client) IsContextOverflow(messages []Message) bool {
-	return c.CountTokens(messages) > c.config.ContextSize
+	cfg := c.getConfig()
+	return c.CountTokens(messages) > cfg.ContextSize
 }
 
 // RequestError 请求错误
@@ -341,4 +384,147 @@ func (e *APIError) Error() string {
 // 5xx服务器错误和429限流错误可重试，4xx客户端错误不可重试
 func (e *APIError) IsRetryable() bool {
 	return e.StatusCode >= 500 || e.StatusCode == 429
+}
+
+// RetryConfig 重试配置
+type RetryConfig struct {
+	MaxRetries      int           // 最大重试次数
+	InitialDelay    time.Duration // 初始重试延迟
+	MaxDelay        time.Duration // 最大重试延迟
+	BackoffFactor   float64       // 退避因子
+	RetryableErrors []string      // 可重试的错误类型
+}
+
+// DefaultRetryConfig 默认重试配置
+func DefaultRetryConfig() *RetryConfig {
+	return &RetryConfig{
+		MaxRetries:      5,
+		InitialDelay:    2 * time.Second,
+		MaxDelay:        60 * time.Second,
+		BackoffFactor:   2.0,
+		RetryableErrors: []string{"connection refused", "connection reset", "timeout", "deadline exceeded", "EOF"},
+	}
+}
+
+// isRetryableError 判断错误是否可重试
+func isRetryableError(err error, retryableErrors []string) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	for _, retryable := range retryableErrors {
+		if strings.Contains(strings.ToLower(errStr), strings.ToLower(retryable)) {
+			return true
+		}
+	}
+	// 检查API错误
+	if apiErr, ok := err.(*APIError); ok {
+		return apiErr.IsRetryable()
+	}
+	// 检查请求错误
+	if reqErr, ok := err.(*RequestError); ok {
+		return isRetryableError(reqErr.Err, retryableErrors)
+	}
+	return false
+}
+
+// StreamChatCompletionWithRetry 带重试的流式聊天补全
+func (c *Client) StreamChatCompletionWithRetry(ctx context.Context, messages []Message, tools []Tool, retryConfig *RetryConfig) (<-chan StreamEvent, error) {
+	if retryConfig == nil {
+		retryConfig = DefaultRetryConfig()
+	}
+
+	var lastErr error
+	delay := retryConfig.InitialDelay
+
+	for attempt := 0; attempt <= retryConfig.MaxRetries; attempt++ {
+		// 尝试建立连接
+		eventChan, err := c.StreamChatCompletion(ctx, messages, tools)
+		if err == nil {
+			// 成功，返回事件通道
+			return eventChan, nil
+		}
+
+		lastErr = err
+
+		// 检查是否可重试
+		if !isRetryableError(err, retryConfig.RetryableErrors) {
+			return nil, err
+		}
+
+		// 检查上下文是否已取消
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
+		// 最后一次尝试不等待
+		if attempt == retryConfig.MaxRetries {
+			break
+		}
+
+		// 等待后重试
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+		}
+
+		// 计算下次延迟（指数退避）
+		delay = time.Duration(float64(delay) * retryConfig.BackoffFactor)
+		if delay > retryConfig.MaxDelay {
+			delay = retryConfig.MaxDelay
+		}
+	}
+
+	return nil, fmt.Errorf("达到最大重试次数(%d)，最后错误: %w", retryConfig.MaxRetries, lastErr)
+}
+
+// ChatCompletionWithRetry 带重试的非流式聊天补全
+func (c *Client) ChatCompletionWithRetry(ctx context.Context, messages []Message, tools []Tool, retryConfig *RetryConfig) (*ChatCompletionResponse, error) {
+	if retryConfig == nil {
+		retryConfig = DefaultRetryConfig()
+	}
+
+	var lastErr error
+	delay := retryConfig.InitialDelay
+
+	for attempt := 0; attempt <= retryConfig.MaxRetries; attempt++ {
+		// 尝试请求
+		resp, err := c.ChatCompletion(ctx, messages, tools)
+		if err == nil {
+			return resp, nil
+		}
+
+		lastErr = err
+
+		// 检查是否可重试
+		if !isRetryableError(err, retryConfig.RetryableErrors) {
+			return nil, err
+		}
+
+		// 检查上下文是否已取消
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
+		// 最后一次尝试不等待
+		if attempt == retryConfig.MaxRetries {
+			break
+		}
+
+		// 等待后重试
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+		}
+
+		// 计算下次延迟（指数退避）
+		delay = time.Duration(float64(delay) * retryConfig.BackoffFactor)
+		if delay > retryConfig.MaxDelay {
+			delay = retryConfig.MaxDelay
+		}
+	}
+
+	return nil, fmt.Errorf("达到最大重试次数(%d)，最后错误: %w", retryConfig.MaxRetries, lastErr)
 }

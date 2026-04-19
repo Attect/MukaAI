@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Attect/MukaAI/internal/agent"
+	"github.com/Attect/MukaAI/internal/model"
 
 	"gopkg.in/yaml.v3"
 )
@@ -69,6 +70,7 @@ type App struct {
 	convStore      *ConversationStore // 对话持久化存储
 	configPath     string             // 配置文件路径，用于GetSettings/SaveSettings
 	terminalWSUrl  string             // 终端 WebSocket 连接地址
+	logPath        string             // 日志文件路径
 }
 
 // conversation 内部对话结构，包含消息列表和当前流式消息
@@ -222,18 +224,18 @@ func (a *App) SaveSettings(settings map[string]interface{}) error {
 	if _, ok := raw["model"]; !ok {
 		raw["model"] = make(map[string]interface{})
 	}
-	model := raw["model"].(map[string]interface{})
+	modelSection := raw["model"].(map[string]interface{})
 	if v, ok := settings["endpoint"]; ok {
-		model["endpoint"] = v
+		modelSection["endpoint"] = v
 	}
 	if v, ok := settings["api_key"]; ok {
-		model["api_key"] = v
+		modelSection["api_key"] = v
 	}
 	if v, ok := settings["model_name"]; ok {
-		model["model_name"] = v
+		modelSection["model_name"] = v
 	}
 	if v, ok := settings["context_size"]; ok {
-		model["context_size"] = v
+		modelSection["context_size"] = v
 	}
 
 	// 更新 agent 部分
@@ -267,6 +269,26 @@ func (a *App) SaveSettings(settings map[string]interface{}) error {
 	}
 	if err := os.WriteFile(configPath, outData, 0644); err != nil {
 		return fmt.Errorf("failed to write config: %w", err)
+	}
+
+	// 热更新：仅model_name和context_size变更可即时对后续推理生效
+	// endpoint和api_key变更需要重启（因为httpClient需要重建），热更新时会保留当前值
+	if a.agent != nil {
+		currentCfg := a.agent.GetModelConfig()
+		if currentCfg != nil {
+			// 使用当前config的endpoint和api_key，仅热更新model_name和context_size
+			newCfg := &model.Config{
+				Endpoint:    currentCfg.Endpoint, // 保持当前值，不允许热更新
+				APIKey:      currentCfg.APIKey,   // 保持当前值，不允许热更新
+				ModelName:   getString(modelSection, "model_name", currentCfg.ModelName),
+				ContextSize: getInt(modelSection, "context_size", currentCfg.ContextSize),
+			}
+
+			if err := a.agent.UpdateModelConfig(newCfg); err != nil {
+				// 热更新失败不影响文件保存，但需要通知前端显示警告
+				a.emit("settings:hot-update-warning", err.Error())
+			}
+		}
 	}
 
 	return nil
@@ -690,5 +712,53 @@ func (a *App) emit(event string, data ...interface{}) {
 
 	if emitter != nil {
 		emitter.Emit(event, data...)
+	}
+}
+
+// SetLogPath 设置日志文件路径
+// 由外部初始化代码调用，用于配置日志输出位置
+func (a *App) SetLogPath(path string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.logPath = path
+	fmt.Printf("[App] Log path configured: %s\n", path)
+}
+
+// GetLogPath 获取日志文件路径
+func (a *App) GetLogPath() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.logPath
+}
+
+// getString 从YAML map中安全提取字符串值，缺失或类型不匹配时返回默认值
+func getString(m map[string]interface{}, key string, defaultVal string) string {
+	v, ok := m[key]
+	if !ok {
+		return defaultVal
+	}
+	s, ok := v.(string)
+	if !ok {
+		return defaultVal
+	}
+	return s
+}
+
+// getInt 从YAML map中安全提取整数值，缺失或类型不匹配时返回默认值
+// YAML解析int可能产生int、float64或int64，需统一处理
+func getInt(m map[string]interface{}, key string, defaultVal int) int {
+	v, ok := m[key]
+	if !ok {
+		return defaultVal
+	}
+	switch n := v.(type) {
+	case int:
+		return n
+	case float64:
+		return int(n)
+	case int64:
+		return int(n)
+	default:
+		return defaultVal
 	}
 }

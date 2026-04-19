@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { getSettings, saveSettings } from "../wailsRuntime";
+import { getSettings, saveSettings, onEvent } from "../wailsRuntime";
 
 interface SettingsProps {
   visible: boolean;
@@ -30,12 +30,25 @@ export default function Settings({ visible, onClose }: SettingsProps): React.Rea
   const [form, setForm] = useState<SettingsForm>({ ...defaultForm });
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [messageType, setMessageType] = useState<"success" | "warning" | "error">("success");
 
   useEffect(() => {
     if (visible) {
       loadSettings();
     }
   }, [visible]);
+
+  // 监听热更新警告事件
+  useEffect(() => {
+    const unsub = onEvent("settings:hot-update-warning", (warning: string) => {
+      setMessage(warning);
+      setMessageType("warning");
+      setTimeout(() => setMessage(null), 6000);
+    });
+    return () => {
+      if (typeof unsub === "function") unsub();
+    };
+  }, []);
 
   const loadSettings = useCallback(async () => {
     setLoading(true);
@@ -71,10 +84,12 @@ export default function Settings({ visible, onClose }: SettingsProps): React.Rea
         max_iterations: form.max_iterations,
         work_dir: form.work_dir,
       });
-      setMessage("设置已保存。API端点/密钥修改需重启生效。");
+      setMessage("设置已保存。模型名称和上下文大小已即时生效；API端点/密钥修改需重启生效。");
+      setMessageType("success");
       setTimeout(() => setMessage(null), 4000);
     } catch (err: any) {
       setMessage("保存失败: " + (err?.message || String(err)));
+      setMessageType("error");
     }
     setLoading(false);
   }, [form]);
@@ -181,7 +196,11 @@ export default function Settings({ visible, onClose }: SettingsProps): React.Rea
         />
 
         {message && (
-          <div style={{ marginTop: "0.75rem", fontSize: "0.8rem", color: message.startsWith("保存失败") ? "var(--text-red)" : "#4ade80" }}>
+          <div style={{
+            marginTop: "0.75rem",
+            fontSize: "0.8rem",
+            color: messageType === "error" ? "var(--text-red)" : messageType === "warning" ? "#fbbf24" : "#4ade80",
+          }}>
             {message}
           </div>
         )}

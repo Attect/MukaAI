@@ -94,6 +94,7 @@ type Config struct {
 	SystemPrompt  string              // 自定义系统提示词（可选）
 	PromptType    SystemPromptType    // 提示词类型（默认orchestrator）
 	WorkDir       string              // 实际工作目录，用于注入到提示词（可选，为空时回退到os.Getwd()）
+	PromptsPath   string              // 提示词文件目录（可选，为空则使用内置提示词）
 
 	// 校验和修正组件配置
 	Reviewer        *Reviewer            // 审查器（可选，会自动创建）
@@ -127,6 +128,11 @@ func NewAgent(config *Config) (*Agent, error) {
 
 	if config.StateManager == nil {
 		return nil, fmt.Errorf("state manager is required")
+	}
+
+	// 设置提示词文件路径
+	if config.PromptsPath != "" {
+		SetPromptsBasePath(config.PromptsPath)
 	}
 
 	// 设置默认值
@@ -497,6 +503,17 @@ func (a *Agent) preIteration(totalIterations int) {
 				a.history.Clear()
 				a.history.AddMessages(result.CompressedMessages)
 
+				// 通知前端压缩事件
+				if a.streamHandler != nil {
+					a.streamHandler.OnCompression(
+						result.OriginalCount,
+						result.CompressedCount,
+						result.OriginalTokens,
+						result.CompressedTokens,
+						result.Summary,
+					)
+				}
+
 				if a.logger != nil {
 					a.logger.LogMessage("system", fmt.Sprintf(
 						"[上下文压缩] 使用率: %.1f%%, 消息: %d→%d, token: %d→%d, 压缩比: %.1f%%, 摘要长度: %d",
@@ -597,6 +614,8 @@ func (a *Agent) isRetryableError(err error) bool {
 		"wsarecv:", // Windows socket recv error
 		"wsasend:", // Windows socket send error
 		"connection refused",
+		"actively refused",            // Windows: target machine actively refused
+		"no connection could be made", // Windows connection establishment failure
 		"connection reset",
 		"forcibly closed", // connection forcibly closed
 		"broken pipe",
@@ -866,6 +885,33 @@ func (a *Agent) Close() error {
 	}
 
 	return nil
+}
+
+// GetModelConfig 获取当前模型配置的快照
+// 返回深拷贝，调用方可安全读取和修改
+func (a *Agent) GetModelConfig() *model.Config {
+	a.mu.RLock()
+	client := a.modelClient
+	a.mu.RUnlock()
+
+	if client == nil {
+		return nil
+	}
+	return client.GetConfig()
+}
+
+// UpdateModelConfig 运行时更新模型配置（热更新）
+// 透传给model.Client.UpdateConfig，仅支持model_name和context_size的即时生效
+// 注意：endpoint和api_key变更会返回错误，需要重启应用
+func (a *Agent) UpdateModelConfig(newCfg *model.Config) error {
+	a.mu.RLock()
+	client := a.modelClient
+	a.mu.RUnlock()
+
+	if client == nil {
+		return fmt.Errorf("model client not initialized")
+	}
+	return client.UpdateConfig(newCfg)
 }
 
 // handleRepetition 处理模型输出重复的情况

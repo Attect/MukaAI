@@ -524,3 +524,70 @@ func TestIsContextOverflow(t *testing.T) {
 		t.Error("应检测到上下文溢出")
 	}
 }
+
+// TestUpdateConfig_HotUpdateRestrictions 测试热更新限制
+// endpoint和api_key变更应返回错误，model_name和context_size可以正常热更新
+func TestUpdateConfig_HotUpdateRestrictions(t *testing.T) {
+	originalCfg := &Config{
+		Endpoint:    "http://localhost:11453/v1/",
+		APIKey:      "original-key",
+		ModelName:   "original-model",
+		ContextSize: 200000,
+	}
+
+	client, err := NewClient(originalCfg)
+	if err != nil {
+		t.Fatalf("创建客户端失败: %v", err)
+	}
+
+	// 测试1：仅更新model_name和context_size应成功
+	newCfg := &Config{
+		Endpoint:    originalCfg.Endpoint,
+		APIKey:      originalCfg.APIKey,
+		ModelName:   "new-model",
+		ContextSize: 100000,
+	}
+	if err := client.UpdateConfig(newCfg); err != nil {
+		t.Errorf("更新model_name和context_size应成功，但得到错误: %v", err)
+	}
+
+	// 验证配置已更新
+	updatedCfg := client.GetConfig()
+	if updatedCfg.ModelName != "new-model" {
+		t.Errorf("ModelName应为new-model，得到: %s", updatedCfg.ModelName)
+	}
+	if updatedCfg.ContextSize != 100000 {
+		t.Errorf("ContextSize应为100000，得到: %d", updatedCfg.ContextSize)
+	}
+
+	// 测试2：变更endpoint应返回错误
+	endpointChangeCfg := &Config{
+		Endpoint:    "http://new-endpoint:8080/v1/",
+		APIKey:      originalCfg.APIKey,
+		ModelName:   "new-model",
+		ContextSize: 100000,
+	}
+	if err := client.UpdateConfig(endpointChangeCfg); err == nil {
+		t.Error("变更endpoint应返回错误，但更新成功")
+	}
+
+	// 测试3：变更api_key应返回错误
+	apiKeyChangeCfg := &Config{
+		Endpoint:    originalCfg.Endpoint,
+		APIKey:      "new-key",
+		ModelName:   "new-model",
+		ContextSize: 100000,
+	}
+	if err := client.UpdateConfig(apiKeyChangeCfg); err == nil {
+		t.Error("变更api_key应返回错误，但更新成功")
+	}
+
+	// 测试4：验证endpoint变更后配置未被修改
+	currentCfg := client.GetConfig()
+	if currentCfg.Endpoint != originalCfg.Endpoint {
+		t.Errorf("endpoint不应被修改，预期: %s，得到: %s", originalCfg.Endpoint, currentCfg.Endpoint)
+	}
+	if currentCfg.APIKey != originalCfg.APIKey {
+		t.Errorf("api_key不应被修改，预期: %s，得到: %s", originalCfg.APIKey, currentCfg.APIKey)
+	}
+}

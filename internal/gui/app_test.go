@@ -804,3 +804,115 @@ func containsSubstring(s, substr string) bool {
 	}
 	return false
 }
+
+// --- getString/getInt 辅助函数测试 ---
+
+func TestGetString(t *testing.T) {
+	m := map[string]interface{}{
+		"name":   "test-model",
+		"number": 42,
+	}
+
+	// 正常取值
+	if got := getString(m, "name", "default"); got != "test-model" {
+		t.Errorf("getString(name) = %s, want test-model", got)
+	}
+
+	// key不存在时返回默认值
+	if got := getString(m, "missing", "default"); got != "default" {
+		t.Errorf("getString(missing) = %s, want default", got)
+	}
+
+	// 值不是string时返回默认值
+	if got := getString(m, "number", "default"); got != "default" {
+		t.Errorf("getString(number) = %s, want default (type mismatch)", got)
+	}
+}
+
+func TestGetInt(t *testing.T) {
+	m := map[string]interface{}{
+		"int_val":    42,
+		"float_val":  float64(100),
+		"int64_val":  int64(200),
+		"string_val": "not-a-number",
+	}
+
+	// 从int取值
+	if got := getInt(m, "int_val", 0); got != 42 {
+		t.Errorf("getInt(int_val) = %d, want 42", got)
+	}
+
+	// 从float64取值
+	if got := getInt(m, "float_val", 0); got != 100 {
+		t.Errorf("getInt(float_val) = %d, want 100", got)
+	}
+
+	// 从int64取值
+	if got := getInt(m, "int64_val", 0); got != 200 {
+		t.Errorf("getInt(int64_val) = %d, want 200", got)
+	}
+
+	// key不存在时返回默认值
+	if got := getInt(m, "missing", -1); got != -1 {
+		t.Errorf("getInt(missing) = %d, want -1", got)
+	}
+
+	// 值类型不匹配时返回默认值
+	if got := getInt(m, "string_val", -1); got != -1 {
+		t.Errorf("getInt(string_val) = %d, want -1 (type mismatch)", got)
+	}
+}
+
+// --- SaveSettings 热更新警告事件测试 ---
+
+func TestApp_SaveSettings_HotUpdateWarning(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	initialConfig := `model:
+  endpoint: "http://localhost:11453/v1/"
+  api_key: "test-key"
+  model_name: "test-model"
+  context_size: 200000
+`
+	if err := os.WriteFile(configPath, []byte(initialConfig), 0644); err != nil {
+		t.Fatalf("failed to write initial config: %v", err)
+	}
+
+	app := NewApp()
+	app.SetConfigPath(configPath)
+
+	// 使用mockEventEmitter捕获事件
+	emitter := &mockEventEmitter{events: make([]emittedEvent, 0)}
+	app.SetEventEmitter(emitter)
+
+	// 不设置agent，SaveSettings中热更新部分不会执行
+	// 文件保存仍应成功
+	settings := map[string]interface{}{
+		"model_name": "new-model",
+	}
+	if err := app.SaveSettings(settings); err != nil {
+		t.Fatalf("SaveSettings failed: %v", err)
+	}
+
+	// 无agent时不应发出警告事件
+	for _, e := range emitter.events {
+		if e.event == "settings:hot-update-warning" {
+			t.Error("不应发出热更新警告（无agent）")
+		}
+	}
+}
+
+// mockEventEmitter 用于测试事件发射
+type emittedEvent struct {
+	event string
+	data  []interface{}
+}
+
+type mockEventEmitter struct {
+	events []emittedEvent
+}
+
+func (m *mockEventEmitter) Emit(event string, data ...interface{}) {
+	m.events = append(m.events, emittedEvent{event: event, data: data})
+}

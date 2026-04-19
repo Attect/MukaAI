@@ -15,8 +15,22 @@ func DefaultConfig() *Config {
 	return &Config{
 		Endpoint:    "http://127.0.0.1:11453/v1/",
 		APIKey:      "no-key",
-		ModelName:   "Huihui-Qwen3.5-27B-abliterated.Q4_K_M",
+		ModelName:   "mradermacher/Huihui-Qwen3.5-27B-abliterated-GGUF/Huihui-Qwen3.5-27B-abliterated.Q4_K_M",
 		ContextSize: 200000,
+	}
+}
+
+// Clone 返回配置的深拷贝
+// 用于在读取配置时创建快照，避免并发读写竞态
+func (c *Config) Clone() *Config {
+	if c == nil {
+		return nil
+	}
+	return &Config{
+		Endpoint:    c.Endpoint,
+		APIKey:      c.APIKey,
+		ModelName:   c.ModelName,
+		ContextSize: c.ContextSize,
 	}
 }
 
