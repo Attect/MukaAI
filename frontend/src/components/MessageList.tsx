@@ -1,17 +1,23 @@
 import React, { useRef, useEffect, useCallback } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import type { Message } from "../types";
+import type { MessageListItem, Message, CompressionEvent } from "../types";
 import MessageItem from "./MessageItem";
 
 interface MessageListProps {
-  messages: Message[];
+  items: MessageListItem[];
+  isStreaming?: boolean;
 }
 
 /** 估算每条消息的行高度（用于虚拟滚动初始估算） */
-function estimateSize(index: number, messages: Message[]): number {
-  const msg = messages[index];
-  if (!msg) return 80;
+function estimateSize(index: number, items: MessageListItem[]): number {
+  const item = items[index];
+  if (!item) return 80;
 
+  if (item.type === "compression") {
+    return 60; // 压缩事件高度较小
+  }
+
+  const msg = item.data as Message;
   // 基础高度
   let height = 48; // 头部 + padding
 
@@ -38,13 +44,42 @@ function estimateSize(index: number, messages: Message[]): number {
   return Math.max(60, Math.min(height, 1200));
 }
 
-export default function MessageList({ messages }: MessageListProps): React.ReactElement {
+/** 压缩事件组件 */
+function CompressionItem({ data }: { data: CompressionEvent }): React.ReactElement {
+  return (
+    <div style={{
+      margin: "0.5rem 0",
+      padding: "0.5rem 1rem",
+      background: "var(--bg-code)",
+      borderLeft: "3px solid var(--text-accent)",
+      borderRadius: "0.25rem",
+      fontSize: "0.875rem",
+      color: "var(--text-muted)",
+    }}>
+      <div style={{ fontWeight: 600, marginBottom: "0.25rem", color: "var(--text-accent)" }}>
+        📦 上下文压缩
+      </div>
+      <div>
+        消息: {data.originalCount} → {data.compressedCount} | 
+        Tokens: {data.originalTokens} → {data.compressedTokens} 
+        ({data.compressionRatio.toFixed(1)}%)
+      </div>
+      {data.summary && (
+        <div style={{ marginTop: "0.25rem", fontSize: "0.75rem", opacity: 0.8 }}>
+          摘要: {data.summary.length > 100 ? data.summary.slice(0, 100) + "..." : data.summary}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function MessageList({ items }: MessageListProps): React.ReactElement {
   const parentRef = useRef<HTMLDivElement>(null);
 
   const virtualizer = useVirtualizer({
-    count: messages.length,
+    count: items.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: (index: number) => estimateSize(index, messages),
+    estimateSize: (index: number) => estimateSize(index, items),
     overscan: 8,
     // 动态测量实际高度
     measureElement: (el) => el?.getBoundingClientRect().height ?? 80,
@@ -55,13 +90,13 @@ export default function MessageList({ messages }: MessageListProps): React.React
 
   // 新消息到来时自动滚动到底部
   useEffect(() => {
-    if (messages.length > 0 && isAutoScrollRef.current) {
+    if (items.length > 0 && isAutoScrollRef.current) {
       // 使用requestAnimationFrame确保DOM已更新
       requestAnimationFrame(() => {
-        virtualizer.scrollToIndex(messages.length - 1, { align: "end", behavior: "smooth" });
+        virtualizer.scrollToIndex(items.length - 1, { align: "end", behavior: "smooth" });
       });
     }
-  }, [messages.length, virtualizer]);
+  }, [items.length, virtualizer]);
 
   // 检测用户手动滚动
   const handleScroll = useCallback(() => {
@@ -72,7 +107,7 @@ export default function MessageList({ messages }: MessageListProps): React.React
   }, []);
 
   // 空消息占位
-  if (messages.length === 0) {
+  if (items.length === 0) {
     return (
       <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)" }}>
         <p>开始新的对话...</p>
@@ -101,10 +136,10 @@ export default function MessageList({ messages }: MessageListProps): React.React
         }}
       >
         {virtualItems.map((virtualRow) => {
-          const msg = messages[virtualRow.index];
+          const item = items[virtualRow.index];
           return (
             <div
-              key={virtualRow.index}
+              key={item.key}
               data-index={virtualRow.index}
               ref={virtualizer.measureElement}
               style={{
@@ -115,7 +150,11 @@ export default function MessageList({ messages }: MessageListProps): React.React
                 transform: `translateY(${virtualRow.start}px)`,
               }}
             >
-              <MessageItem message={msg} />
+              {item.type === "message" ? (
+                <MessageItem message={item.data as Message} />
+              ) : (
+                <CompressionItem data={item.data as CompressionEvent} />
+              )}
             </div>
           );
         })}

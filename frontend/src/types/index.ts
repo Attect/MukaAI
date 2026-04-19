@@ -38,6 +38,22 @@ export interface Conversation {
   messageCount: number;
 }
 
+/** 上下文压缩事件 */
+export interface CompressionEvent {
+  originalCount: number;
+  compressedCount: number;
+  originalTokens: number;
+  compressedTokens: number;
+  compressionRatio: number;
+  summary: string;
+  timestamp: string;
+}
+
+/** 消息列表项（支持普通消息和压缩事件） */
+export type MessageListItem = 
+  | { type: "message"; data: Message; key: string }
+  | { type: "compression"; data: CompressionEvent; key: string };
+
 /** Supervisor监督级别 */
 export type SupervisorLevel = "info" | "warning" | "correction" | "halt";
 

@@ -10,7 +10,7 @@ import Sidebar from "./components/Sidebar";
 import Settings from "./components/Settings";
 import SupervisorPanel from "./components/SupervisorPanel";
 import TerminalPanel from "./components/TerminalPanel";
-import type { ConversationData, TokenStats, SupervisorResult } from "./types";
+import type { ConversationData, TokenStats, SupervisorResult, CompressionEvent, MessageListItem } from "./types";
 
 // 主题管理工具函数
 function getInitialTheme(): boolean {
@@ -53,6 +53,7 @@ function App(): React.ReactElement {
   const [wailsReady, setWailsReady] = useState(false);
   const [isDarkTheme, setIsDarkTheme] = useState(getInitialTheme);
   const [supervisorResults, setSupervisorResults] = useState<SupervisorResult[]>([]);
+  const [compressionEvents, setCompressionEvents] = useState<CompressionEvent[]>([]);
 
   // 初始化主题
   useEffect(() => {
@@ -95,10 +96,15 @@ function App(): React.ReactElement {
     setSupervisorResults((prev) => [...prev, result]);
   }, []);
 
-  // 新对话时清空监督结果
+  const handleCompression = useCallback((event: CompressionEvent) => {
+    setCompressionEvents((prev) => [...prev, event]);
+  }, []);
+
+  // 新对话时清空监督结果和压缩事件
   useEffect(() => {
     if (!conversationData.isStreaming && conversationData.messages.length === 0) {
       setSupervisorResults([]);
+      setCompressionEvents([]);
     }
   }, [conversationData.isStreaming, conversationData.messages.length]);
 
@@ -113,6 +119,7 @@ function App(): React.ReactElement {
     onStreamError: handleStreamError,
     onWorkDirChanged: handleWorkDirChanged,
     onSupervisorResult: handleSupervisorResult,
+    onCompression: handleCompression,
   });
 
   const handleCommand = useCallback((cmd: string) => {
@@ -148,6 +155,35 @@ function App(): React.ReactElement {
       return next;
     });
   }, []);
+
+  // 构建合并后的消息列表（消息 + 压缩事件）
+  const messageListItems: MessageListItem[] = React.useMemo(() => {
+    const messages = conversationData.messages || [];
+    
+    // 按时间戳排序，将消息和压缩事件合并
+    const allEvents: Array<{ type: "message" | "compression"; timestamp: string; item: MessageListItem }> = [];
+    
+    messages.forEach((msg, idx) => {
+      allEvents.push({
+        type: "message",
+        timestamp: msg.timestamp || "",
+        item: { type: "message", data: msg, key: `msg-${idx}` },
+      });
+    });
+    
+    compressionEvents.forEach((event, idx) => {
+      allEvents.push({
+        type: "compression",
+        timestamp: event.timestamp || "",
+        item: { type: "compression", data: event, key: `comp-${idx}` },
+      });
+    });
+    
+    // 按时间戳排序
+    allEvents.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+    
+    return allEvents.map((e) => e.item);
+  }, [conversationData.messages, compressionEvents]);
 
   if (!wailsReady) {
     return (
@@ -197,7 +233,7 @@ function App(): React.ReactElement {
               <button onClick={() => setError(null)} style={{ background: "none", border: "none", color: "var(--text-red-hover)", cursor: "pointer" }}>✕</button>
             </div>
           )}
-          <MessageList messages={conversationData.messages} />
+          <MessageList items={messageListItems} isStreaming={conversationData.isStreaming} />
           <SupervisorPanel results={supervisorResults} />
           <TerminalPanel
             visible={terminalVisible}

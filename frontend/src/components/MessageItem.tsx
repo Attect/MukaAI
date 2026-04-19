@@ -86,12 +86,11 @@ export default function MessageItem({ message }: MessageItemProps): React.ReactE
     <div style={{ margin: "0.75rem 0" }} ref={containerRef}>
       <div style={{ color: "var(--text-assistant)", fontSize: "0.875rem", fontWeight: 700, marginBottom: "0.25rem" }}>🤖 Assistant</div>
       <div style={{ marginLeft: "1rem" }}>
+        {/* 1. 思考内容 */}
         {thinking && (
           <ThinkingBlock content={thinking} isStreaming={isStreaming && streamingType === "thinking"} />
         )}
-        {toolCalls.length > 0 && toolCalls.map((tc) => (
-          <ToolCallBlock key={tc.id || Math.random().toString()} toolCall={tc} isStreaming={isStreaming && streamingType === "tool"} />
-        ))}
+        {/* 2. 正文内容 */}
         {content && (
           <div className="markdown-body" style={{ color: "var(--text-primary)" }}>
             <ReactMarkdown
@@ -106,6 +105,10 @@ export default function MessageItem({ message }: MessageItemProps): React.ReactE
             {isStreaming && streamingType === "content" && <span className="animate-blink" style={{ color: "var(--text-user)" }}>▌</span>}
           </div>
         )}
+        {/* 3. 工具调用和结果 */}
+        {toolCalls.length > 0 && toolCalls.map((tc) => (
+          <ToolCallBlock key={tc.id || Math.random().toString()} toolCall={tc} isStreaming={isStreaming && streamingType === "tool"} />
+        ))}
         {(message.tokenUsage || 0) > 0 && (
           <div style={{ color: "var(--text-dim)", fontSize: "0.75rem", marginTop: "0.25rem", fontStyle: "italic" }}>
             Tokens: {message.tokenUsage}
