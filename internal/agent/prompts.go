@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"sync"
 )
 
 // SystemPromptType 系统提示词类型
@@ -20,6 +22,51 @@ const (
 	// PromptTypeReviewer Reviewer角色提示词
 	PromptTypeReviewer SystemPromptType = "reviewer"
 )
+
+// 提示词文件缓存
+var (
+	promptCache     = make(map[string]string)
+	promptCacheMu   sync.RWMutex
+	promptsBasePath string // 提示词文件基础路径
+)
+
+// SetPromptsBasePath 设置提示词文件基础路径
+func SetPromptsBasePath(path string) {
+	promptsBasePath = path
+	// 清除缓存，强制重新加载
+	promptCacheMu.Lock()
+	promptCache = make(map[string]string)
+	promptCacheMu.Unlock()
+}
+
+// loadPromptFromFile 从文件加载提示词，如果文件不存在则返回默认值
+func loadPromptFromFile(filename string, defaultPrompt string) string {
+	// 检查缓存
+	promptCacheMu.RLock()
+	if cached, ok := promptCache[filename]; ok {
+		promptCacheMu.RUnlock()
+		return cached
+	}
+	promptCacheMu.RUnlock()
+
+	// 尝试从文件加载
+	if promptsBasePath != "" {
+		filePath := filepath.Join(promptsBasePath, filename)
+		if content, err := os.ReadFile(filePath); err == nil {
+			prompt := string(content)
+			// 替换模板变量
+			prompt = strings.ReplaceAll(prompt, "{{.GOOS}}", runtime.GOOS)
+			// 缓存结果
+			promptCacheMu.Lock()
+			promptCache[filename] = prompt
+			promptCacheMu.Unlock()
+			return prompt
+		}
+	}
+
+	// 返回默认值
+	return defaultPrompt
+}
 
 // OrchestratorSystemPrompt Orchestrator角色的系统提示词
 // 高效执行模式：不奉承、不评价、不出报告
@@ -151,16 +198,19 @@ agents:
 `
 
 // GetSystemPrompt 根据类型获取系统提示词
+// 优先从文件加载，如果文件不存在则使用内置默认值
 func GetSystemPrompt(promptType SystemPromptType) string {
 	switch promptType {
 	case PromptTypeOrchestrator:
-		return OrchestratorSystemPrompt + YAMLStatePrompt
+		prompt := loadPromptFromFile("orchestrator.txt", OrchestratorSystemPrompt)
+		return prompt + YAMLStatePrompt
 	case PromptTypeWorker:
-		return WorkerSystemPrompt
+		return loadPromptFromFile("worker.txt", WorkerSystemPrompt)
 	case PromptTypeReviewer:
-		return ReviewerSystemPrompt
+		return loadPromptFromFile("reviewer.txt", ReviewerSystemPrompt)
 	default:
-		return OrchestratorSystemPrompt + YAMLStatePrompt
+		prompt := loadPromptFromFile("orchestrator.txt", OrchestratorSystemPrompt)
+		return prompt + YAMLStatePrompt
 	}
 }
 

@@ -37,6 +37,15 @@ type StreamHandler interface {
 	// 当整个任务（包括所有迭代）完成后调用，无论成功还是失败
 	// 与 OnComplete 的区别：OnComplete 是单次推理完成，OnTaskDone 是整个任务完成
 	OnTaskDone()
+
+	// OnCompression 处理上下文压缩
+	// 当上下文压缩发生时调用
+	// originalCount: 原始消息数量
+	// compressedCount: 压缩后消息数量
+	// originalTokens: 原始 token 数量
+	// compressedTokens: 压缩后 token 数量
+	// summary: 压缩摘要（如果有）
+	OnCompression(originalCount, compressedCount, originalTokens, compressedTokens int, summary string)
 }
 
 // SupervisorResultHandler 监督结果处理器接口
@@ -73,13 +82,14 @@ type ToolCallInfo struct {
 // StreamHandlerFunc 流式处理器函数类型
 // 用于将函数转换为 StreamHandler 接口
 type StreamHandlerFunc struct {
-	onThinking   func(chunk string)
-	onContent    func(chunk string)
-	onToolCall   func(call ToolCallInfo, isComplete bool)
-	onToolResult func(result ToolCallInfo)
-	onComplete   func(usage int)
-	onError      func(err error)
-	onTaskDone   func()
+	onThinking    func(chunk string)
+	onContent     func(chunk string)
+	onToolCall    func(call ToolCallInfo, isComplete bool)
+	onToolResult  func(result ToolCallInfo)
+	onComplete    func(usage int)
+	onError       func(err error)
+	onTaskDone    func()
+	onCompression func(originalCount, compressedCount, originalTokens, compressedTokens int, summary string)
 }
 
 // NewStreamHandlerFunc 创建基于函数的流式处理器
@@ -129,28 +139,36 @@ func (h *StreamHandlerFunc) OnTaskDone(fn func()) *StreamHandlerFunc {
 	return h
 }
 
+// OnCompression 设置压缩处理函数
+func (h *StreamHandlerFunc) OnCompression(fn func(originalCount, compressedCount, originalTokens, compressedTokens int, summary string)) *StreamHandlerFunc {
+	h.onCompression = fn
+	return h
+}
+
 // Build 构建 StreamHandler 接口
 func (h *StreamHandlerFunc) Build() StreamHandler {
 	return &streamHandlerFuncImpl{
-		onThinking:   h.onThinking,
-		onContent:    h.onContent,
-		onToolCall:   h.onToolCall,
-		onToolResult: h.onToolResult,
-		onComplete:   h.onComplete,
-		onError:      h.onError,
-		onTaskDone:   h.onTaskDone,
+		onThinking:    h.onThinking,
+		onContent:     h.onContent,
+		onToolCall:    h.onToolCall,
+		onToolResult:  h.onToolResult,
+		onComplete:    h.onComplete,
+		onError:       h.onError,
+		onTaskDone:    h.onTaskDone,
+		onCompression: h.onCompression,
 	}
 }
 
 // streamHandlerFuncImpl 函数式流式处理器实现
 type streamHandlerFuncImpl struct {
-	onThinking   func(chunk string)
-	onContent    func(chunk string)
-	onToolCall   func(call ToolCallInfo, isComplete bool)
-	onToolResult func(result ToolCallInfo)
-	onComplete   func(usage int)
-	onError      func(err error)
-	onTaskDone   func()
+	onThinking    func(chunk string)
+	onContent     func(chunk string)
+	onToolCall    func(call ToolCallInfo, isComplete bool)
+	onToolResult  func(result ToolCallInfo)
+	onComplete    func(usage int)
+	onError       func(err error)
+	onTaskDone    func()
+	onCompression func(originalCount, compressedCount, originalTokens, compressedTokens int, summary string)
 }
 
 func (h *streamHandlerFuncImpl) OnThinking(chunk string) {
@@ -192,6 +210,12 @@ func (h *streamHandlerFuncImpl) OnError(err error) {
 func (h *streamHandlerFuncImpl) OnTaskDone() {
 	if h.onTaskDone != nil {
 		h.onTaskDone()
+	}
+}
+
+func (h *streamHandlerFuncImpl) OnCompression(originalCount, compressedCount, originalTokens, compressedTokens int, summary string) {
+	if h.onCompression != nil {
+		h.onCompression(originalCount, compressedCount, originalTokens, compressedTokens, summary)
 	}
 }
 

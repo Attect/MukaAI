@@ -130,7 +130,7 @@ func DefaultConfig() *Config {
 		Model: ModelConfig{
 			Endpoint:    "http://127.0.0.1:11453/v1/",
 			APIKey:      "no-key",
-			ModelName:   "Huihui-Qwen3.5-27B-abliterated.Q4_K_M",
+			ModelName:   "mradermacher/Huihui-Qwen3.5-27B-abliterated-GGUF/Huihui-Qwen3.5-27B-abliterated.Q4_K_M",
 			ContextSize: 200000,
 		},
 		Agent: AgentConfig{

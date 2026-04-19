@@ -23,8 +23,9 @@ func (a *Agent) callModel(ctx context.Context) (*modelResponse, error) {
 		a.repetitionDetector.Reset()
 	}
 
-	// 使用流式响应
-	streamChan, err := a.modelClient.StreamChatCompletion(ctx, messages, toolSchemas)
+	// 使用带重试的流式响应
+	retryConfig := model.DefaultRetryConfig()
+	streamChan, err := a.modelClient.StreamChatCompletionWithRetry(ctx, messages, toolSchemas, retryConfig)
 	if err != nil {
 		return nil, err
 	}
