@@ -18,6 +18,10 @@ export function ExportConversation(arg1, arg2) {
   return window['go']['gui']['App']['ExportConversation'](arg1, arg2);
 }
 
+export function GenerateConversationTitle(arg1) {
+  return window['go']['gui']['App']['GenerateConversationTitle'](arg1);
+}
+
 export function GetConversationData() {
   return window['go']['gui']['App']['GetConversationData']();
 }
@@ -40,6 +44,14 @@ export function GetWorkDir() {
 
 export function InterruptInference() {
   return window['go']['gui']['App']['InterruptInference']();
+}
+
+export function NewConversation() {
+  return window['go']['gui']['App']['NewConversation']();
+}
+
+export function RegenerateConversationTitle(arg1) {
+  return window['go']['gui']['App']['RegenerateConversationTitle'](arg1);
 }
 
 export function SaveSettings(arg1) {

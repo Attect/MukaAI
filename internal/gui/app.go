@@ -14,6 +14,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"gopkg.in/yaml.v3"
+	"unicode/utf8"
 )
 
 // Conversation 对话信息，暴露给前端的JSON结构
@@ -135,7 +136,14 @@ func (a *App) Startup(ctx context.Context) {
 		a.conversations = conversations
 		// 激活最后一个（最新的）对话
 		a.activeConvID = conversations[len(conversations)-1].id
+	} else {
+		// 没有历史对话，创建一个新的默认对话
+		a.createDefaultConversation()
 	}
+
+	// 通知前端对话列表已更新（Startup 后首次加载）
+	a.emit("conversation:updated", a.GetConversationData())
+	a.emit("conversations:updated", a.GetConversations())
 }
 
 // SetAgent 设置Agent实例
@@ -320,6 +328,289 @@ func (a *App) UpdateConversationTitle(id string, title string) error {
 	return fmt.Errorf("conversation not found: %s", id)
 }
 
+// GenerateConversationTitle 根据对话内容自动生成标题
+// 如果标题已经是"新对话"，使用第一条用户消息和第一条助手消息生成标题
+// 如果标题已被手动设置过，使用完整对话内容（排除系统消息）生成标题
+// 调用LLM非流式API生成简短中文标题（10字以内），24小时超时（适配本地模型慢速推理）
+func (a *App) GenerateConversationTitle(id string) error {
+	a.mu.RLock()
+	var conv *conversation
+	for _, c := range a.conversations {
+		if c.id == id {
+			conv = c
+			break
+		}
+	}
+	a.mu.RUnlock()
+
+	if conv == nil {
+		return fmt.Errorf("conversation not found: %s", id)
+	}
+
+	// 获取模型客户端
+	modelClient := a.agent.GetModelClient()
+	if modelClient == nil {
+		return fmt.Errorf("model client not initialized")
+	}
+
+	// 构建标题生成请求的消息历史
+	var messages []model.Message
+
+	// 判断是否为新对话（只有1条用户消息+1条助手消息）
+	userMsgCount := 0
+	for _, msg := range conv.messages {
+		if msg.role == "user" {
+			userMsgCount++
+		}
+	}
+
+	if conv.title == "新对话" && userMsgCount <= 1 && len(conv.messages) <= 2 {
+		// 新对话：仅使用首条用户消息和首条助手消息
+		messages = a.buildTitlePromptFromFirstPair(conv.messages)
+	} else {
+		// 已有标题的对话：使用完整对话内容（排除系统消息）
+		messages = a.buildTitlePromptFromFullConversation(conv.messages)
+	}
+
+	if len(messages) == 0 {
+		return fmt.Errorf("no messages available for title generation")
+	}
+
+	// 构建标题生成提示
+	titleMessages := []model.Message{
+		model.NewUserMessage(titleGenerationPrompt),
+	}
+	titleMessages = append(titleMessages, messages...)
+
+	// 使用24小时超时调用LLM（适配本地模型慢速推理和排队场景）
+	ctx, cancel := context.WithTimeout(context.Background(), 24*time.Hour)
+	defer cancel()
+
+	resp, err := modelClient.ChatCompletion(ctx, titleMessages, nil)
+	if err != nil {
+		// 生成失败，不修改原有标题
+		fmt.Printf("[App] 标题生成失败 [%s]: %v\n", id, err)
+		return fmt.Errorf("title generation failed: %w", err)
+	}
+
+	if len(resp.Choices) == 0 || resp.Choices[0].Message.Content == "" {
+		return fmt.Errorf("empty title response")
+	}
+
+	newTitle := strings.TrimSpace(resp.Choices[0].Message.Content)
+
+	// 更新标题并持久化
+	a.mu.Lock()
+	for _, c := range a.conversations {
+		if c.id == id {
+			c.title = newTitle
+			a.saveConv(c)
+			break
+		}
+	}
+	a.mu.Unlock()
+
+	fmt.Printf("[App] 标题已生成 [%s]: %s\n", id, newTitle)
+	return nil
+}
+
+// RegenerateConversationTitle 基于完整对话内容重新生成标题
+// 无论当前标题是什么，都使用完整对话内容重新生成
+func (a *App) RegenerateConversationTitle(id string) error {
+	a.mu.RLock()
+	var conv *conversation
+	for _, c := range a.conversations {
+		if c.id == id {
+			conv = c
+			break
+		}
+	}
+	a.mu.RUnlock()
+
+	if conv == nil {
+		return fmt.Errorf("conversation not found: %s", id)
+	}
+
+	modelClient := a.agent.GetModelClient()
+	if modelClient == nil {
+		return fmt.Errorf("model client not initialized")
+	}
+
+	// 使用完整对话内容（排除系统消息）
+	messages := a.buildTitlePromptFromFullConversation(conv.messages)
+	if len(messages) == 0 {
+		return fmt.Errorf("no messages available for title regeneration")
+	}
+
+	titleMessages := []model.Message{
+		model.NewUserMessage(titleGenerationPrompt),
+	}
+	titleMessages = append(titleMessages, messages...)
+
+	// 使用24小时超时调用LLM（适配本地模型慢速推理和排队场景）
+	ctx, cancel := context.WithTimeout(context.Background(), 24*time.Hour)
+	defer cancel()
+
+	resp, err := modelClient.ChatCompletion(ctx, titleMessages, nil)
+	if err != nil {
+		fmt.Printf("[App] 标题重新生成失败 [%s]: %v\n", id, err)
+		return fmt.Errorf("title regeneration failed: %w", err)
+	}
+
+	if len(resp.Choices) == 0 || resp.Choices[0].Message.Content == "" {
+		return fmt.Errorf("empty title response")
+	}
+
+	newTitle := strings.TrimSpace(resp.Choices[0].Message.Content)
+
+	a.mu.Lock()
+	for _, c := range a.conversations {
+		if c.id == id {
+			c.title = newTitle
+			a.saveConv(c)
+			break
+		}
+	}
+	a.mu.Unlock()
+
+	fmt.Printf("[App] 标题已重新生成 [%s]: %s\n", id, newTitle)
+	return nil
+}
+
+// GetCompressionSummary 返回指定对话的最后一次压缩摘要（如果有）
+func (a *App) GetCompressionSummary(id string) (string, bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	for _, conv := range a.conversations {
+		if conv.id == id {
+			var lastSummary string
+			for _, msg := range conv.messages {
+				if msg.role == "user" && strings.Contains(msg.content, "[上下文摘要") {
+					lastSummary = msg.content
+				}
+			}
+			return lastSummary, lastSummary != ""
+		}
+	}
+	return "", false
+}
+
+// buildTitlePromptFromFirstPair 从第一条用户消息和第一条助手消息构建标题生成消息
+func (a *App) buildTitlePromptFromFirstPair(msgs []*message) []model.Message {
+	var result []model.Message
+	var userMsg, assistantContent string
+
+	for _, msg := range msgs {
+		if msg.role == "user" && userMsg == "" {
+			userMsg = msg.content
+		} else if msg.role == "assistant" && assistantContent == "" {
+			// 标题生成只使用文本内容，不使用 tool_calls
+			// 因为 API 可能启用了 enable_thinking，与 tool_calls 冲突
+			if msg.content != "" {
+				assistantContent = msg.content
+			} else if len(msg.thinking) > 0 {
+				// 优先使用 thinking 内容作为助手回复摘要（按字符数截断）
+				runes := []rune(msg.thinking)
+				if utf8.RuneCountInString(msg.thinking) > 100 {
+					runes = runes[:100]
+				}
+				assistantContent = "[思考中]" + string(runes)
+			}
+		}
+		if userMsg != "" && assistantContent != "" {
+			break
+		}
+	}
+
+	if userMsg != "" {
+		result = append(result, model.NewUserMessage(userMsg))
+	}
+	if assistantContent != "" {
+		result = append(result, model.NewAssistantMessage(assistantContent))
+	}
+	return result
+}
+
+// buildTitlePromptFromFullConversation 从完整对话构建标题生成消息（排除系统消息）
+// 如果消息超过10条，取前5对user-assistant+最近3对user-assistant
+func (a *App) buildTitlePromptFromFullConversation(msgs []*message) []model.Message {
+	// 过滤掉system消息
+	var filtered []*message
+	for _, msg := range msgs {
+		if msg.role != "system" {
+			filtered = append(filtered, msg)
+		}
+	}
+
+	// 计算user-assistant对数
+	var pairs [][2]*message
+	var userMsg *message
+	for _, msg := range filtered {
+		if msg.role == "user" {
+			userMsg = msg
+		} else if msg.role == "assistant" && userMsg != nil {
+			pairs = append(pairs, [2]*message{userMsg, msg})
+			userMsg = nil
+		}
+	}
+
+	if len(pairs) == 0 {
+		return nil
+	}
+
+	var result []model.Message
+
+	if len(pairs) <= 10 {
+		for _, pair := range pairs {
+			result = append(result, model.NewUserMessage(pair[0].content))
+			asm := a.buildAssistantMessage(pair[1])
+			// 只包含有文本内容的助手消息（标题生成不使用 tool_calls）
+			if asm.Content != "" {
+				result = append(result, asm)
+			}
+		}
+	} else {
+		selected := make(map[int]bool)
+		for i := 0; i < 5 && i < len(pairs); i++ {
+			selected[i] = true
+		}
+		for i := len(pairs) - 3; i < len(pairs); i++ {
+			selected[i] = true
+		}
+
+		for i, pair := range pairs {
+			if selected[i] {
+				result = append(result, model.NewUserMessage(pair[0].content))
+				asm := a.buildAssistantMessage(pair[1])
+				if asm.Content != "" {
+					result = append(result, asm)
+				}
+			}
+		}
+	}
+
+	return result
+}
+
+// buildAssistantMessage 构建模型消息用于标题生成，只使用文本内容
+// 不包含 tool_calls，因为 API 可能启用了 enable_thinking，与 tool_calls 冲突
+func (a *App) buildAssistantMessage(msg *message) model.Message {
+	if msg == nil {
+		return model.Message{}
+	}
+	if msg.content != "" {
+		return model.NewAssistantMessage(msg.content)
+	}
+	// 如果只有 tool_calls 没有 content，返回空消息供调用方过滤
+	return model.Message{}
+}
+
+const titleGenerationPrompt = `请为以下对话生成一个简短的中文标题（不超过10个字），要求：
+1. 准确概括对话主题
+2. 简洁明了
+3. 只输出标题本身，不要包含其他内容`
+
 // ExportConversation 导出对话为Markdown文件
 // id为空时导出当前活跃对话，filename为空时自动生成文件名
 func (a *App) ExportConversation(id string, filename string) error {
@@ -448,6 +739,11 @@ func (a *App) SendMessage(content string) error {
 	conv.currentMessage = nil
 	a.isStreaming = true
 	a.saveConv(conv) // 持久化：保存用户消息
+
+	// 构建对话历史（不包括当前用户消息），注入到 Agent
+	history := a.buildConversationHistory(conv.messages[:len(conv.messages)-1])
+	a.agent.SetExternalHistory(history)
+
 	a.mu.Unlock()
 
 	a.emit("conversation:updated", a.GetConversationData())
@@ -476,6 +772,22 @@ func (a *App) SendMessage(content string) error {
 	}()
 
 	return nil
+}
+
+// buildConversationHistory 将内部消息列表转换为 Agent 可用的历史消息格式
+func (a *App) buildConversationHistory(msgs []*message) []model.Message {
+	history := make([]model.Message, 0, len(msgs))
+	for _, m := range msgs {
+		role := model.RoleAssistant
+		if m.role == "user" {
+			role = model.RoleUser
+		}
+		history = append(history, model.Message{
+			Role:    role,
+			Content: m.content,
+		})
+	}
+	return history
 }
 
 // GetConversations 获取所有对话列表
@@ -666,6 +978,32 @@ func (a *App) SwitchConversation(id string) error {
 	a.activeConvID = id
 	a.mu.Unlock()
 
+	// 切换对话时，将目标对话的历史注入到 Agent
+	if a.agent != nil {
+		a.agent.SetExternalHistory(a.buildConversationHistory(target.messages))
+	}
+
+	a.emit("conversation:updated", a.GetConversationData())
+	return nil
+}
+
+// NewConversation 创建一个新的对话并设为活跃状态
+// 如果 Agent 已初始化，会清空 Agent 的外部历史
+func (a *App) NewConversation() error {
+	a.mu.Lock()
+	if a.isStreaming {
+		a.mu.Unlock()
+		return fmt.Errorf("cannot create conversation while streaming")
+	}
+
+	a.createDefaultConversation()
+	a.mu.Unlock()
+
+	// 清空 Agent 的外部历史（新对话没有历史）
+	if a.agent != nil {
+		a.agent.SetExternalHistory(nil)
+	}
+
 	a.emit("conversation:updated", a.GetConversationData())
 	return nil
 }
@@ -684,20 +1022,25 @@ func (a *App) ClearConversation() {
 	a.emit("conversation:updated", a.GetConversationData())
 }
 
+// createDefaultConversation 创建一个新的默认对话并设为活跃状态
+// 调用方必须持有a.mu写锁
+func (a *App) createDefaultConversation() {
+	conv := &conversation{
+		id:        fmt.Sprintf("conv-%d", time.Now().UnixMilli()),
+		title:     "新对话",
+		createdAt: time.Now(),
+		status:    "active",
+	}
+	a.conversations = append(a.conversations, conv)
+	a.activeConvID = conv.id
+}
+
 // getOrCreateActiveConversation 获取或创建活跃对话
 // 如果不存在任何对话，则创建一个新的默认对话
 // 调用方必须持有a.mu写锁
 func (a *App) getOrCreateActiveConversation() *conversation {
-	if len(a.conversations) == 0 {
-		conv := &conversation{
-			id:        fmt.Sprintf("conv-%d", time.Now().UnixMilli()),
-			title:     "新对话",
-			createdAt: time.Now(),
-			status:    "active",
-		}
-		a.conversations = append(a.conversations, conv)
-		a.activeConvID = conv.id
-		return conv
+	if len(a.conversations) == 0 || a.activeConvID == "" {
+		a.createDefaultConversation()
 	}
 	for _, conv := range a.conversations {
 		if conv.id == a.activeConvID {

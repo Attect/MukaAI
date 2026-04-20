@@ -4,6 +4,7 @@ import {
   SendMessage as wailsSendMessage,
   GetConversationData as wailsGetConversationData,
   GetConversations as wailsGetConversations,
+  NewConversation as wailsNewConversation,
   SetWorkDir as wailsSetWorkDir,
   GetTokenStats as wailsGetTokenStats,
   GetWorkDir as wailsGetWorkDir,
@@ -16,6 +17,8 @@ import {
   UpdateConversationTitle as wailsUpdateConversationTitle,
   ExportConversation as wailsExportConversation,
   ChooseDirectory as wailsChooseDirectory,
+  GenerateConversationTitle as wailsGenerateConversationTitle,
+  RegenerateConversationTitle as wailsRegenerateConversationTitle,
 } from "../wailsjs/go/gui/App";
 
 import { EventsOn } from "../wailsjs/runtime/runtime";
@@ -58,6 +61,10 @@ export async function clearConversation(): Promise<void> {
   await wailsClearConversation();
 }
 
+export async function newConversation(): Promise<void> {
+  await wailsNewConversation();
+}
+
 export async function getConversations(): Promise<Conversation[]> {
   return (await wailsGetConversations()) as unknown as Conversation[];
 }
@@ -88,6 +95,14 @@ export async function exportConversation(id: string, filename: string): Promise<
 
 export async function chooseDirectory(): Promise<string> {
   return await wailsChooseDirectory();
+}
+
+export async function generateConversationTitle(id: string): Promise<void> {
+  await wailsGenerateConversationTitle(id);
+}
+
+export async function regenerateConversationTitle(id: string): Promise<void> {
+  await wailsRegenerateConversationTitle(id);
 }
 
 export function onEvent(event: string, callback: (...args: any[]) => void): () => void {

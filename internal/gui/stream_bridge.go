@@ -468,9 +468,23 @@ func (b *StreamBridge) OnError(err error) {
 // OnTaskDone 处理任务完成
 // 当整个 Agent 任务（包括所有迭代）完成后调用
 // 固化最后一个消息（如果有内容），重置流式状态，并发射 stream:done 事件
+// 如果对话标题仍为"新对话"且只有1条用户消息+1条助手消息，则异步生成标题
 func (b *StreamBridge) OnTaskDone() {
 	b.app.mu.Lock()
 	conv := b.app.getActiveConversation()
+
+	// 记录固化前的消息数量，用于判断是否首次回复
+	var isFirstReply bool
+	if conv != nil && conv.title == "新对话" {
+		userCount := 0
+		for _, msg := range conv.messages {
+			if msg.role == "user" {
+				userCount++
+			}
+		}
+		isFirstReply = userCount == 1
+	}
+
 	if conv != nil && conv.currentMessage != nil {
 		// 固化最后一个消息（如果有内容）
 		if conv.currentMessage.content != "" || conv.currentMessage.thinking != "" || len(conv.currentMessage.toolCalls) > 0 {
@@ -481,10 +495,29 @@ func (b *StreamBridge) OnTaskDone() {
 		conv.currentMessage = nil
 	}
 	b.app.isStreaming = false
+
+	// 检查是否需要自动生成标题：
+	// 1. 标题仍为"新对话"（从未生成过）
+	// 2. 这是首次回复（固化前只有1条用户消息，固化后变为1user+1assistant）
+	var convID string
+	if conv != nil && isFirstReply {
+		convID = conv.id
+	}
 	b.app.mu.Unlock()
 
 	b.app.emit("stream:done")
 	b.app.emit("conversation:updated", b.app.GetConversationData())
+
+	// 后台异步生成标题，不阻塞 OnTaskDone 主流程
+	if convID != "" && b.app.agent != nil {
+		go func() {
+			if err := b.app.GenerateConversationTitle(convID); err != nil {
+				fmt.Printf("[StreamBridge] 自动标题生成失败: %v\n", err)
+				return
+			}
+			// 标题更新后，conversation:updated 事件已包含新标题，前端会自动刷新
+		}()
+	}
 
 	// 写入日志
 	b.logMu.Lock()

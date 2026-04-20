@@ -83,6 +83,9 @@ type Agent struct {
 
 	// 流式处理器
 	streamHandler StreamHandler // 流式消息处理器
+
+	// 外部注入的对话历史（用于 GUI 多轮对话）
+	externalHistory []model.Message // 从之前对话加载的历史消息
 }
 
 // Config Agent配置
@@ -431,8 +434,16 @@ func (a *Agent) initRunContext(ctx context.Context, taskGoal string) (context.Co
 	a.history.Clear()
 	a.history.AddMessage(model.NewSystemMessage(a.systemPrompt))
 
-	// 自动注入代码上下文（在系统消息之后、用户消息之前）
-	if a.contextInjector != nil {
+	// 如果有外部注入的对话历史（来自 GUI 的多轮对话），追加到系统提示之后
+	a.mu.RLock()
+	externalHistory := a.externalHistory
+	a.mu.RUnlock()
+	for _, msg := range externalHistory {
+		a.history.AddMessage(msg)
+	}
+
+	// 自动注入代码上下文（仅在首次对话时注入，已有历史时不重复注入）
+	if a.contextInjector != nil && len(externalHistory) == 0 {
 		contextMessages := a.contextInjector.InjectContext(taskGoal, a.history.GetMessages())
 		// 替换历史中的消息为注入后的消息
 		a.history.Clear()
@@ -887,6 +898,15 @@ func (a *Agent) Close() error {
 	return nil
 }
 
+// GetModelClient 获取模型客户端
+// 用于在 GUI 层直接调用 LLM API（如标题生成等非任务推理场景）
+func (a *Agent) GetModelClient() *model.Client {
+	a.mu.RLock()
+	client := a.modelClient
+	a.mu.RUnlock()
+	return client
+}
+
 // GetModelConfig 获取当前模型配置的快照
 // 返回深拷贝，调用方可安全读取和修改
 func (a *Agent) GetModelConfig() *model.Config {
@@ -931,6 +951,15 @@ func (a *Agent) GetWorkDir() string {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.workDir
+}
+
+// SetExternalHistory 设置外部注入的对话历史
+// 用于 GUI 多轮对话场景，将之前对话的历史消息注入到 Agent 中
+// 这些历史会在 initRunContext 中被添加到系统提示之后、用户当前消息之前
+func (a *Agent) SetExternalHistory(msgs []model.Message) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.externalHistory = msgs
 }
 
 // handleRepetition 处理模型输出重复的情况

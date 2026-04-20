@@ -182,9 +182,10 @@ func runGUICommand() {
 			Assets: mukaai.FrontendAssets,
 		},
 		OnStartup: func(ctx context.Context) {
+			// 先设置工作目录，再启动（确保对话存储使用正确路径）
+			app.SetCurrentDir(workDir)
 			app.Startup(ctx)
 			bridge.SetContext(ctx)
-			app.SetCurrentDir(workDir)
 			// 启动状态文件自动清理，传入应用上下文
 			stateManager.StartCleanup(ctx)
 			// 启动终端 WebSocket 服务器

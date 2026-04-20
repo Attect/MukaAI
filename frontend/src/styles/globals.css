@@ -17,6 +17,7 @@
   --bg-modal: #1f2937;
   --bg-error: rgba(127, 29, 29, 0.5);
   --bg-card: #1f2937;
+  --bg-disabled: #4b5563;
   --text-primary: #f3f4f6;
   --text-secondary: #d1d5db;
   --text-muted: #9ca3af;
@@ -53,6 +54,7 @@
   --bg-modal: #f1f5f9;
   --bg-error: rgba(254, 226, 226, 0.8);
   --bg-card: #f1f5f9;
+  --bg-disabled: #d1d5db;
   --text-primary: #1e293b;
   --text-secondary: #334155;
   --text-muted: #64748b;

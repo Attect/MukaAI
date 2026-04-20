@@ -10,6 +10,9 @@ import {
   switchConversation as wailsSwitchConversation,
   deleteConversation as wailsDeleteConversation,
   exportConversation as wailsExportConversation,
+  generateConversationTitle as wailsGenerateConversationTitle,
+  regenerateConversationTitle as wailsRegenerateConversationTitle,
+  updateConversationTitle as wailsUpdateConversationTitle,
 } from "../wailsRuntime";
 
 export function useConversation() {
@@ -25,6 +28,7 @@ export function useConversation() {
   const [workDir, setWorkDir] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [generatingIds, setGeneratingIds] = useState<Set<string>>(new Set());
 
   const loadConversations = useCallback(async () => {
     try {
@@ -107,6 +111,50 @@ export function useConversation() {
     }
   }, []);
 
+  const generateTitle = useCallback(async (id: string) => {
+    setGeneratingIds((prev) => new Set(prev).add(id));
+    try {
+      await wailsGenerateConversationTitle(id);
+      await loadConversations();
+    } catch (err: any) {
+      console.error("Failed to generate title:", err);
+      setError(err?.message || String(err));
+    } finally {
+      setGeneratingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  }, [loadConversations]);
+
+  const regenerateTitle = useCallback(async (id: string) => {
+    setGeneratingIds((prev) => new Set(prev).add(id));
+    try {
+      await wailsRegenerateConversationTitle(id);
+      await loadConversations();
+    } catch (err: any) {
+      console.error("Failed to regenerate title:", err);
+      setError(err?.message || String(err));
+    } finally {
+      setGeneratingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  }, [loadConversations]);
+
+  const updateTitle = useCallback(async (id: string, title: string) => {
+    try {
+      await wailsUpdateConversationTitle(id, title);
+      await loadConversations();
+    } catch (err: any) {
+      console.error("Failed to update title:", err);
+      setError(err?.message || String(err));
+    }
+  }, [loadConversations]);
+
   return {
     conversationData,
     setConversationData,
@@ -126,5 +174,9 @@ export function useConversation() {
     switchConv,
     deleteConv,
     exportConv,
+    generateTitle,
+    regenerateTitle,
+    updateTitle,
+    generatingIds,
   };
 }

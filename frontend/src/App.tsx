@@ -41,10 +41,14 @@ function App(): React.ReactElement {
     sendMessage,
     interruptInference,
     clearConv,
+    newConv,
     changeWorkDir,
     switchConv,
     deleteConv,
     exportConv,
+    regenerateTitle,
+    updateTitle,
+    generatingIds,
   } = useConversation();
 
   const [sidebarVisible, setSidebarVisible] = useState(false);
@@ -221,8 +225,11 @@ function App(): React.ReactElement {
             setSidebarVisible(false);
           }}
           onClose={() => setSidebarVisible(false)}
-          onNew={clearConv}
+          onNew={newConv}
           onDelete={deleteConv}
+          onGenerateTitle={regenerateTitle}
+          onUpdateTitle={updateTitle}
+          generatingIds={generatingIds}
         />
         <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
           <Toolbar
