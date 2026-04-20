@@ -85,6 +85,6 @@ export async function exportConversation(id: string, filename: string): Promise<
   await wailsExportConversation(id, filename);
 }
 
-export function onEvent(event: string, callback: (...args: any[]) => void): void {
-  EventsOn(event, callback);
+export function onEvent(event: string, callback: (...args: any[]) => void): () => void {
+  return EventsOn(event, callback);
 }
