@@ -39,6 +39,9 @@ func (a *Agent) callModel(ctx context.Context) (*modelResponse, error) {
 	var repetitionDetected bool
 	var repetitionPattern string
 
+	// 真实token统计（从API最后一个SSE事件中提取）
+	var actualUsage *model.Usage
+
 	// 创建思考标签处理器
 	thinkingProcessor := NewThinkingTagProcessor()
 
@@ -62,6 +65,11 @@ func (a *Agent) callModel(ctx context.Context) (*modelResponse, error) {
 
 		if event.Response == nil || len(event.Response.Choices) == 0 {
 			continue
+		}
+
+		// 从流式事件中提取真实token统计（最后一个SSE事件包含usage）
+		if event.Response.Usage != nil {
+			actualUsage = event.Response.Usage
 		}
 
 		choice := event.Response.Choices[0]
@@ -191,17 +199,22 @@ func (a *Agent) callModel(ctx context.Context) (*modelResponse, error) {
 		}
 	}
 
-	// 估算 token 用量
-	// 简单估算：平均每4个字符约1个token
-	totalContent := contentBuilder.String()
-	for _, tc := range toolCalls {
-		totalContent += tc.Function.Name + tc.Function.Arguments
+	// 使用API返回的真实token统计（如有），否则回退到字符估算
+	var finalUsage int
+	if actualUsage != nil {
+		finalUsage = actualUsage.TotalTokens
+	} else {
+		// API未返回usage，回退到字符估算
+		totalContent := contentBuilder.String()
+		for _, tc := range toolCalls {
+			totalContent += tc.Function.Name + tc.Function.Arguments
+		}
+		finalUsage = len(totalContent) / 4
 	}
-	usage := len(totalContent) / 4
 
 	// 调用完成回调
 	if handler != nil {
-		handler.OnComplete(usage)
+		handler.OnComplete(finalUsage)
 	}
 
 	// 如果流式阶段检测到重复，返回带重复标记的响应
@@ -209,7 +222,7 @@ func (a *Agent) callModel(ctx context.Context) (*modelResponse, error) {
 		return &modelResponse{
 			Content:            "", // 重复内容不保留
 			ToolCalls:          nil,
-			Usage:              usage,
+			Usage:              finalUsage,
 			RepetitionDetected: true,
 			RepetitionPattern:  repetitionPattern,
 		}, nil
@@ -225,7 +238,7 @@ func (a *Agent) callModel(ctx context.Context) (*modelResponse, error) {
 			return &modelResponse{
 				Content:            "", // 重复内容不保留
 				ToolCalls:          toolCalls,
-				Usage:              usage,
+				Usage:              finalUsage,
 				RepetitionDetected: true,
 				RepetitionPattern:  pattern,
 			}, nil
@@ -235,7 +248,7 @@ func (a *Agent) callModel(ctx context.Context) (*modelResponse, error) {
 	return &modelResponse{
 		Content:   contentBuilder.String(),
 		ToolCalls: toolCalls,
-		Usage:     usage,
+		Usage:     finalUsage,
 	}, nil
 }
 
@@ -252,7 +265,7 @@ func truncatePattern(pattern string, maxLen int) string {
 type modelResponse struct {
 	Content   string
 	ToolCalls []model.ToolCall
-	Usage     int // token 用量（估算）
+	Usage     int // token 用量（API真实值，若API未返回则回退为字符估算）
 
 	// RepetitionDetected 标识本次模型响应是否检测到重复输出
 	// 当为true时，Content为空，不应记录到对话历史

@@ -331,9 +331,12 @@ func (c *Client) GetConfig() *Config {
 }
 
 // CountTokens 估算消息的token数量
-// 使用UTF-8字符数（rune count）进行估算，正确处理中文等多字节字符
+// 使用UTF-8字符数（rune count）进行粗略估算，正确处理中文等多字节字符
 // 粗略估算：平均每4个字符约1个token
 // 计入：Content、ReasoningContent（思考内容）、Name（工具名称）以及ToolCalls
+//
+// 注意：此方法仅用于上下文溢出检查、压缩判断等非统计场景。
+// Token统计（用于展示和计费）已改为从OpenAI兼容API的流式响应中提取真实Usage数据。
 func (c *Client) CountTokens(messages []Message) int {
 	totalChars := 0
 	for _, msg := range messages {

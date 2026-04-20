@@ -97,13 +97,15 @@ type Usage struct {
 }
 
 // StreamResponse 流式响应
-// 每个SSE事件的数据格式
+// 每个SSE事件的数据格式。Usage字段仅在最后一个SSE事件中出现，
+// 包含本次请求的真实token统计（prompt_tokens, completion_tokens, total_tokens）。
 type StreamResponse struct {
 	ID      string   `json:"id"`
 	Object  string   `json:"object"`
 	Created int64    `json:"created"`
 	Model   string   `json:"model"`
 	Choices []Choice `json:"choices"`
+	Usage   *Usage   `json:"usage,omitempty"` // token使用统计（仅最后一个SSE事件中包含）
 }
 
 // ToJSON 将消息序列化为JSON字节
