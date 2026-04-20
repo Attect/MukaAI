@@ -775,6 +775,7 @@ func (a *App) SendMessage(content string) error {
 }
 
 // buildConversationHistory 将内部消息列表转换为 Agent 可用的历史消息格式
+// 保留 tool_calls 字段，避免产生既无 content 也无 tool_calls 的非法 assistant 消息
 func (a *App) buildConversationHistory(msgs []*message) []model.Message {
 	history := make([]model.Message, 0, len(msgs))
 	for _, m := range msgs {
@@ -782,10 +783,34 @@ func (a *App) buildConversationHistory(msgs []*message) []model.Message {
 		if m.role == "user" {
 			role = model.RoleUser
 		}
-		history = append(history, model.Message{
+
+		msg := model.Message{
 			Role:    role,
 			Content: m.content,
-		})
+		}
+
+		// 转换 tool_calls，保留给模型的工具备忘
+		if len(m.toolCalls) > 0 {
+			modelToolCalls := make([]model.ToolCall, 0, len(m.toolCalls))
+			for _, tc := range m.toolCalls {
+				// 解析 arguments JSON 字符串
+				var args string
+				if tc.Arguments != "" {
+					args = tc.Arguments
+				}
+				modelToolCalls = append(modelToolCalls, model.ToolCall{
+					ID:   tc.ID,
+					Type: "function",
+					Function: model.FunctionCall{
+						Name:      tc.Name,
+						Arguments: args,
+					},
+				})
+			}
+			msg.ToolCalls = modelToolCalls
+		}
+
+		history = append(history, msg)
 	}
 	return history
 }
