@@ -323,6 +323,8 @@ func (c *ExternalChecker) runCommand(command string, args []string) (string, str
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, command, args...)
+	// Windows 下隐藏控制台窗口（避免闪窗）
+	configureHideWindow(cmd)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

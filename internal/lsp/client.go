@@ -69,6 +69,8 @@ func (c *LSPClient) Start(ctx context.Context) error {
 	}
 
 	// 启动进程
+	// Windows 下隐藏控制台窗口（避免闪窗）
+	configureHideWindow(c.cmd)
 	if err := c.cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start language server: %w", err)
 	}

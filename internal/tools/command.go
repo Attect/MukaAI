@@ -479,6 +479,9 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, params map[string]inte
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
+	// Windows 下隐藏控制台窗口（避免闪窗）
+	configureHideWindow(cmd)
+
 	// 记录开始时间
 	startTime := time.Now()
 
@@ -663,6 +666,9 @@ func (t *ShellExecuteTool) Execute(ctx context.Context, params map[string]interf
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+
+	// Windows 下隐藏控制台窗口（避免闪窗）
+	configureHideWindow(cmd)
 
 	// 记录开始时间
 	startTime := time.Now()

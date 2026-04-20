@@ -24,6 +24,8 @@ var (
 func checkGitAvailable() bool {
 	gitAvailableOnce.Do(func() {
 		cmd := exec.Command("git", "--version")
+		// Windows 下隐藏控制台窗口（避免闪窗）
+		configureHideWindow(cmd)
 		if err := cmd.Run(); err != nil {
 			gitAvailable = false
 			return
@@ -47,6 +49,9 @@ func runGitCommand(ctx context.Context, workDir string, args ...string) (stdout,
 
 	cmd := exec.CommandContext(timeoutCtx, "git", args...)
 	cmd.Dir = workDir
+
+	// Windows 下隐藏控制台窗口（避免闪窗）
+	configureHideWindow(cmd)
 
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf

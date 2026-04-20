@@ -194,6 +194,8 @@ func checkInlineJS(jsContent string, scriptIndex int) []SyntaxWarning {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "node", "--check", tmpFile.Name())
+	// Windows 下隐藏控制台窗口（避免闪窗）
+	configureHideWindow(cmd)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 

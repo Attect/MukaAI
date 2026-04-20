@@ -16,6 +16,9 @@ func (s *MCPSession) createStdioTransport() (mcp.Transport, error) {
 
 	cmd := exec.Command(s.config.Command, s.config.Args...)
 
+	// Windows 下隐藏控制台窗口（避免闪窗）
+	configureHideWindow(cmd)
+
 	// 设置环境变量
 	if len(s.config.Env) > 0 {
 		// 复制当前环境变量
