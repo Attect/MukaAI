@@ -69,3 +69,55 @@ state/
 
 # .agentplus directory (legacy)
 .agentplus/
+
+# .trae directory (AI working specs)
+.trae/
+
+# Build output directories
+build/
+frontend/dist/
+out/
+
+# Frontend dependencies
+frontend/node_modules/
+frontend/package.json.md5
+
+# Compiled binaries
+/mukaai
+/mukaai.exe
+/mukaai-gui
+/mukaai-gui.exe
+/agentplus
+/agentplus.exe
+js-interpreter.exe
+rsrc.syso
+
+# Runtime config
+configs/config.yaml
+configs/js-interpreter-gui.yaml
+
+# Test workspace
+test_workspace/
+project/
+
+# Test artifacts
+test_mcp_go_task/
+test_fuzzy_requirement.go
+task13_token_stats_report.md
+docs/test-report-task19.md
+
+# Logs
+logs/
+
+# Agent working docs
+prompts/
+AGENTS.md
+
+# Scripts (test/utilities)
+scripts/test.sh
+scripts/verify-model-config.sh
+scripts/smart-start-mukaai.sh
+scripts/run-verification.sh
+scripts/run-js-interpreter-gui.sh
+scripts/monitor-mukaai.sh
+scripts/monitor-mukaai-execution.sh
