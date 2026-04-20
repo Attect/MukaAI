@@ -36,6 +36,11 @@ func NewGitStatusTool(workDir string) *gitStatusTool {
 	return &gitStatusTool{workDir: workDir}
 }
 
+// SetWorkDir 设置工作目录（用于Git操作路径校验）
+func (t *gitStatusTool) SetWorkDir(workDir string) {
+	t.workDir = workDir
+}
+
 func (t *gitStatusTool) Name() string {
 	return "git_status"
 }

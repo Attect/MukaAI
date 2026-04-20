@@ -142,6 +142,10 @@ func runGUICommand() {
 	app := gui.NewApp()
 	app.SetAgent(ag)
 	app.SetConfigPath(opts.ConfigPath)
+	// 设置工具工作目录更新回调，确保切换工作目录时所有工具的workDir同步更新
+	app.SetToolWorkDirUpdater(func(workDir string) {
+		toolRegistry.UpdateAllToolWorkDirs(workDir)
+	})
 
 	// 设置命令行参数传递的初始任务和日志配置
 	if opts.InitialTask != "" {

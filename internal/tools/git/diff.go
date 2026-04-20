@@ -36,6 +36,11 @@ func NewGitDiffTool(workDir string) *gitDiffTool {
 	return &gitDiffTool{workDir: workDir}
 }
 
+// SetWorkDir 设置工作目录（用于Git操作路径校验）
+func (t *gitDiffTool) SetWorkDir(workDir string) {
+	t.workDir = workDir
+}
+
 func (t *gitDiffTool) Name() string {
 	return "git_diff"
 }

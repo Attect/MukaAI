@@ -28,6 +28,11 @@ func NewDiagnoseCodeTool(manager *LSPManager, workDir string) *DiagnoseCodeTool 
 	}
 }
 
+// SetWorkDir 设置工作目录（用于路径范围校验）
+func (t *DiagnoseCodeTool) SetWorkDir(workDir string) {
+	t.workDir = workDir
+}
+
 func (t *DiagnoseCodeTool) Name() string {
 	return "diagnose_code"
 }
@@ -190,6 +195,11 @@ func NewGetDiagnosticsTool(manager *LSPManager, workDir string) *GetDiagnosticsT
 		manager: manager,
 		workDir: workDir,
 	}
+}
+
+// SetWorkDir 设置工作目录（用于路径范围校验）
+func (t *GetDiagnosticsTool) SetWorkDir(workDir string) {
+	t.workDir = workDir
 }
 
 func (t *GetDiagnosticsTool) Name() string {

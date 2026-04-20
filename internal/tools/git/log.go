@@ -36,6 +36,11 @@ func NewGitLogTool(workDir string) *gitLogTool {
 	return &gitLogTool{workDir: workDir}
 }
 
+// SetWorkDir 设置工作目录（用于Git操作路径校验）
+func (t *gitLogTool) SetWorkDir(workDir string) {
+	t.workDir = workDir
+}
+
 func (t *gitLogTool) Name() string {
 	return "git_log"
 }

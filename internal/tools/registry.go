@@ -185,6 +185,29 @@ func (r *ToolRegistry) ListToolNames() []string {
 	return names
 }
 
+// WorkDirUpdater 可更新工作目录的工具接口
+// 实现此接口的工具支持运行时更新工作目录
+type WorkDirUpdater interface {
+	SetWorkDir(workDir string)
+}
+
+// UpdateAllToolWorkDirs 更新所有支持SetWorkDir的工具的工作目录
+// 遍注册的所有工具，对实现WorkDirUpdater接口的工具调用SetWorkDir
+func (r *ToolRegistry) UpdateAllToolWorkDirs(workDir string) {
+	r.mu.RLock()
+	tools := make([]Tool, 0, len(r.tools))
+	for _, tool := range r.tools {
+		tools = append(tools, tool)
+	}
+	r.mu.RUnlock()
+
+	for _, tool := range tools {
+		if updater, ok := interface{}(tool).(WorkDirUpdater); ok {
+			updater.SetWorkDir(workDir)
+		}
+	}
+}
+
 // 全局默认注册中心
 var defaultRegistry = NewToolRegistry()
 

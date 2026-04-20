@@ -266,6 +266,12 @@ func (c *CommandSecurityChecker) GetEvaluator() SecurityEvaluator {
 	return c.evaluator
 }
 
+// SetWorkDir 设置工作目录（用于路径安全检查）
+// 当用户切换工作目录时调用，更新审查器的路径校验基准
+func (c *CommandSecurityChecker) SetWorkDir(workDir string) {
+	c.workDir = workDir
+}
+
 // === 动态白名单管理 ===
 
 // AddToDynamicAllowList 添加命令到动态白名单并持久化

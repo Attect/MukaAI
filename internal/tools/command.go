@@ -264,6 +264,8 @@ type ExecuteCommandTool struct {
 	allowedCommands []string
 	// securityChecker 命令安全审查器（可选，优先于白名单检查）
 	securityChecker *CommandSecurityChecker
+	// currentWorkDir 当前工作目录，当未显式指定working_dir时使用
+	currentWorkDir string
 }
 
 // NewExecuteCommandTool 创建命令执行工具
@@ -288,6 +290,11 @@ func NewExecuteCommandToolWithAllowedCommands(allowedCommands []string) *Execute
 		timeout:         DefaultCommandTimeout,
 		allowedCommands: allowedCommands,
 	}
+}
+
+// SetWorkDir 设置当前工作目录
+func (t *ExecuteCommandTool) SetWorkDir(workDir string) {
+	t.currentWorkDir = workDir
 }
 
 func (t *ExecuteCommandTool) Name() string {
@@ -437,11 +444,15 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, params map[string]inte
 		}
 	}
 
-	// 设置工作目录
+	// 设置工作目录：优先使用显式参数，其次使用工具当前工作目录
 	if workDirVal, ok := params["working_dir"]; ok {
 		if workDir, ok := workDirVal.(string); ok && workDir != "" {
 			cmd.Dir = workDir
+		} else if t.currentWorkDir != "" {
+			cmd.Dir = t.currentWorkDir
 		}
+	} else if t.currentWorkDir != "" {
+		cmd.Dir = t.currentWorkDir
 	}
 
 	// 设置环境变量（继承当前进程的环境变量，再追加自定义变量）
@@ -524,6 +535,8 @@ type ShellExecuteTool struct {
 	timeout         time.Duration
 	allowedCommands []string
 	securityChecker *CommandSecurityChecker
+	// currentWorkDir 当前工作目录，当未显式指定working_dir时使用
+	currentWorkDir string
 }
 
 func NewShellExecuteTool() *ShellExecuteTool {
@@ -539,6 +552,11 @@ func NewShellExecuteToolWithAllowedCommands(allowedCommands []string) *ShellExec
 		timeout:         DefaultCommandTimeout,
 		allowedCommands: allowedCommands,
 	}
+}
+
+// SetWorkDir 设置当前工作目录
+func (t *ShellExecuteTool) SetWorkDir(workDir string) {
+	t.currentWorkDir = workDir
 }
 
 func (t *ShellExecuteTool) Name() string {
@@ -630,11 +648,15 @@ func (t *ShellExecuteTool) Execute(ctx context.Context, params map[string]interf
 		cmd = exec.CommandContext(timeoutCtx, "sh", "-c", command)
 	}
 
-	// 设置工作目录
+	// 设置工作目录：优先使用显式参数，其次使用工具当前工作目录
 	if workDirVal, ok := params["working_dir"]; ok {
 		if workDir, ok := workDirVal.(string); ok && workDir != "" {
 			cmd.Dir = workDir
+		} else if t.currentWorkDir != "" {
+			cmd.Dir = t.currentWorkDir
 		}
+	} else if t.currentWorkDir != "" {
+		cmd.Dir = t.currentWorkDir
 	}
 
 	// 准备输出缓冲区

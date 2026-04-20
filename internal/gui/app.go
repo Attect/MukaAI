@@ -72,6 +72,10 @@ type App struct {
 	configPath     string             // 配置文件路径，用于GetSettings/SaveSettings
 	terminalWSUrl  string             // 终端 WebSocket 连接地址
 	logPath        string             // 日志文件路径
+
+	// toolWorkDirUpdater 工具工作目录更新回调
+	// 由初始化代码设置，用于在切换工作目录时同步更新所有工具的workDir
+	toolWorkDirUpdater func(string)
 }
 
 // conversation 内部对话结构，包含消息列表和当前流式消息
@@ -566,7 +570,7 @@ func (a *App) ChooseDirectory() string {
 }
 
 // SetWorkDir 设置工作目录
-// 仅更新App的currentDir字段，不调用os.Chdir以避免竞态条件
+// 更新App的currentDir、Agent的工作目录以及所有工具的workDir（不直接调用os.Chdir）
 func (a *App) SetWorkDir(path string) error {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
@@ -580,9 +584,24 @@ func (a *App) SetWorkDir(path string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("path is not a directory: %s", absPath)
 	}
+
 	a.mu.Lock()
 	a.currentDir = absPath
 	a.mu.Unlock()
+
+	// 同步更新Agent的工作目录（影响后续任务提示中的路径信息）
+	if a.agent != nil {
+		a.agent.SetWorkDir(absPath)
+	}
+
+	// 同步更新所有工具的工作目录（文件系统工具、Git工具、安全审查器等）
+	a.mu.RLock()
+	updater := a.toolWorkDirUpdater
+	a.mu.RUnlock()
+	if updater != nil {
+		updater(absPath)
+	}
+
 	a.emit("workdir:changed", absPath)
 	return nil
 }
@@ -750,6 +769,14 @@ func (a *App) GetLogPath() string {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.logPath
+}
+
+// SetToolWorkDirUpdater 设置工具工作目录更新回调
+// 由初始化代码调用，传入一个函数用于在切换工作目录时同步更新所有工具的workDir
+func (a *App) SetToolWorkDirUpdater(updater func(string)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.toolWorkDirUpdater = updater
 }
 
 // getString 从YAML map中安全提取字符串值，缺失或类型不匹配时返回默认值

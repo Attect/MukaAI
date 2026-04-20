@@ -1,9 +1,9 @@
 package tools
 
 import (
-	"github.com/Attect/MukaAI/internal/tools/syntax"
 	"context"
 	"fmt"
+	"github.com/Attect/MukaAI/internal/tools/syntax"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -99,6 +99,10 @@ func checkSensitiveAndReturn(cleanedPath string) (string, []string, error) {
 // ReadFileTool 读取文件内容工具
 type ReadFileTool struct {
 	workDir string
+}
+
+func (t *ReadFileTool) SetWorkDir(workDir string) {
+	t.workDir = workDir
 }
 
 func NewReadFileTool() *ReadFileTool {
@@ -203,6 +207,11 @@ func NewWriteFileToolWithWorkDir(workDir string) *WriteFileTool {
 // NewWriteFileToolWithWorkDirAndDispatcher 创建带语法检查调度器的写入文件工具
 func NewWriteFileToolWithWorkDirAndDispatcher(workDir string, dispatcher *syntax.Dispatcher) *WriteFileTool {
 	return &WriteFileTool{workDir: workDir, dispatcher: dispatcher}
+}
+
+// SetWorkDir 设置工作目录（用于路径范围校验）
+func (t *WriteFileTool) SetWorkDir(workDir string) {
+	t.workDir = workDir
 }
 
 func (t *WriteFileTool) Name() string {
@@ -318,6 +327,11 @@ func NewEditFileToolWithWorkDir(workDir string) *EditFileTool {
 // NewEditFileToolWithWorkDirAndDispatcher 创建带语法检查调度器的编辑文件工具
 func NewEditFileToolWithWorkDirAndDispatcher(workDir string, dispatcher *syntax.Dispatcher) *EditFileTool {
 	return &EditFileTool{workDir: workDir, dispatcher: dispatcher}
+}
+
+// SetWorkDir 设置工作目录（用于路径范围校验）
+func (t *EditFileTool) SetWorkDir(workDir string) {
+	t.workDir = workDir
 }
 
 func (t *EditFileTool) Name() string {
@@ -679,6 +693,11 @@ func NewListDirectoryToolWithWorkDir(workDir string) *ListDirectoryTool {
 	return &ListDirectoryTool{workDir: workDir}
 }
 
+// SetWorkDir 设置工作目录（用于路径范围校验）
+func (t *ListDirectoryTool) SetWorkDir(workDir string) {
+	t.workDir = workDir
+}
+
 func (t *ListDirectoryTool) Name() string {
 	return "list_directory"
 }
@@ -824,6 +843,11 @@ func NewDeleteFileToolWithWorkDir(workDir string) *DeleteFileTool {
 	return &DeleteFileTool{workDir: workDir}
 }
 
+// SetWorkDir 设置工作目录（用于路径范围校验）
+func (t *DeleteFileTool) SetWorkDir(workDir string) {
+	t.workDir = workDir
+}
+
 func (t *DeleteFileTool) Name() string {
 	return "delete_file"
 }
@@ -928,6 +952,11 @@ func NewCreateDirectoryTool() *CreateDirectoryTool {
 
 func NewCreateDirectoryToolWithWorkDir(workDir string) *CreateDirectoryTool {
 	return &CreateDirectoryTool{workDir: workDir}
+}
+
+// SetWorkDir 设置工作目录（用于路径范围校验）
+func (t *CreateDirectoryTool) SetWorkDir(workDir string) {
+	t.workDir = workDir
 }
 
 func (t *CreateDirectoryTool) Name() string {

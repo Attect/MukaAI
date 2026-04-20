@@ -28,6 +28,11 @@ func NewGitCommitTool(workDir string) *gitCommitTool {
 	return &gitCommitTool{workDir: workDir}
 }
 
+// SetWorkDir 设置工作目录（用于Git操作路径校验）
+func (t *gitCommitTool) SetWorkDir(workDir string) {
+	t.workDir = workDir
+}
+
 func (t *gitCommitTool) Name() string {
 	return "git_commit"
 }
@@ -165,6 +170,11 @@ type gitAddTool struct {
 // NewGitAddTool 创建git_add工具
 func NewGitAddTool(workDir string) *gitAddTool {
 	return &gitAddTool{workDir: workDir}
+}
+
+// SetWorkDir 设置工作目录（用于Git操作路径校验）
+func (t *gitAddTool) SetWorkDir(workDir string) {
+	t.workDir = workDir
 }
 
 func (t *gitAddTool) Name() string {

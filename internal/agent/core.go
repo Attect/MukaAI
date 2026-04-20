@@ -914,6 +914,25 @@ func (a *Agent) UpdateModelConfig(newCfg *model.Config) error {
 	return client.UpdateConfig(newCfg)
 }
 
+// SetWorkDir 运行时更新工作目录（热更新）
+// 更新Agent内部的工作目录，影响后续任务提示中的路径信息
+func (a *Agent) SetWorkDir(workDir string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.workDir = workDir
+	// 同步更新审查器的工作目录（用于文件存在性检查）
+	if a.reviewer != nil {
+		a.reviewer.SetWorkDir(workDir)
+	}
+}
+
+// GetWorkDir 获取当前工作目录
+func (a *Agent) GetWorkDir() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.workDir
+}
+
 // handleRepetition 处理模型输出重复的情况
 // 当callModel检测到重复输出时调用此方法进行重试决策。
 // 重试时不记录重复的响应到对话历史，而是注入防重复提示。
