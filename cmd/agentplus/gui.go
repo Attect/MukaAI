@@ -26,6 +26,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // GUIOptions GUI 模式的命令行参数
@@ -199,6 +200,14 @@ func runGUICommand() {
 			} else {
 				app.SetTerminalWSUrl(wsServer.GetWSUrl())
 			}
+
+			// 窗口创建后短暂置顶，确保窗口出现在前台
+			go func() {
+				time.Sleep(100 * time.Millisecond)
+				runtime.WindowSetAlwaysOnTop(ctx, true)
+				time.Sleep(50 * time.Millisecond)
+				runtime.WindowSetAlwaysOnTop(ctx, false)
+			}()
 
 			// 如果配置了自动发送初始任务，在应用初始化后执行
 			if opts.AutoSend && opts.InitialTask != "" {
