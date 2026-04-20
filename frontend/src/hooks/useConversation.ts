@@ -13,6 +13,7 @@ import {
   generateConversationTitle as wailsGenerateConversationTitle,
   regenerateConversationTitle as wailsRegenerateConversationTitle,
   updateConversationTitle as wailsUpdateConversationTitle,
+  getConversationData as wailsGetConversationData,
 } from "../wailsRuntime";
 
 export function useConversation() {
@@ -34,6 +35,11 @@ export function useConversation() {
     try {
       const result = await wailsGetConversations();
       setConversations(result || []);
+      // 同时获取当前活跃对话的消息数据，确保启动时能显示历史消息
+      const convData = await wailsGetConversationData();
+      if (convData) {
+        setConversationData(convData);
+      }
     } catch (err: any) {
       console.error("Failed to load conversations:", err);
     }
