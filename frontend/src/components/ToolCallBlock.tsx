@@ -77,25 +77,25 @@ export default function ToolCallBlock({ toolCall, isStreaming }: ToolCallBlockPr
   }
 
   return (
-    <div className="my-2 border border-yellow-700/50 rounded bg-yellow-900/20">
+    <div className="my-2 border border-amber-600/70 rounded bg-amber-950/60">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 w-full px-3 py-2 text-left text-yellow-400 text-sm hover:bg-yellow-900/30"
+        className="flex items-center gap-2 w-full px-3 py-2 text-left text-amber-300 font-medium hover:bg-amber-950/40"
       >
         <span>{expanded ? "▼" : "▶"}</span>
         <span>🔧 {toolCall.name}</span>
-        {isStreaming && !toolCall.isComplete && <span className="animate-pulse text-yellow-300">▌</span>}
+        {isStreaming && !toolCall.isComplete && <span className="animate-pulse text-amber-200">▌</span>}
         {toolCall.isComplete && <span className="text-green-400 text-xs">✓</span>}
       </button>
       {expanded && (
         <div className="px-3 pb-2">
-          <div className="text-gray-400 text-xs mb-1">Parameters:</div>
-          <pre className="text-gray-300 text-xs bg-gray-900/50 p-2 rounded overflow-x-auto">
+          <div className="text-amber-200/80 text-xs font-medium mb-1">Parameters:</div>
+          <pre className="text-amber-100 text-xs bg-gray-900/70 p-2 rounded overflow-x-auto border border-gray-700/50">
             {formatArguments(toolCall.arguments)}
           </pre>
           {(toolCall.result || toolCall.resultError) && (
             <>
-              <div className="text-gray-400 text-xs mt-2 mb-1">Result:</div>
+              <div className="text-amber-200/80 text-xs font-medium mt-2 mb-1">Result:</div>
               {showDiffView && diffData ? (
                 <GitDiffPanel
                   files={diffData.files}
@@ -104,7 +104,7 @@ export default function ToolCallBlock({ toolCall, isStreaming }: ToolCallBlockPr
               ) : showDiagnostics && diagnosticsProps ? (
                 <DiagnosticsPanel {...diagnosticsProps} />
               ) : (
-                <pre className={`text-xs p-2 rounded overflow-x-auto max-h-48 overflow-y-auto ${toolCall.resultError ? "text-red-400 bg-red-900/20" : "text-green-400 bg-green-900/20"}`}>
+                <pre className={`text-xs p-2 rounded overflow-x-auto max-h-48 overflow-y-auto border ${toolCall.resultError ? "text-red-300 bg-red-950/50 border-red-800/50" : "text-green-300 bg-green-950/50 border-green-800/50"}`}>
                   {toolCall.resultError || toolCall.result}
                 </pre>
               )}
