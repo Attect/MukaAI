@@ -483,82 +483,100 @@ func (r *Reviewer) checkInfiniteLoop(tc model.ToolCall) *ReviewIssue {
 }
 
 // checkFabrication 检查编造内容
-// 验证声称存在的文件或函数是否真实存在
+// 基于实际执行过的工具调用验证文件操作，而非从输出文本中提取路径
 func (r *Reviewer) checkFabrication(output string, toolCalls []model.ToolCall) []ReviewIssue {
 	issues := make([]ReviewIssue, 0)
 
-	// 剥离thinking标签内容，只检查正文
-	// 模型的<thinking>标签中经常提到计划创建的文件名，这些是计划而非声称已存在的文件
-	checkOutput := output
-	for {
-		startIdx := strings.Index(checkOutput, "<thinking>")
-		if startIdx == -1 {
-			break
-		}
-		endIdx := strings.Index(checkOutput, "</thinking>")
-		if endIdx == -1 {
-			// 未闭合的thinking标签，移除从startIdx开始的所有内容
-			checkOutput = checkOutput[:startIdx]
-			break
-		}
-		checkOutput = checkOutput[:startIdx] + checkOutput[endIdx+len("</thinking>"):]
-	}
+	// 收集所有实际执行的文件操作工具调用
+	fileOps := make(map[string]string) // path -> toolName
 
-	// 从正文中提取声称存在的文件路径
-	filePaths := extractFilePaths(checkOutput)
-
-	// 限制检查数量
-	checkCount := 0
-	for _, path := range filePaths {
-		if checkCount >= r.config.MaxFileChecksPerReview {
-			break
-		}
-
-		// 检查文件是否存在（使用工作目录解析相对路径）
-		if !r.fileExists(path) {
-			issues = append(issues, ReviewIssue{
-				Type:        IssueTypeFabrication,
-				Severity:    "high",
-				Description: fmt.Sprintf("声称存在的文件不存在: %s", path),
-				Evidence:    fmt.Sprintf("输出中提到的文件路径: %s", path),
-				Suggestion:  "请确保文件路径正确，或先创建文件再引用",
-				Timestamp:   time.Now(),
-			})
-		}
-		checkCount++
-	}
-
-	// 检查工具调用中声称的文件操作
 	for _, tc := range toolCalls {
-		if tc.Function.Name == "read_file" || tc.Function.Name == "write_file" {
+		var filePath string
+		var opType string
+
+		switch tc.Function.Name {
+		case "read_file", "write_file", "edit_file", "delete_file":
+			opType = tc.Function.Name
 			args, err := parseToolArgs(tc.Function.Arguments)
 			if err != nil {
 				continue
 			}
 
 			// 获取文件路径（兼容不同工具的参数名：file_path 或 path）
-			filePath := ""
 			if p, ok := args["file_path"].(string); ok {
 				filePath = p
 			} else if p, ok := args["path"].(string); ok {
 				filePath = p
 			}
-			if filePath != "" {
-				// 对于读取操作，检查文件是否存在
-				if tc.Function.Name == "read_file" {
-					if _, err := os.Stat(filePath); os.IsNotExist(err) {
-						issues = append(issues, ReviewIssue{
-							Type:        IssueTypeFabrication,
-							Severity:    "medium",
-							Description: fmt.Sprintf("尝试读取不存在的文件: %s", filePath),
-							Evidence:    fmt.Sprintf("工具调用: %s, 文件路径: %s", tc.Function.Name, filePath),
-							Suggestion:  "请确认文件路径正确，或先创建文件",
-							ToolName:    tc.Function.Name,
-							Timestamp:   time.Now(),
-						})
-					}
-				}
+
+		case "create_directory", "list_directory":
+			// 探索性操作：不验证文件存在性（目录可能不存在，只是探索）
+			continue
+		}
+
+		if filePath == "" {
+			continue
+		}
+
+		// 记录文件操作（同一个路径可能被多次操作，只保留最后一次）
+		fileOps[filePath] = opType
+	}
+
+	// 验证每个实际操作的文件/目录是否存在
+	for path, toolName := range fileOps {
+		info, err := os.Stat(path)
+		if os.IsNotExist(err) {
+			// 文件/目录不存在
+			severity := "high"
+			desc := fmt.Sprintf("工具调用操作不存在的文件: %s", path)
+
+			// 区分不同操作类型
+			switch toolName {
+			case "read_file":
+				desc = fmt.Sprintf("尝试读取不存在的文件: %s", path)
+				severity = "high" // 读取不存在文件是严重问题
+			case "edit_file":
+				desc = fmt.Sprintf("尝试编辑不存在的文件: %s", path)
+				severity = "high" // 编辑需要文件已存在
+			case "delete_file":
+				desc = fmt.Sprintf("尝试删除不存在的文件: %s", path)
+				severity = "medium"
+			case "write_file":
+				// 写操作：可能是在创建新文件，不算fabrication
+				continue
 			}
+
+			issues = append(issues, ReviewIssue{
+				Type:        IssueTypeFabrication,
+				Severity:    severity,
+				Description: desc,
+				Evidence:    fmt.Sprintf("工具调用: %s, 文件路径: %s", toolName, path),
+				Suggestion:  "请确认文件路径正确，或先创建文件再操作",
+				ToolName:    toolName,
+				Timestamp:   time.Now(),
+			})
+		} else if err != nil {
+			// 其他错误（权限等）
+			issues = append(issues, ReviewIssue{
+				Type:        IssueTypeFabrication,
+				Severity:    "medium",
+				Description: fmt.Sprintf("无法访问文件: %s (%v)", path, err),
+				Evidence:    fmt.Sprintf("工具调用: %s, 文件路径: %s", toolName, path),
+				Suggestion:  "请检查文件权限或路径",
+				ToolName:    toolName,
+				Timestamp:   time.Now(),
+			})
+		} else if info.IsDir() && (toolName == "read_file" || toolName == "write_file" || toolName == "edit_file") {
+			// 路径是目录，但工具期望的是文件
+			issues = append(issues, ReviewIssue{
+				Type:        IssueTypeFabrication,
+				Severity:    "medium",
+				Description: fmt.Sprintf("路径是目录而非文件: %s", path),
+				Evidence:    fmt.Sprintf("工具调用: %s 期望文件，但路径是目录", toolName),
+				Suggestion:  "请检查路径是否正确指向文件",
+				ToolName:    toolName,
+				Timestamp:   time.Now(),
+			})
 		}
 	}
 

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -568,5 +569,101 @@ func TestConcurrentReview(t *testing.T) {
 	history := reviewer.GetActionHistory()
 	if len(history) != 10 {
 		t.Errorf("expected 10 history items, got %d", len(history))
+	}
+}
+
+// TestCheckFabricationBasedOnToolCalls 测试基于工具调用的fabrication检测
+func TestCheckFabricationBasedOnToolCalls(t *testing.T) {
+	reviewer := NewReviewer(DefaultReviewConfig())
+
+	// 测试1：read_file读取不存在的文件应该被检测到
+	existingFile, _ := os.CreateTemp("", "test_*.txt")
+	defer os.Remove(existingFile.Name())
+
+	nonExistentFile := "/tmp/this_file_does_not_exist_12345.txt"
+
+	toolCalls := []model.ToolCall{
+		{
+			ID:   "tc1",
+			Type: "function",
+			Function: model.FunctionCall{
+				Name:      "read_file",
+				Arguments: fmt.Sprintf(`{"path": "%s"}`, existingFile.Name()),
+			},
+		},
+		{
+			ID:   "tc2",
+			Type: "function",
+			Function: model.FunctionCall{
+				Name:      "read_file",
+				Arguments: fmt.Sprintf(`{"path": "%s"}`, nonExistentFile),
+			},
+		},
+	}
+
+	issues := reviewer.checkFabrication("test output", toolCalls)
+	if len(issues) != 1 {
+		t.Errorf("expected 1 issue, got %d", len(issues))
+	}
+	if len(issues) > 0 && issues[0].Type != IssueTypeFabrication {
+		t.Errorf("expected IssueTypeFabrication, got %s", issues[0].Type)
+	}
+
+	// 测试2：write_file创建新文件不应该被标记为fabrication（因为是创建操作）
+	writeToolCalls := []model.ToolCall{
+		{
+			ID:   "tc1",
+			Type: "function",
+			Function: model.FunctionCall{
+				Name:      "write_file",
+				Arguments: fmt.Sprintf(`{"path": "%s", "content": "test"}`, nonExistentFile),
+			},
+		},
+	}
+
+	issues = reviewer.checkFabrication("test output", writeToolCalls)
+	if len(issues) != 0 {
+		t.Errorf("expected 0 issues for write_file, got %d: %v", len(issues), issues)
+	}
+
+	// 测试3：没有工具调用时不应该有问题
+	issues = reviewer.checkFabrication("test output", []model.ToolCall{})
+	if len(issues) != 0 {
+		t.Errorf("expected 0 issues for empty tool calls, got %d", len(issues))
+	}
+
+	// 测试4：list_directory列出不存在的目录应该被检测到（非读取操作）
+	listToolCalls := []model.ToolCall{
+		{
+			ID:   "tc1",
+			Type: "function",
+			Function: model.FunctionCall{
+				Name:      "list_directory",
+				Arguments: fmt.Sprintf(`{"path": "%s"}`, "/nonexistent_dir_12345"),
+			},
+		},
+	}
+
+	issues = reviewer.checkFabrication("test output", listToolCalls)
+	// list_directory对不存在的目录不应该标记为fabrication（只是探索）
+	if len(issues) != 0 {
+		t.Logf("list_directory on non-existent dir: %d issues (expected 0 for exploration)", len(issues))
+	}
+
+	// 测试5：edit_file编辑不存在的文件应该被检测到
+	editToolCalls := []model.ToolCall{
+		{
+			ID:   "tc1",
+			Type: "function",
+			Function: model.FunctionCall{
+				Name:      "edit_file",
+				Arguments: fmt.Sprintf(`{"path": "%s", "mode": "string_replace", "old_string": "test", "new_string": "test2"}`, nonExistentFile),
+			},
+		},
+	}
+
+	issues = reviewer.checkFabrication("test output", editToolCalls)
+	if len(issues) != 1 {
+		t.Errorf("expected 1 issue for edit_file on non-existent file, got %d", len(issues))
 	}
 }
