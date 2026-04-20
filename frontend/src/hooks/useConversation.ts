@@ -4,6 +4,7 @@ import {
   sendMessage as wailsSendMessage,
   interruptInference as wailsInterruptInference,
   clearConversation as wailsClearConversation,
+  newConversation as wailsNewConversation,
   setWorkDir as wailsSetWorkDir,
   getConversations as wailsGetConversations,
   switchConversation as wailsSwitchConversation,
@@ -60,6 +61,16 @@ export function useConversation() {
     }
   }, [loadConversations]);
 
+  const newConv = useCallback(async () => {
+    setError(null);
+    try {
+      await wailsNewConversation();
+      await loadConversations();
+    } catch (err: any) {
+      setError(err?.message || String(err));
+    }
+  }, [loadConversations]);
+
   const changeWorkDir = useCallback(async (path: string) => {
     try {
       await wailsSetWorkDir(path);
@@ -72,10 +83,11 @@ export function useConversation() {
     setError(null);
     try {
       await wailsSwitchConversation(id);
+      await loadConversations();
     } catch (err: any) {
       setError(err?.message || String(err));
     }
-  }, []);
+  }, [loadConversations]);
 
   const deleteConv = useCallback(async (id: string) => {
     try {
@@ -109,6 +121,7 @@ export function useConversation() {
     sendMessage,
     interruptInference,
     clearConv,
+    newConv,
     changeWorkDir,
     switchConv,
     deleteConv,
