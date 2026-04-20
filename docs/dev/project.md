@@ -75,6 +75,51 @@
 | tokenstats:updated | TokenStats | Token统计更新 |
 | workdir:changed | string | 工作目录变更 |
 
+#### cmd/agentplus/gui.go - GUI入口增强
+- `enableWebView2Accessibility()` - 新增函数：配置WebView2无障碍支持
+  - 在WebView2初始化前设置`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`环境变量
+  - 添加`--force-renderer-accessibility`参数，使Windows UI Automation可访问DOM无障碍树
+  - 保留已有的浏览器参数（避免覆盖其他配置）
+- `runGUICommand()` 修改：
+  - 在函数第一行调用`enableWebView2Accessibility()`
+  - 确保无障碍配置在Wails运行前生效
+
+#### frontend/src/ - WAI-ARIA无障碍属性补充
+为所有主要React组件添加语义化Aria属性，使无障碍树具有可读性：
+
+| 文件 | role | aria-label |
+|------|------|------------|
+| App.tsx | `role="application"` (根容器) | "MukaAI 智能编程助手" |
+| App.tsx | `role="main"` (对话区) | "对话区域" |
+| InputArea.tsx | textarea | "消息输入框" |
+| Toolbar.tsx | button | "设置"/"主题切换"/"终端"/"清空"/"侧边栏" |
+| Sidebar.tsx | nav | "对话列表" |
+
+#### GUI架构 - 无障碍支持说明
+
+**WebView2无障碍配置**：
+
+MukaAI使用Wails v2 + WebView2作为GUI框架。默认情况下，WebView2的DOM无障碍树对Windows UI Automation不可见，导致自动化工具（如Windows MCP）只能看到窗口框架，无法识别内部元素。
+
+解决方案分两层：
+
+1. **后端配置**（`cmd/agentplus/gui.go`）：
+   - 在WebView2初始化前设置环境变量`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`
+   - 添加`--force-renderer-accessibility`参数强制渲染进程创建无障碍节点
+   - 关键：必须在`wails.Run()`之前调用，否则配置无效
+
+2. **前端语义化**（`frontend/src/`）：
+   - 为所有交互元素添加WAI-ARIA属性（role、aria-label等）
+   - 使无障碍树具有可读性和可操作性
+   - 支持屏幕阅读器和自动化工具
+
+**注意事项**：
+- `--remote-debugging-port`在WebView2嵌入模式下不支持，会被忽略
+- 启用无障碍树后内存占用增加约5-10MB，对桌面应用可忽略
+- 该配置跨平台有效（Windows/macOS/Linux）
+
+详见：[WebView2无障碍踩坑记录](../../ai/knowledge/troubleshooting/webview2-accessibility.md)
+
 #### internal/agent/stream_test.go
 - 更新 `TestStreamHandlerFunc` 测试用例，增加OnTaskDone测试
 - 更新 `TestStreamHandlerFuncWithNilFunctions` 测试用例，增加OnTaskDone空函数安全调用测试
