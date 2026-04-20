@@ -6,6 +6,10 @@ export function ClearConversation() {
   return window['go']['gui']['App']['ClearConversation']();
 }
 
+export function ChooseDirectory() {
+  return window['go']['gui']['App']['ChooseDirectory']();
+}
+
 export function DeleteConversation(arg1) {
   return window['go']['gui']['App']['DeleteConversation'](arg1);
 }

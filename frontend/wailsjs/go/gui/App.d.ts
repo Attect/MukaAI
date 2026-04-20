@@ -4,6 +4,7 @@
 import { conversation, conversationData, tokenStats } from "./models";
 
 export function ClearConversation(): Promise<void>;
+export function ChooseDirectory(): Promise<string>;
 export function DeleteConversation(arg1: string): Promise<void>;
 export function ExportConversation(arg1: string, arg2: string): Promise<void>;
 export function GetConversationData(): Promise<conversationData>;

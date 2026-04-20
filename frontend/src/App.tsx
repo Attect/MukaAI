@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect } from "react";
 import { useConversation } from "./hooks/useConversation";
 import { useStreamEvents } from "./hooks/useStreamEvents";
-import { isWailsReady, getWorkDir as wailsGetWorkDir } from "./wailsRuntime";
+import { isWailsReady, getWorkDir as wailsGetWorkDir, chooseDirectory } from "./wailsRuntime";
 import ErrorBoundary from "./components/ErrorBoundary";
 import Toolbar from "./components/Toolbar";
 import MessageList from "./components/MessageList";
@@ -156,6 +156,17 @@ function App(): React.ReactElement {
     });
   }, []);
 
+  const handleChooseWorkDir = useCallback(async () => {
+    try {
+      const chosen = await chooseDirectory();
+      if (chosen) {
+        changeWorkDir(chosen);
+      }
+    } catch (err: any) {
+      setError(err?.message || String(err));
+    }
+  }, [changeWorkDir, setError]);
+
   // 构建合并后的消息列表（消息 + 压缩事件）
   const messageListItems: MessageListItem[] = React.useMemo(() => {
     const messages = conversationData.messages || [];
@@ -226,6 +237,7 @@ function App(): React.ReactElement {
             isTerminalVisible={terminalVisible}
             onToggleTheme={handleToggleTheme}
             isDarkTheme={isDarkTheme}
+            onChooseWorkDir={handleChooseWorkDir}
           />
           {error && (
             <div style={{ background: "var(--bg-error)", color: "var(--text-red)", padding: "0.5rem 1rem", fontSize: "0.875rem", display: "flex", justifyContent: "space-between" }}>

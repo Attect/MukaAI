@@ -13,6 +13,7 @@ interface ToolbarProps {
   onToggleTerminal: () => void;
   isTerminalVisible: boolean;
   isDarkTheme: boolean;
+  onChooseWorkDir: () => void;
 }
 
 export default function Toolbar({
@@ -27,6 +28,7 @@ export default function Toolbar({
   onToggleTerminal,
   isTerminalVisible,
   isDarkTheme,
+  onChooseWorkDir,
 }: ToolbarProps): React.ReactElement {
   return (
     <div
@@ -47,7 +49,13 @@ export default function Toolbar({
         >
           ☰
         </button>
-        <span style={{ color: "var(--text-muted)", fontSize: "0.875rem" }}>📁 {workDir}</span>
+        <span
+          style={{ color: "var(--text-muted)", fontSize: "0.875rem", cursor: "pointer" }}
+          onClick={onChooseWorkDir}
+          title="点击选择工作目录"
+        >
+          📁 {workDir}
+        </span>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
         <span style={{ color: "var(--text-muted)", fontSize: "0.875rem" }}>Tokens: {tokenStats.totalTokens}</span>

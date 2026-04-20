@@ -15,6 +15,7 @@ import {
   DeleteConversation as wailsDeleteConversation,
   UpdateConversationTitle as wailsUpdateConversationTitle,
   ExportConversation as wailsExportConversation,
+  ChooseDirectory as wailsChooseDirectory,
 } from "../wailsjs/go/gui/App";
 
 import { EventsOn } from "../wailsjs/runtime/runtime";
@@ -83,6 +84,10 @@ export async function updateConversationTitle(id: string, title: string): Promis
 
 export async function exportConversation(id: string, filename: string): Promise<void> {
   await wailsExportConversation(id, filename);
+}
+
+export async function chooseDirectory(): Promise<string> {
+  return await wailsChooseDirectory();
 }
 
 export function onEvent(event: string, callback: (...args: any[]) => void): () => void {

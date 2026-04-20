@@ -11,6 +11,7 @@ import (
 
 	"github.com/Attect/MukaAI/internal/agent"
 	"github.com/Attect/MukaAI/internal/model"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"gopkg.in/yaml.v3"
 )
@@ -547,6 +548,21 @@ func (a *App) GetConversationData() map[string]interface{} {
 		"messages":    messages,
 		"isStreaming": a.isStreaming,
 	}
+}
+
+// ChooseDirectory 弹出系统目录选择对话框，返回用户选择的目录路径
+func (a *App) ChooseDirectory() string {
+	if a.ctx == nil {
+		return ""
+	}
+	chosen, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "选择工作目录",
+	})
+	if err != nil {
+		fmt.Printf("[App] ChooseDirectory error: %v\n", err)
+		return ""
+	}
+	return chosen
 }
 
 // SetWorkDir 设置工作目录

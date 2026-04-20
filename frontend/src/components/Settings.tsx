@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { getSettings, saveSettings, onEvent } from "../wailsRuntime";
+import { getSettings, saveSettings, onEvent, chooseDirectory } from "../wailsRuntime";
 
 interface SettingsProps {
   visible: boolean;
@@ -98,6 +98,17 @@ export default function Settings({ visible, onClose }: SettingsProps): React.Rea
     setForm((prev) => ({ ...prev, [key]: value }));
   }, []);
 
+  const handleBrowseWorkDir = useCallback(async () => {
+    try {
+      const chosen = await chooseDirectory();
+      if (chosen) {
+        setForm((prev) => ({ ...prev, work_dir: chosen }));
+      }
+    } catch (err: any) {
+      console.error("Failed to choose directory:", err);
+    }
+  }, []);
+
   if (!visible) return <></>;
 
   const inputStyle = {
@@ -187,7 +198,25 @@ export default function Settings({ visible, onClose }: SettingsProps): React.Rea
           onChange={(e) => handleChange("max_iterations", Number(e.target.value))}
         />
 
-        <label style={labelStyle}>工作目录</label>
+        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+          <label style={labelStyle}>工作目录</label>
+          <button
+            onClick={handleBrowseWorkDir}
+            style={{
+              padding: "0.375rem 0.625rem",
+              fontSize: "0.8125rem",
+              borderRadius: "0.375rem",
+              border: "1px solid var(--border-color)",
+              background: "var(--bg-input)",
+              color: "var(--text-muted)",
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+            title="选择目录"
+          >
+            浏览...
+          </button>
+        </div>
         <input
           style={inputStyle}
           type="text"
