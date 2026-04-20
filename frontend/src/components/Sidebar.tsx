@@ -73,6 +73,8 @@ export default function Sidebar({
   return (
     <>
       <div
+        role="navigation"
+        aria-label="对话列表侧边栏"
         style={{
           width: "16rem",
           background: "var(--bg-sidebar)",
@@ -98,6 +100,7 @@ export default function Sidebar({
           </span>
           <button
             onClick={onClose}
+            aria-label="关闭侧边栏"
             style={{
               background: "none",
               border: "none",
@@ -111,6 +114,7 @@ export default function Sidebar({
         </div>
         <button
           onClick={onNew}
+          aria-label="新建对话"
           style={{
             margin: "0.5rem 0.75rem",
             padding: "0.5rem",
@@ -130,13 +134,16 @@ export default function Sidebar({
         >
           + 新对话
         </button>
-        <div style={{ flex: 1, overflowY: "auto" }}>
+        <div role="list" aria-label="对话列表" style={{ flex: 1, overflowY: "auto" }}>
           {conversations.map((conv) => {
               const isGenerating = generatingIds.has(conv.id);
               return (
                 <div
-                  key={conv.id}
-                  onClick={() => onSelect(conv.id)}
+                   key={conv.id}
+                   role="listitem"
+                   tabIndex={0}
+                   aria-label={`${conv.title}, ${conv.messageCount}条消息${conv.id === activeId ? " (当前)" : ""}`}
+                   onClick={() => onSelect(conv.id)}
                   onMouseEnter={() => setHoveredId(conv.id)}
                   onMouseLeave={() => setHoveredId(null)}
                   style={{
@@ -185,10 +192,11 @@ export default function Sidebar({
                     >
                  {/* 重新生成标题按钮（始终显示，生成中时禁用） */}
                   {onGenerateTitle && (
-                    <button
-                      onClick={() => !isGenerating && onGenerateTitle(conv.id)}
-                      disabled={isGenerating}
-                      style={{
+                     <button
+                       onClick={() => !isGenerating && onGenerateTitle(conv.id)}
+                       disabled={isGenerating}
+                       aria-label={isGenerating ? "正在生成标题" : "重新生成标题"}
+                       style={{
                         background: isGenerating ? "var(--bg-disabled)" : "var(--bg-button)",
                         color: "#fff",
                         border: "none",
@@ -209,10 +217,11 @@ export default function Sidebar({
                     </button>
                   )}
                       {/* 编辑标题按钮（生成中时禁用） */}
-                      <button
-                        onClick={() => !isGenerating && handleStartEdit(conv.id, conv.title)}
-                        disabled={isGenerating}
-                        style={{
+                       <button
+                         onClick={() => !isGenerating && handleStartEdit(conv.id, conv.title)}
+                         disabled={isGenerating}
+                         aria-label="编辑标题"
+                         style={{
                           background: isGenerating ? "var(--bg-disabled)" : "var(--bg-button)",
                           color: "#fff",
                           border: "none",
@@ -232,9 +241,10 @@ export default function Sidebar({
                         ✏️
                       </button>
                       {/* 删除按钮 */}
-                      <button
-                        onClick={() => setDeleteTarget(conv.id)}
-                        style={{
+                       <button
+                         onClick={() => setDeleteTarget(conv.id)}
+                         aria-label="删除对话"
+                         style={{
                           background: "var(--bg-danger)",
                           color: "#fff",
                           border: "none",
@@ -332,6 +342,7 @@ export default function Sidebar({
               value={editTitle}
               onChange={(e) => setEditTitle(e.target.value)}
               onKeyDown={handleEditKeyDown}
+              aria-label="对话标题"
               autoFocus
               style={{
                 width: "100%",

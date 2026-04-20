@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	mukaai "github.com/Attect/MukaAI"
@@ -40,6 +41,10 @@ type GUIOptions struct {
 // runGUICommand 运行 GUI 模式
 // 加载配置、初始化 Agent 和工具、创建 Wails 应用并启动
 func runGUICommand() {
+	// 在 WebView2 初始化之前设置环境变量，启用无障碍支持
+	// --force-renderer-accessibility: 强制WebView2渲染进程创建无障碍节点，暴露给Windows UI Automation
+	enableWebView2Accessibility()
+
 	// 解析 GUI 子命令的参数（os.Args[2:]为 gui 之后的参数）
 	opts := parseGUIFlags()
 
@@ -231,6 +236,28 @@ func runGUICommand() {
 	stateManager.StopCleanup()
 	wsServer.Stop()
 	terminalManager.Stop()
+}
+
+// enableWebView2Accessibility 配置WebView2的无障碍支持
+// 必须在Wails运行前调用，因为WebView2在首次创建时读取此环境变量
+// 启用后：Windows UI Automation可以访问WebView2内部的DOM无障碍树
+// 注意：WebView2嵌入模式下不支持--remote-debugging-port，该标志会被忽略
+func enableWebView2Accessibility() {
+	existing := os.Getenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS")
+	args := []string{}
+
+	// 保留已有的浏览器参数
+	if existing != "" {
+		args = append(args, existing)
+	}
+
+	// 强制渲染进程创建无障碍节点，使Windows UI Automation能访问WebView2内部内容
+	// 这是使自动化工具（如Windows MCP）能够识别和操作WebView2内部元素的关键
+	args = append(args, "--force-renderer-accessibility")
+
+	newArgs := strings.Join(args, " ")
+	os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", newArgs)
+	log.Printf("[GUI] WebView2 browser arguments: %s", newArgs)
 }
 
 // runDefaultCommand GUI构建默认运行GUI模式

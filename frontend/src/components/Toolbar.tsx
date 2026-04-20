@@ -32,6 +32,8 @@ export default function Toolbar({
 }: ToolbarProps): React.ReactElement {
   return (
     <div
+      role="toolbar"
+      aria-label="工具栏"
       style={{
         display: "flex",
         alignItems: "center",
@@ -44,25 +46,31 @@ export default function Toolbar({
       <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
         <button
           onClick={onToggleSidebar}
+          aria-label="对话列表"
           style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: "1.25rem" }}
           title="对话列表"
         >
           ☰
         </button>
         <span
+          role="button"
+          tabIndex={0}
+          aria-label={`工作目录: ${workDir}，点击选择工作目录`}
           style={{ color: "var(--text-muted)", fontSize: "0.875rem", cursor: "pointer" }}
           onClick={onChooseWorkDir}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onChooseWorkDir(); }}
           title="点击选择工作目录"
         >
           📁 {workDir}
         </span>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-        <span style={{ color: "var(--text-muted)", fontSize: "0.875rem" }}>Tokens: {tokenStats.totalTokens}</span>
-        <span style={{ color: "var(--text-muted)", fontSize: "0.875rem" }}>推理: {tokenStats.inferenceCount}</span>
+        <span role="status" aria-label="Token使用统计" style={{ color: "var(--text-muted)", fontSize: "0.875rem" }}>Tokens: {tokenStats.totalTokens}</span>
+        <span role="status" aria-label="推理次数统计" style={{ color: "var(--text-muted)", fontSize: "0.875rem" }}>推理: {tokenStats.inferenceCount}</span>
         {isStreaming && (
           <button
             onClick={onInterrupt}
+            aria-label="打断推理"
             style={{
               background: "var(--bg-danger)",
               color: "#fff",
@@ -79,6 +87,7 @@ export default function Toolbar({
         )}
         <button
           onClick={onClear}
+          aria-label="清空对话"
           style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: "0.875rem" }}
           title="清空对话"
         >
@@ -86,6 +95,7 @@ export default function Toolbar({
         </button>
         <button
           onClick={onToggleTerminal}
+          aria-label={isTerminalVisible ? "关闭终端" : "打开终端"}
           style={{
             background: isTerminalVisible ? "var(--bg-active)" : "none",
             border: isTerminalVisible ? "1px solid var(--border-color)" : "none",
@@ -101,6 +111,7 @@ export default function Toolbar({
         </button>
         <button
           onClick={onToggleTheme}
+          aria-label={isDarkTheme ? "切换到亮色主题" : "切换到暗色主题"}
           style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: "1rem" }}
           title={isDarkTheme ? "切换到亮色主题" : "切换到暗色主题"}
         >
@@ -108,6 +119,7 @@ export default function Toolbar({
         </button>
         <button
           onClick={onToggleSettings}
+          aria-label="设置"
           style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: "1rem" }}
           title="设置"
         >

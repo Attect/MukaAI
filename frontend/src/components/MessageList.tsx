@@ -109,7 +109,7 @@ export default function MessageList({ items }: MessageListProps): React.ReactEle
   // 空消息占位
   if (items.length === 0) {
     return (
-      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)" }}>
+      <div role="log" aria-label="对话消息" aria-live="polite" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)" }}>
         <p>开始新的对话...</p>
       </div>
     );
@@ -120,6 +120,9 @@ export default function MessageList({ items }: MessageListProps): React.ReactEle
   return (
     <div
       ref={parentRef}
+      role="log"
+      aria-label="对话消息"
+      aria-live="polite"
       onScroll={handleScroll}
       style={{
         flex: 1,

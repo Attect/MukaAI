@@ -163,6 +163,7 @@ export default function InputArea({ isStreaming, onSend, onCommand }: InputAreaP
           }}
           onKeyDown={handleKeyDown}
           disabled={isStreaming}
+          aria-label="消息输入框"
           placeholder={isStreaming ? "推理中..." : "请输入你的问题... (Enter 发送, Shift+Enter 换行, 支持文件拖拽)"}
           style={{
             width: "100%",

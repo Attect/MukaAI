@@ -213,7 +213,7 @@ function App(): React.ReactElement {
 
   return (
     <ErrorBoundary>
-      <div style={{ display: "flex", height: "100vh", background: "var(--bg-app)", color: "var(--text-primary)" }}>
+      <div role="application" aria-label="MukaAI 智能编程助手" style={{ display: "flex", height: "100vh", background: "var(--bg-app)", color: "var(--text-primary)" }}>
         <Sidebar
           visible={sidebarVisible}
           conversations={conversations}
@@ -231,7 +231,7 @@ function App(): React.ReactElement {
           onUpdateTitle={updateTitle}
           generatingIds={generatingIds}
         />
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+        <div role="main" aria-label="对话区域" style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
           <Toolbar
             workDir={workDir}
             tokenStats={tokenStats}

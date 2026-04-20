@@ -75,7 +75,7 @@ export default function MessageItem({ message }: MessageItemProps): React.ReactE
 
   if (message.role === "user") {
     return (
-      <div style={{ margin: "0.75rem 0" }} ref={containerRef}>
+      <div role="article" aria-label={`用户消息: ${content.slice(0, 50)}`} style={{ margin: "0.75rem 0" }} ref={containerRef}>
         <div style={{ color: "var(--text-user)", fontSize: "0.875rem", fontWeight: 700, marginBottom: "0.25rem" }}>👤 User</div>
         <div style={{ marginLeft: "1rem", color: "var(--text-primary)", whiteSpace: "pre-wrap" }}>{content}</div>
       </div>
@@ -83,7 +83,7 @@ export default function MessageItem({ message }: MessageItemProps): React.ReactE
   }
 
   return (
-    <div style={{ margin: "0.75rem 0" }} ref={containerRef}>
+    <div role="article" aria-label={`助手消息: ${content.slice(0, 50) || (thinking ? '思考中...' : '工具调用')}`} style={{ margin: "0.75rem 0" }} ref={containerRef}>
       <div style={{ color: "var(--text-assistant)", fontSize: "0.875rem", fontWeight: 700, marginBottom: "0.25rem" }}>🤖 Assistant</div>
       <div style={{ marginLeft: "1rem" }}>
         {/* 1. 思考内容 */}
