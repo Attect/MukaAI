@@ -267,6 +267,11 @@ func (a *App) SaveSettings(settings map[string]interface{}) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
+	// 确保配置目录存在
+	configDir := filepath.Dir(configPath)
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
 	if err := os.WriteFile(configPath, outData, 0644); err != nil {
 		return fmt.Errorf("failed to write config: %w", err)
 	}
