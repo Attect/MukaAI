@@ -158,6 +158,8 @@ func (c *Client) doChatCompletion(ctx context.Context, req *ChatCompletionReques
 // StreamChatCompletion 流式聊天补全
 // 返回一个通道，每次收到流式数据时发送到通道
 func (c *Client) StreamChatCompletion(ctx context.Context, messages []Message, tools []Tool) (<-chan StreamEvent, error) {
+	fmt.Printf("[Model] >>> StreamChatCompletion called, messages count: %d\n", len(messages))
+
 	cfg := c.getConfig()
 	req := ChatCompletionRequest{
 		Model:    cfg.ModelName,
@@ -166,6 +168,7 @@ func (c *Client) StreamChatCompletion(ctx context.Context, messages []Message, t
 		Stream:   true,
 	}
 
+	fmt.Printf("[Model] >>> Request config: model=%s, endpoint=%s\n", cfg.ModelName, cfg.Endpoint)
 	return c.doStreamChatCompletion(ctx, &req, cfg)
 }
 
@@ -179,32 +182,45 @@ type StreamEvent struct {
 // doStreamChatCompletion 执行流式聊天补全请求
 // cfg: 配置快照，确保单次请求内配置一致性
 func (c *Client) doStreamChatCompletion(ctx context.Context, req *ChatCompletionRequest, cfg *Config) (<-chan StreamEvent, error) {
+	fmt.Printf("[Model] >>> doStreamChatCompletion starting...\n")
+
 	// 序列化请求
 	body, err := json.Marshal(req)
 	if err != nil {
+		fmt.Printf("[Model] >>> ERROR: marshal request failed: %v\n", err)
 		return nil, &RequestError{Operation: "marshal", Err: err}
 	}
+	fmt.Printf("[Model] >>> Request body serialized, length: %d bytes\n", len(body))
+	fmt.Printf("[Model] >>> Request body (first 500 chars): %s...\n", string(body[:min(500, len(body))]))
 
-	// 创建HTTP请求
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", cfg.Endpoint+"chat/completions", bytes.NewReader(body))
+	// 创建 HTTP 请求
+	url := cfg.Endpoint + "chat/completions"
+	fmt.Printf("[Model] >>> Creating HTTP request to: %s\n", url)
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
+		fmt.Printf("[Model] >>> ERROR: create request failed: %v\n", err)
 		return nil, &RequestError{Operation: "create_request", Err: err}
 	}
 
 	// 设置请求头
 	c.setHeaders(httpReq, cfg)
 	httpReq.Header.Set("Accept", "text/event-stream")
+	fmt.Printf("[Model] >>> HTTP request headers set\n")
 
 	// 发送请求
+	fmt.Printf("[Model] >>> Sending HTTP request...\n")
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
+		fmt.Printf("[Model] >>> ERROR: HTTP request failed: %v\n", err)
 		return nil, &RequestError{Operation: "do_request", Err: err}
 	}
+	fmt.Printf("[Model] >>> HTTP response received, status: %d\n", resp.StatusCode)
 
 	// 检查响应状态
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
 		bodyBytes, _ := io.ReadAll(resp.Body)
+		fmt.Printf("[Model] >>> ERROR: Non-200 status: %d, body: %s\n", resp.StatusCode, string(bodyBytes))
 		return nil, &APIError{
 			StatusCode: resp.StatusCode,
 			Message:    string(bodyBytes),
@@ -213,9 +229,11 @@ func (c *Client) doStreamChatCompletion(ctx context.Context, req *ChatCompletion
 
 	// 创建事件通道
 	eventChan := make(chan StreamEvent, 100)
+	fmt.Printf("[Model] >>> Event channel created\n")
 
-	// 启动goroutine处理SSE流
+	// 启动 goroutine 处理 SSE 流
 	go c.processSSEStream(resp, eventChan)
+	fmt.Printf("[Model] >>> SSE stream processor started\n")
 
 	return eventChan, nil
 }
@@ -223,13 +241,17 @@ func (c *Client) doStreamChatCompletion(ctx context.Context, req *ChatCompletion
 // processSSEStream 处理SSE流
 // 解析Server-Sent Events并发送到通道
 func (c *Client) processSSEStream(resp *http.Response, eventChan chan<- StreamEvent) {
+	fmt.Printf("[Model] >>> processSSEStream started\n")
 	defer close(eventChan)
 	defer resp.Body.Close()
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024) // 10MB缓冲区，适配大型响应
+	fmt.Printf("[Model] >>> Scanner initialized, starting to read SSE stream\n")
 
+	lineCount := 0
 	for scanner.Scan() {
+		lineCount++
 		line := scanner.Text()
 
 		// 跳过空行
@@ -242,8 +264,11 @@ func (c *Client) processSSEStream(resp *http.Response, eventChan chan<- StreamEv
 			data := strings.TrimPrefix(line, "data:")
 			data = strings.TrimLeft(data, " ")
 
+			fmt.Printf("[Model] >>> SSE line %d received, data length: %d\n", lineCount, len(data))
+
 			// 检查是否为结束标记
 			if data == "[DONE]" {
+				fmt.Printf("[Model] >>> [DONE] marker received, closing stream\n")
 				eventChan <- StreamEvent{Done: true}
 				return
 			}
@@ -251,6 +276,7 @@ func (c *Client) processSSEStream(resp *http.Response, eventChan chan<- StreamEv
 			// 解析JSON数据
 			var streamResp StreamResponse
 			if err := json.Unmarshal([]byte(data), &streamResp); err != nil {
+				fmt.Printf("[Model] >>> ERROR: Failed to parse SSE JSON at line %d: %v\n", lineCount, err)
 				eventChan <- StreamEvent{Error: &RequestError{Operation: "parse_sse", Err: err}}
 				continue
 			}
@@ -259,13 +285,17 @@ func (c *Client) processSSEStream(resp *http.Response, eventChan chan<- StreamEv
 			// 此处不再调用processStreamThinkingTags，避免重复处理
 
 			// 发送事件
+			fmt.Printf("[Model] >>> Sending SSE event to channel (line %d)\n", lineCount)
 			eventChan <- StreamEvent{Response: &streamResp}
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
+		fmt.Printf("[Model] >>> ERROR: Scanner error: %v\n", err)
 		eventChan <- StreamEvent{Error: &RequestError{Operation: "read_stream", Err: err}}
 	}
+
+	fmt.Printf("[Model] >>> processSSEStream finished, total lines read: %d\n", lineCount)
 }
 
 // setHeaders 设置HTTP请求头
