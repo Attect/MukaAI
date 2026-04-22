@@ -34,6 +34,11 @@ type ServerConfig struct {
 	ProjectPath  string                       `yaml:"project_path"` // 项目路径，自动注入到工具参数
 	Prefix       string                       `yaml:"prefix"`       // 工具名前缀，默认使用ID
 	ToolSettings map[string]ToolSettingConfig `yaml:"tools"`        // 每个工具的独立配置
+
+	// 可用性增强配置
+	AutoReconnect    bool `yaml:"auto_reconnect"`     // 是否启用自动重连，默认 true
+	MaxRetries       int  `yaml:"max_retries"`        // 最大重连次数，默认 3
+	RetryIntervalSec int  `yaml:"retry_interval_sec"` // 重连间隔（秒），默认 2
 }
 
 // ToolSettingConfig 单个工具的独立配置
@@ -61,13 +66,16 @@ func DefaultMCPConfig() *MCPConfig {
 		},
 		Servers: []ServerConfig{
 			{
-				ID:        "chrome",
-				Enabled:   true,
-				Prefix:    "chrome",
-				Transport: "stdio",
-				Command:   "npx",
-				Args:      []string{"-y", "chrome-devtools-mcp@latest", "--no-usage-statistics"},
-				Timeout:   60,
+				ID:               "chrome",
+				Enabled:          true,
+				Prefix:           "chrome",
+				Transport:        "stdio",
+				Command:          "npx",
+				Args:             []string{"-y", "chrome-devtools-mcp@latest", "--no-usage-statistics"},
+				Timeout:          60,
+				AutoReconnect:    true,
+				MaxRetries:       3,
+				RetryIntervalSec: 2,
 			},
 			{
 				ID:        "windows",
@@ -79,15 +87,21 @@ func DefaultMCPConfig() *MCPConfig {
 				Env: map[string]string{
 					"ANONYMIZED_TELEMETRY": "false",
 				},
-				Timeout: 60,
+				Timeout:          60,
+				AutoReconnect:    true,
+				MaxRetries:       3,
+				RetryIntervalSec: 2,
 			},
 			{
-				ID:        "idea",
-				Enabled:   true,
-				Prefix:    "idea",
-				Transport: "sse",
-				URL:       "http://127.0.0.1:64342/sse",
-				Timeout:   60,
+				ID:               "idea",
+				Enabled:          true,
+				Prefix:           "idea",
+				Transport:        "sse",
+				URL:              "http://127.0.0.1:64342/sse",
+				Timeout:          60,
+				AutoReconnect:    true,
+				MaxRetries:       3,
+				RetryIntervalSec: 2,
 			},
 		},
 	}

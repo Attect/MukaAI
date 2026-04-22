@@ -30,6 +30,10 @@ mcp:
           command: "npx"
           args: ["-y", "chrome-devtools-mcp@latest", "--no-usage-statistics"]
           timeout: 60
+          # 可用性增强配置
+          auto_reconnect: true
+          max_retries: 3
+          retry_interval_sec: 2
         - id: windows
           enabled: true
           prefix: "win"
@@ -39,12 +43,20 @@ mcp:
           env:
             ANONYMIZED_TELEMETRY: "false"
           timeout: 60
+          # 可用性增强配置
+          auto_reconnect: true
+          max_retries: 3
+          retry_interval_sec: 2
         - id: idea
           enabled: true
           prefix: "idea"
           transport: "sse"
           url: http://127.0.0.1:64342/sse
           timeout: 60
+          # 可用性增强配置
+          auto_reconnect: true
+          max_retries: 3
+          retry_interval_sec: 2
 gui:
     window_maximized: true
 model:
