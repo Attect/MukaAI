@@ -40,9 +40,9 @@ mcp:
             ANONYMIZED_TELEMETRY: "false"
           timeout: 60
         - id: idea
-          enabled: false
+          enabled: true
           prefix: "idea"
-          transport: sse
+          transport: "sse"
           url: http://127.0.0.1:64342/sse
           timeout: 60
 model:

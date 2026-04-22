@@ -61,7 +61,7 @@ type MCPConfig struct {
 type MCPServerConfig struct {
 	ID        string `yaml:"id"`
 	Enabled   bool   `yaml:"enabled"`
-	Transport string `yaml:"transport"` // "stdio" | "http"
+	Transport string `yaml:"transport"` // "stdio" | "http" | "sse"
 	// stdio模式配置
 	Command string            `yaml:"command"`
 	Args    []string          `yaml:"args"`
@@ -325,6 +325,10 @@ func (c *Config) validateMCPConfig() error {
 		case "http":
 			if s.URL == "" {
 				return fmt.Errorf("mcp.servers[%d] '%s': http模式必须提供url", i, s.ID)
+			}
+		case "sse":
+			if s.URL == "" {
+				return fmt.Errorf("mcp.servers[%d] '%s': sse模式必须提供url", i, s.ID)
 			}
 		case "":
 			return fmt.Errorf("mcp.servers[%d] '%s': 必须指定transport类型", i, s.ID)
