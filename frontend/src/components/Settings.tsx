@@ -11,6 +11,41 @@ interface SettingsForm {
   work_dir: string;
 }
 
+// UI设置持久化
+const UI_SETTINGS_KEY = "mukaui-ui-settings";
+
+interface UISettings {
+  defaultExpandThinking: boolean;
+  defaultExpandToolCalls: boolean;
+}
+
+function loadUISettings(): UISettings {
+  try {
+    const saved = localStorage.getItem(UI_SETTINGS_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      return {
+        defaultExpandThinking: parsed.defaultExpandThinking !== undefined ? Boolean(parsed.defaultExpandThinking) : true,
+        defaultExpandToolCalls: parsed.defaultExpandToolCalls !== undefined ? Boolean(parsed.defaultExpandToolCalls) : true,
+      };
+    }
+  } catch {
+    // ignore
+  }
+  return {
+    defaultExpandThinking: true,
+    defaultExpandToolCalls: true,
+  };
+}
+
+function saveUISettings(settings: UISettings): void {
+  try {
+    localStorage.setItem(UI_SETTINGS_KEY, JSON.stringify(settings));
+  } catch {
+    // ignore
+  }
+}
+
 const defaultForm: SettingsForm = {
   endpoint: "http://127.0.0.1:11453/v1/",
   api_key: "no-key",
@@ -31,7 +66,10 @@ export default function Settings({ visible, onClose }: SettingsProps): React.Rea
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [messageType, setMessageType] = useState<"success" | "warning" | "error">("success");
-  const [activeTab, setActiveTab] = useState<"model" | "mcp">("model");
+  const [activeTab, setActiveTab] = useState<"model" | "mcp" | "display">("model");
+
+  // UI设置
+  const [uiSettings, setUiSettings] = useState<UISettings>(loadUISettings);
 
   // MCP相关状态
   const [mcpEnabled, setMcpEnabled] = useState(true);
@@ -202,6 +240,15 @@ export default function Settings({ visible, onClose }: SettingsProps): React.Rea
       });
     }
   }, [visible, activeTab, fetchMCPTools]);
+
+  // UI设置变更处理
+  const handleUiSettingChange = useCallback(<K extends keyof UISettings>(key: K, value: boolean) => {
+    setUiSettings((prev) => {
+      const next = { ...prev, [key]: value };
+      saveUISettings(next);
+      return next;
+    });
+  }, []);
 
   if (!visible) return <></>;
 
@@ -395,6 +442,9 @@ export default function Settings({ visible, onClose }: SettingsProps): React.Rea
           <button onClick={() => setActiveTab("mcp")} style={tabStyle(activeTab === "mcp")}>
             MCP
           </button>
+          <button onClick={() => setActiveTab("display")} style={tabStyle(activeTab === "display")}>
+            显示
+          </button>
         </div>
 
         {/* Model Tab */}
@@ -484,6 +534,63 @@ export default function Settings({ visible, onClose }: SettingsProps): React.Rea
 
         {/* MCP Tab */}
         {activeTab === "mcp" && renderMCPTab()}
+
+        {/* 显示 Tab */}
+        {activeTab === "display" && (
+          <div>
+            <div style={{ marginBottom: "1.5rem" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.75rem" }}>
+                <div>
+                  <div style={{ fontSize: "0.875rem", fontWeight: 600, color: "var(--text-primary)" }}>默认展开思考内容</div>
+                  <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "0.25rem" }}>打开新对话时，思考块默认处于展开状态</div>
+                </div>
+                <button
+                  onClick={() => handleUiSettingChange("defaultExpandThinking", !uiSettings.defaultExpandThinking)}
+                  style={{
+                    padding: "0.375rem 0.875rem",
+                    fontSize: "0.8125rem",
+                    borderRadius: "0.375rem",
+                    border: "1px solid var(--border-color)",
+                    background: uiSettings.defaultExpandThinking ? "var(--bg-button)" : "var(--bg-input)",
+                    color: uiSettings.defaultExpandThinking ? "#fff" : "var(--text-muted)",
+                    cursor: "pointer",
+                    minWidth: "60px",
+                  }}
+                >
+                  {uiSettings.defaultExpandThinking ? "已启用" : "已禁用"}
+                </button>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: "1.5rem" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.75rem" }}>
+                <div>
+                  <div style={{ fontSize: "0.875rem", fontWeight: 600, color: "var(--text-primary)" }}>默认展开工具调用</div>
+                  <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "0.25rem" }}>打开新对话时，工具调用块默认处于展开状态</div>
+                </div>
+                <button
+                  onClick={() => handleUiSettingChange("defaultExpandToolCalls", !uiSettings.defaultExpandToolCalls)}
+                  style={{
+                    padding: "0.375rem 0.875rem",
+                    fontSize: "0.8125rem",
+                    borderRadius: "0.375rem",
+                    border: "1px solid var(--border-color)",
+                    background: uiSettings.defaultExpandToolCalls ? "var(--bg-button)" : "var(--bg-input)",
+                    color: uiSettings.defaultExpandToolCalls ? "#fff" : "var(--text-muted)",
+                    cursor: "pointer",
+                    minWidth: "60px",
+                  }}
+                >
+                  {uiSettings.defaultExpandToolCalls ? "已启用" : "已禁用"}
+                </button>
+              </div>
+            </div>
+
+            <div style={{ padding: "0.75rem", fontSize: "0.75rem", color: "var(--text-muted)", background: "var(--bg-input)", borderRadius: "0.375rem" }}>
+              💡 这些设置仅影响新打开的对话，已展开/折叠的状态会保持用户上次操作。
+            </div>
+          </div>
+        )}
 
         {message && (
           <div style={{

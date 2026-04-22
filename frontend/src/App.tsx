@@ -10,6 +10,7 @@ import Sidebar from "./components/Sidebar";
 import Settings from "./components/Settings";
 import SupervisorPanel from "./components/SupervisorPanel";
 import TerminalPanel from "./components/TerminalPanel";
+import { UIProvider } from "./contexts/UIContext";
 import type { ConversationData, TokenStats, SupervisorResult, CompressionEvent, MessageListItem } from "./types";
 
 // 主题管理工具函数
@@ -212,8 +213,9 @@ function App(): React.ReactElement {
   }
 
   return (
-    <ErrorBoundary>
-      <div role="application" aria-label="MukaAI 智能编程助手" style={{ display: "flex", height: "100vh", background: "var(--bg-app)", color: "var(--text-primary)" }}>
+    <UIProvider>
+      <ErrorBoundary>
+        <div role="application" aria-label="MukaAI 智能编程助手" style={{ display: "flex", height: "100vh", background: "var(--bg-app)", color: "var(--text-primary)" }}>
         <Sidebar
           visible={sidebarVisible}
           conversations={conversations}
@@ -268,8 +270,9 @@ function App(): React.ReactElement {
           visible={settingsVisible}
           onClose={() => setSettingsVisible(false)}
         />
-      </div>
-    </ErrorBoundary>
+       </div>
+      </ErrorBoundary>
+    </UIProvider>
   );
 }
 
