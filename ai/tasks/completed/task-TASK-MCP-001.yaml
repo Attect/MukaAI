@@ -114,4 +114,11 @@ notes: |
   - ✅ 工具调用重试：单个工具失败时自动重试 2 次
   - ✅ 配置化：支持通过 config.yaml 自定义重连参数
   - ✅ 优雅降级：单个工具失败不影响其他功能
+  
+  ## MCP 工具单独禁用
+  - ✅ 后端 manager.go 实现工具过滤逻辑（第 108-114 行）
+  - ✅ 前端 Settings.tsx 实现 toggleToolEnabled 函数
+  - ✅ 前端添加 getMCPToolList API 调用获取真实工具列表
+  - ✅ 前端在 MCP Tab 打开时自动获取所有 Server 的工具列表
+  - ✅ config.yaml 添加工具级别配置示例
 
