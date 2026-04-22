@@ -100,4 +100,10 @@ notes: |
   - 注册工具数：47/47
   - 问题根因：loader.go 中 validateMCPConfig 缺少 sse 模式验证
   - 解决方案：添加 case "sse" 分支，要求提供 URL
+  
+  ## 窗口最大化配置
+  - ✅ 新增 gui.window_maximized 配置项
+  - ✅ GUI 启动时自动最大化窗口
+  - ✅ Chrome MCP: 29/29 工具连接成功
+  - ⚠️ Windows MCP: 连接失败 (EOF 错误)
 
