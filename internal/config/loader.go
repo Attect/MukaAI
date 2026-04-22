@@ -43,6 +43,12 @@ type Config struct {
 	LSP        LSPConfig        `yaml:"lsp"`
 	Logging    LogConfig        `yaml:"logging"`
 	Compressor CompressorConfig `yaml:"compressor"`
+	GUI        GUIConfig        `yaml:"gui"` // GUI 窗口配置
+}
+
+// GUIConfig GUI 窗口配置
+type GUIConfig struct {
+	WindowMaximized bool `yaml:"window_maximized"` // 启动时是否最大化窗口，默认 false
 }
 
 // LogConfig 日志配置
@@ -172,6 +178,9 @@ func DefaultConfig() *Config {
 			},
 		},
 		Compressor: DefaultCompressorConfig(),
+		GUI: GUIConfig{
+			WindowMaximized: false, // 默认不最大化
+		},
 	}
 }
 

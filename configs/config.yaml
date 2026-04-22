@@ -45,6 +45,8 @@ mcp:
           transport: "sse"
           url: http://127.0.0.1:64342/sse
           timeout: 60
+gui:
+    window_maximized: true
 model:
     api_key: no-key
     context_size: 262144

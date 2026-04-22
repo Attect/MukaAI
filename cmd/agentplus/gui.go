@@ -221,6 +221,14 @@ func runGUICommand() {
 				runtime.WindowSetAlwaysOnTop(ctx, false)
 			}()
 
+			// 如果配置了窗口最大化，启动后最大化窗口
+			if cfg.GUI.WindowMaximized {
+				go func() {
+					time.Sleep(300 * time.Millisecond)
+					runtime.WindowMaximise(ctx)
+				}()
+			}
+
 			// 如果配置了自动发送初始任务，在应用初始化后执行
 			if opts.AutoSend && opts.InitialTask != "" {
 				go func() {
