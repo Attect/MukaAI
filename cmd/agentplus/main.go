@@ -47,11 +47,20 @@ type CLIOptions struct {
 }
 
 func main() {
+	// 检查是否有 --cli 参数（显式指定 CLI 模式）
+	hasCLIFlag := false
+	for _, arg := range os.Args[1:] {
+		if arg == "--cli" || arg == "-cli" {
+			hasCLIFlag = true
+			break
+		}
+	}
+
 	// 检查是否为子命令模式
 	if len(os.Args) > 1 {
 		cmd := os.Args[1]
 
-		// 检查是否为 gui 子命令
+		// 检查是否为 gui 子命令（向后兼容）
 		if cmd == "gui" {
 			runGUICommand()
 			return
@@ -67,16 +76,21 @@ func main() {
 			return
 		}
 
-		// 检查是否为 cli 子命令（显式指定CLI模式）
+		// 检查是否为 cli 子命令（显式指定 CLI 模式）
 		if cmd == "cli" {
 			runCLICommand()
 			return
 		}
 	}
 
-	// 根据构建标签决定默认模式
-	// GUI构建默认启动GUI，CLI构建默认启动CLI
-	runDefaultCommand()
+	// 根据构建标签和参数决定默认模式
+	// GUI 构建：默认启动 GUI，除非指定 --cli 参数
+	// CLI 构建：默认启动 CLI
+	if hasCLIFlag {
+		runCLICommand()
+	} else {
+		runDefaultCommand()
+	}
 }
 
 // runCLICommand 运行 CLI 模式
@@ -307,10 +321,18 @@ func runCLICommand() {
 func printUsage() {
 	fmt.Fprintf(os.Stderr, "%s v%s - AI Agent CLI Tool\n\n", Name, Version)
 	fmt.Fprintf(os.Stderr, "Usage:\n")
-	fmt.Fprintf(os.Stderr, "  mukaai [options] <task>        Run in CLI mode (default)\n")
-	fmt.Fprintf(os.Stderr, "  mukaai gui [options]           Run in GUI mode\n")
-	fmt.Fprintf(os.Stderr, "  mukaai help                    Show this help message\n")
-	fmt.Fprintf(os.Stderr, "  mukaai version                 Show version information\n")
+	fmt.Fprintf(os.Stderr, "  mukaai [options]                   Run in GUI mode (default for GUI build)\n")
+	fmt.Fprintf(os.Stderr, "  mukaai --cli [options] <task>      Run in CLI mode\n")
+	fmt.Fprintf(os.Stderr, "  mukaai gui [options]               Run in GUI mode (backward compatible)\n")
+	fmt.Fprintf(os.Stderr, "  mukaai cli [options] <task>        Run in CLI mode (backward compatible)\n")
+	fmt.Fprintf(os.Stderr, "  mukaai help                        Show this help message\n")
+	fmt.Fprintf(os.Stderr, "  mukaai version                     Show version information\n")
+	fmt.Fprintf(os.Stderr, "\nGUI Mode Options:\n")
+	fmt.Fprintf(os.Stderr, "  -c, --config <file>               配置文件路径 (default: ./configs/config.yaml)\n")
+	fmt.Fprintf(os.Stderr, "  -w, --workdir <dir>               工作目录\n")
+	fmt.Fprintf(os.Stderr, "  --task <description>              初始任务描述\n")
+	fmt.Fprintf(os.Stderr, "  --log-path <file>                 日志文件路径\n")
+	fmt.Fprintf(os.Stderr, "  --auto-send                       启动后自动发送初始任务\n")
 	fmt.Fprintf(os.Stderr, "\nCLI Mode Options:\n")
 	fmt.Fprintf(os.Stderr, "  -c, --config <file>               配置文件路径 (default: ./configs/config.yaml)\n")
 	fmt.Fprintf(os.Stderr, "  -t, --task <id>                   继续已有任务ID\n")
@@ -319,19 +341,17 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  --debug                           调试模式（完整交互输出）\n")
 	fmt.Fprintf(os.Stderr, "  --no-supervisor                   禁用监督\n")
 	fmt.Fprintf(os.Stderr, "  --max-iterations <n>              最大迭代次数\n")
-	fmt.Fprintf(os.Stderr, "\nGUI Mode Options:\n")
-	fmt.Fprintf(os.Stderr, "  -c, --config <file>               配置文件路径 (default: ./configs/config.yaml)\n")
-	fmt.Fprintf(os.Stderr, "  -w, --workdir <dir>               工作目录\n")
-	fmt.Fprintf(os.Stderr, "  --task <description>              初始任务描述\n")
-	fmt.Fprintf(os.Stderr, "  --log-path <file>                 日志文件路径\n")
-	fmt.Fprintf(os.Stderr, "  --auto-send                       启动后自动发送初始任务\n")
 	fmt.Fprintf(os.Stderr, "\nExamples:\n")
-	fmt.Fprintf(os.Stderr, "  # CLI 模式\n")
-	fmt.Fprintf(os.Stderr, "  mukaai \"创建一个Hello World程序\"\n")
-	fmt.Fprintf(os.Stderr, "  mukaai -c ./config.yaml \"分析项目结构\"\n")
-	fmt.Fprintf(os.Stderr, "  mukaai -t task-123 \"继续执行任务\"\n")
-	fmt.Fprintf(os.Stderr, "\n  # GUI 模式\n")
+	fmt.Fprintf(os.Stderr, "  # GUI 模式（GUI 构建默认）\n")
+	fmt.Fprintf(os.Stderr, "  mukaai\n")
+	fmt.Fprintf(os.Stderr, "  mukaai --task \"创建一个Hello World程序\"\n")
+	fmt.Fprintf(os.Stderr, "\n  # CLI 模式\n")
+	fmt.Fprintf(os.Stderr, "  mukaai --cli \"创建一个Hello World程序\"\n")
+	fmt.Fprintf(os.Stderr, "  mukaai --cli -c ./config.yaml \"分析项目结构\"\n")
+	fmt.Fprintf(os.Stderr, "  mukaai --cli -t task-123 \"继续执行任务\"\n")
+	fmt.Fprintf(os.Stderr, "\n  # 向后兼容\n")
 	fmt.Fprintf(os.Stderr, "  mukaai gui\n")
+	fmt.Fprintf(os.Stderr, "  mukaai cli \"创建一个Hello World程序\"\n")
 	fmt.Fprintf(os.Stderr, "\nBuild:\n")
 	fmt.Fprintf(os.Stderr, "  # CLI 构建（默认，不需要前端资源）\n")
 	fmt.Fprintf(os.Stderr, "  go build -o mukaai.exe ./cmd/agentplus\n")
