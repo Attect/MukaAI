@@ -747,17 +747,32 @@ func initMCPManager(cfg *config.Config, registry *tools.ToolRegistry, workDir st
 		if projectPath == "" {
 			projectPath = workDir // 使用workDir作为默认projectPath
 		}
+
+		// 转换ToolSettings类型
+		var mcpToolSettings map[string]mcp.ToolSettingConfig
+		if s.ToolSettings != nil {
+			mcpToolSettings = make(map[string]mcp.ToolSettingConfig, len(s.ToolSettings))
+			for k, v := range s.ToolSettings {
+				mcpToolSettings[k] = mcp.ToolSettingConfig{
+					Enabled:     v.Enabled,
+					Description: v.Description,
+				}
+			}
+		}
+
 		mcpConfig.Servers = append(mcpConfig.Servers, mcp.ServerConfig{
-			ID:          s.ID,
-			Enabled:     s.Enabled,
-			Transport:   s.Transport,
-			Command:     s.Command,
-			Args:        s.Args,
-			Env:         s.Env,
-			URL:         s.URL,
-			Headers:     s.Headers,
-			Timeout:     s.Timeout,
-			ProjectPath: projectPath,
+			ID:           s.ID,
+			Enabled:      s.Enabled,
+			Transport:    s.Transport,
+			Command:      s.Command,
+			Args:         s.Args,
+			Env:          s.Env,
+			URL:          s.URL,
+			Headers:      s.Headers,
+			Timeout:      s.Timeout,
+			ProjectPath:  projectPath,
+			Prefix:       s.Prefix,
+			ToolSettings: mcpToolSettings,
 		})
 	}
 

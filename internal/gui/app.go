@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Attect/MukaAI/internal/agent"
+	"github.com/Attect/MukaAI/internal/mcp"
 	"github.com/Attect/MukaAI/internal/model"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
@@ -77,6 +78,9 @@ type App struct {
 	// toolWorkDirUpdater 工具工作目录更新回调
 	// 由初始化代码设置，用于在切换工作目录时同步更新所有工具的workDir
 	toolWorkDirUpdater func(string)
+
+	// mcpManager MCP客户端管理器（可选，用于获取MCP工具列表）
+	mcpManager *mcp.MCPClientManager
 }
 
 // conversation 内部对话结构，包含消息列表和当前流式消息
@@ -212,6 +216,12 @@ func (a *App) GetSettings() map[string]interface{} {
 			result["allow_commands"] = ac
 		}
 	}
+	if m, ok := raw["mcp"].(map[string]interface{}); ok {
+		result["mcp_enabled"] = m["enabled"]
+		if servers, ok := m["servers"].([]interface{}); ok {
+			result["mcp_servers"] = servers
+		}
+	}
 
 	return result
 }
@@ -273,6 +283,18 @@ func (a *App) SaveSettings(settings map[string]interface{}) error {
 	}
 	if v, ok := settings["allow_commands"]; ok {
 		toolsSection["allow_commands"] = v
+	}
+
+	// 更新 mcp 部分
+	if _, ok := raw["mcp"]; !ok {
+		raw["mcp"] = make(map[string]interface{})
+	}
+	mcpSection := raw["mcp"].(map[string]interface{})
+	if v, ok := settings["mcp_enabled"]; ok {
+		mcpSection["enabled"] = v
+	}
+	if v, ok := settings["mcp_servers"]; ok {
+		mcpSection["servers"] = v
 	}
 
 	// 写回文件
@@ -1145,6 +1167,49 @@ func (a *App) SetToolWorkDirUpdater(updater func(string)) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.toolWorkDirUpdater = updater
+}
+
+// SetMCPManager 设置MCP客户端管理器
+// 由初始化代码调用，用于获取MCP工具列表
+func (a *App) SetMCPManager(m *mcp.MCPClientManager) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.mcpManager = m
+}
+
+// GetMCPToolList 获取指定MCP Server的已发现工具列表
+// serverID为Server的ID（如"chrome"、"windows"）
+// 返回工具信息数组，每个元素包含name、description、enabled字段
+func (a *App) GetMCPToolList(serverID string) []map[string]interface{} {
+	a.mu.RLock()
+	mgr := a.mcpManager
+	a.mu.RUnlock()
+
+	if mgr == nil {
+		return []map[string]interface{}{}
+	}
+
+	// 获取所有MCP工具
+	allTools := mgr.GetMCPTools()
+	var result []map[string]interface{}
+
+	for _, tool := range allTools {
+		toolName := tool.Name()
+		// 检查是否为该Server的工具（通过prefix匹配）
+		prefix := mcp.ExtractPrefix(toolName)
+		if prefix != serverID {
+			continue
+		}
+
+		toolInfo := map[string]interface{}{
+			"name":        toolName,
+			"description": tool.Description(),
+			"enabled":     true, // 默认启用
+		}
+		result = append(result, toolInfo)
+	}
+
+	return result
 }
 
 // getString 从YAML map中安全提取字符串值，缺失或类型不匹配时返回默认值

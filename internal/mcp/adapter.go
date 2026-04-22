@@ -15,22 +15,27 @@ import (
 // MCPToolAdapter 将MCP工具适配为内部Tool接口
 // 实现tools.Tool接口，使MCP工具对上层Agent核心透明
 type MCPToolAdapter struct {
-	serverID    string
-	toolName    string // MCP原始工具名
-	description string
-	inputSchema map[string]interface{}
-	session     *MCPSession
-	timeout     time.Duration
-	security    *MCPSecurityChecker
-	projectPath string // 自动注入的项目路径
+	prefix            string // 工具名前缀（来自ServerConfig.Prefix）
+	serverID          string // Server ID（用于标识来源）
+	toolName          string // MCP原始工具名
+	customDescription string // 自定义描述（来自ToolSettingConfig.Description）
+	description       string // 最终使用的描述
+	inputSchema       map[string]interface{}
+	session           *MCPSession
+	timeout           time.Duration
+	security          *MCPSecurityChecker
+	projectPath       string // 自动注入的项目路径
 }
 
 // NewMCPToolAdapter 创建MCP工具适配器
-func NewMCPToolAdapter(serverID string, mcpTool *mcp.Tool, session *MCPSession, timeout time.Duration, security *MCPSecurityChecker, projectPath string) *MCPToolAdapter {
-	// 提取description
-	desc := mcpTool.Description
-	if desc == "" && mcpTool.Title != "" {
-		desc = mcpTool.Title
+func NewMCPToolAdapter(prefix string, serverID string, mcpTool *mcp.Tool, session *MCPSession, timeout time.Duration, security *MCPSecurityChecker, projectPath string, customDescription string) *MCPToolAdapter {
+	// 提取description：优先使用自定义描述
+	desc := customDescription
+	if desc == "" {
+		desc = mcpTool.Description
+		if desc == "" && mcpTool.Title != "" {
+			desc = mcpTool.Title
+		}
 	}
 
 	// 转换InputSchema
@@ -57,27 +62,32 @@ func NewMCPToolAdapter(serverID string, mcpTool *mcp.Tool, session *MCPSession, 
 	}
 
 	return &MCPToolAdapter{
-		serverID:    serverID,
-		toolName:    mcpTool.Name,
-		description: desc,
-		inputSchema: schema,
-		session:     session,
-		timeout:     timeout,
-		security:    security,
-		projectPath: projectPath,
+		prefix:            prefix,
+		serverID:          serverID,
+		toolName:          mcpTool.Name,
+		customDescription: customDescription,
+		description:       desc,
+		inputSchema:       schema,
+		session:           session,
+		timeout:           timeout,
+		security:          security,
+		projectPath:       projectPath,
 	}
 }
 
 // Name 实现tools.Tool接口
-// 返回带前缀的工具名: mcp_{server_id}_{tool_name}
+// 返回带前缀的工具名: mcp_{prefix}_{tool_name}
 func (a *MCPToolAdapter) Name() string {
-	return fmt.Sprintf("mcp_%s_%s", a.serverID, a.toolName)
+	return fmt.Sprintf("mcp_%s_%s", a.prefix, a.toolName)
 }
 
 // Description 实现tools.Tool接口
 // 返回带MCP标识的工具描述
 func (a *MCPToolAdapter) Description() string {
 	prefix := fmt.Sprintf("[MCP: %s]", a.serverID)
+	if a.customDescription != "" {
+		return fmt.Sprintf("%s %s", prefix, a.customDescription)
+	}
 	if a.description != "" {
 		return fmt.Sprintf("%s %s", prefix, a.description)
 	}
@@ -133,8 +143,8 @@ func (a *MCPToolAdapter) Execute(ctx context.Context, params map[string]interfac
 	return convertMCPResult(result, a.serverID), nil
 }
 
-// ExtractServerID 从MCP工具名中提取Server ID
-// 输入格式: mcp_{server_id}_{tool_name}
+// ExtractServerID 从MCP工具名中提取Server ID（实际返回prefix）
+// 输入格式: mcp_{prefix}_{tool_name}
 // 如果不是MCP工具名，返回空字符串
 func ExtractServerID(toolName string) string {
 	if !strings.HasPrefix(toolName, "mcp_") {
@@ -148,8 +158,13 @@ func ExtractServerID(toolName string) string {
 	return parts[0]
 }
 
+// ExtractPrefix 从MCP工具名中提取前缀（与ExtractServerID等价，语义更清晰）
+func ExtractPrefix(toolName string) string {
+	return ExtractServerID(toolName)
+}
+
 // ExtractOriginalToolName 从MCP工具名中提取原始工具名
-// 输入格式: mcp_{server_id}_{tool_name}
+// 输入格式: mcp_{prefix}_{tool_name}
 func ExtractOriginalToolName(toolName string) string {
 	if !strings.HasPrefix(toolName, "mcp_") {
 		return toolName

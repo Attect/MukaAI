@@ -15,13 +15,14 @@ import (
 // MCPSession 表示与单个MCP Server的连接会话
 // 管理连接生命周期、工具发现和工具调用
 type MCPSession struct {
-	id      string
-	config  ServerConfig
-	client  *mcp.Client
-	session *mcp.ClientSession
-	tools   []*mcp.Tool // 发现的工具列表
-	mu      sync.RWMutex
-	status  SessionStatus
+	id            string
+	config        ServerConfig
+	toolsSettings map[string]ToolSettingConfig // 从配置传入的工具设置
+	client        *mcp.Client
+	session       *mcp.ClientSession
+	tools         []*mcp.Tool // 发现的工具列表
+	mu            sync.RWMutex
+	status        SessionStatus
 }
 
 // SessionStatus Session运行状态
@@ -185,6 +186,21 @@ func (s *MCPSession) GetTools() []*mcp.Tool {
 
 	result := make([]*mcp.Tool, len(s.tools))
 	copy(result, s.tools)
+	return result
+}
+
+// GetToolSettings 获取工具设置配置
+func (s *MCPSession) GetToolSettings() map[string]ToolSettingConfig {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.toolsSettings == nil {
+		return make(map[string]ToolSettingConfig)
+	}
+	result := make(map[string]ToolSettingConfig, len(s.toolsSettings))
+	for k, v := range s.toolsSettings {
+		result[k] = v
+	}
 	return result
 }
 

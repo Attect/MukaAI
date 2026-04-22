@@ -19,6 +19,7 @@ import {
   ChooseDirectory as wailsChooseDirectory,
   GenerateConversationTitle as wailsGenerateConversationTitle,
   RegenerateConversationTitle as wailsRegenerateConversationTitle,
+  GetMCPToolList as wailsGetMCPToolList,
 } from "../wailsjs/go/gui/App";
 
 import { EventsOn } from "../wailsjs/runtime/runtime";
@@ -103,6 +104,10 @@ export async function generateConversationTitle(id: string): Promise<void> {
 
 export async function regenerateConversationTitle(id: string): Promise<void> {
   await wailsRegenerateConversationTitle(id);
+}
+
+export async function getMCPToolList(serverID: string): Promise<any[]> {
+  return (await wailsGetMCPToolList(serverID)) as any[];
 }
 
 export function onEvent(event: string, callback: (...args: any[]) => void): () => void {

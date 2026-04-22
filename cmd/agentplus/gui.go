@@ -18,9 +18,11 @@ import (
 	"github.com/Attect/MukaAI/internal/config"
 	ctxpkg "github.com/Attect/MukaAI/internal/context"
 	"github.com/Attect/MukaAI/internal/gui"
+	"github.com/Attect/MukaAI/internal/mcp"
 	"github.com/Attect/MukaAI/internal/state"
 	"github.com/Attect/MukaAI/internal/supervisor"
 	"github.com/Attect/MukaAI/internal/terminal"
+	"github.com/Attect/MukaAI/internal/tools"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -89,6 +91,12 @@ func runGUICommand() {
 		os.Exit(1)
 	}
 
+	// 初始化MCP客户端管理器（如果启用）
+	var mcpManager *mcp.MCPClientManager
+	if cfg.MCP.Enabled {
+		mcpManager = initMCPManagerForGUI(cfg, toolRegistry, workDir)
+	}
+
 	// 初始化状态管理器（带自动清理功能）
 	cleanupConfig := state.CleanupConfig{
 		RetentionDays: cfg.State.CleanupDays,
@@ -152,6 +160,10 @@ func runGUICommand() {
 	app.SetToolWorkDirUpdater(func(workDir string) {
 		toolRegistry.UpdateAllToolWorkDirs(workDir)
 	})
+	// 设置MCP管理器（用于获取MCP工具列表）
+	if mcpManager != nil {
+		app.SetMCPManager(mcpManager)
+	}
 
 	// 设置命令行参数传递的初始任务和日志配置
 	if opts.InitialTask != "" {
@@ -311,4 +323,73 @@ func parseGUIFlags() *GUIOptions {
 	guiFlagSet.Parse(argsToParse)
 
 	return opts
+}
+
+// initMCPManagerForGUI 初始化MCP客户端管理器（GUI模式专用）
+func initMCPManagerForGUI(cfg *config.Config, registry *tools.ToolRegistry, workDir string) *mcp.MCPClientManager {
+	// 将config包的MCP配置转换为mcp包的配置
+	mcpConfig := &mcp.MCPConfig{
+		Enabled: cfg.MCP.Enabled,
+		Security: mcp.MCPSecurityConfig{
+			DefaultPolicy: cfg.MCP.Security.DefaultPolicy,
+			DenyTools:     cfg.MCP.Security.DenyTools,
+			ConfirmTools:  cfg.MCP.Security.ConfirmTools,
+			AllowTools:    cfg.MCP.Security.AllowTools,
+			MaxTools:      cfg.MCP.Security.MaxTools,
+		},
+	}
+
+	// 转换Server配置
+	for _, s := range cfg.MCP.Servers {
+		projectPath := s.ProjectPath
+		if projectPath == "" {
+			projectPath = workDir
+		}
+
+		// 转换ToolSettings类型
+		var mcpToolSettings map[string]mcp.ToolSettingConfig
+		if s.ToolSettings != nil {
+			mcpToolSettings = make(map[string]mcp.ToolSettingConfig, len(s.ToolSettings))
+			for k, v := range s.ToolSettings {
+				mcpToolSettings[k] = mcp.ToolSettingConfig{
+					Enabled:     v.Enabled,
+					Description: v.Description,
+				}
+			}
+		}
+
+		mcpConfig.Servers = append(mcpConfig.Servers, mcp.ServerConfig{
+			ID:           s.ID,
+			Enabled:      s.Enabled,
+			Transport:    s.Transport,
+			Command:      s.Command,
+			Args:         s.Args,
+			Env:          s.Env,
+			URL:          s.URL,
+			Headers:      s.Headers,
+			Timeout:      s.Timeout,
+			ProjectPath:  projectPath,
+			Prefix:       s.Prefix,
+			ToolSettings: mcpToolSettings,
+		})
+	}
+
+	// 验证配置
+	if err := mcpConfig.Validate(); err != nil {
+		log.Printf("[MCP] 配置验证失败: %v", err)
+		return nil
+	}
+
+	manager := mcp.NewMCPClientManager(mcpConfig, registry)
+
+	// 异步初始化MCP连接，不阻塞应用启动
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if err := manager.Initialize(ctx); err != nil {
+			log.Printf("[MCP] 初始化出错: %v", err)
+		}
+	}()
+
+	return manager
 }

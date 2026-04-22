@@ -30,8 +30,16 @@ type ServerConfig struct {
 	URL     string            `yaml:"url"`
 	Headers map[string]string `yaml:"headers"`
 	// 通用配置
-	Timeout     int    `yaml:"timeout"`      // 秒
-	ProjectPath string `yaml:"project_path"` // 项目路径，自动注入到工具参数
+	Timeout      int                          `yaml:"timeout"`      // 秒
+	ProjectPath  string                       `yaml:"project_path"` // 项目路径，自动注入到工具参数
+	Prefix       string                       `yaml:"prefix"`       // 工具名前缀，默认使用ID
+	ToolSettings map[string]ToolSettingConfig `yaml:"tools"`        // 每个工具的独立配置
+}
+
+// ToolSettingConfig 单个工具的独立配置
+type ToolSettingConfig struct {
+	Enabled     bool   `yaml:"enabled"`     // 是否启用该工具，默认true
+	Description string `yaml:"description"` // 自定义工具描述/提示词，覆盖MCP返回的默认描述
 }
 
 // MCPSecurityConfig MCP安全策略配置
@@ -50,6 +58,37 @@ func DefaultMCPConfig() *MCPConfig {
 		Security: MCPSecurityConfig{
 			DefaultPolicy: "allow",
 			MaxTools:      50,
+		},
+		Servers: []ServerConfig{
+			{
+				ID:        "chrome",
+				Enabled:   true,
+				Prefix:    "chrome",
+				Transport: "stdio",
+				Command:   "npx",
+				Args:      []string{"-y", "chrome-devtools-mcp@latest", "--no-usage-statistics"},
+				Timeout:   60,
+			},
+			{
+				ID:        "windows",
+				Enabled:   true,
+				Prefix:    "win",
+				Transport: "stdio",
+				Command:   "uvx",
+				Args:      []string{"windows-mcp"},
+				Env: map[string]string{
+					"ANONYMIZED_TELEMETRY": "false",
+				},
+				Timeout: 60,
+			},
+			{
+				ID:        "idea",
+				Enabled:   true,
+				Prefix:    "idea",
+				Transport: "sse",
+				URL:       "http://127.0.0.1:64342/sse",
+				Timeout:   60,
+			},
 		},
 	}
 }
@@ -111,6 +150,12 @@ func (c *MCPConfig) Validate() error {
 		if s.Timeout != 0 && (s.Timeout < 5 || s.Timeout > 300) {
 			return fmt.Errorf("mcp server[%d] '%s': timeout必须在5-300秒之间", i, s.ID)
 		}
+
+		// Prefix校验：如果为空，自动使用ID（不报错）
+		// 非空时只允许字母、数字、下划线
+		if s.Prefix != "" && !serverIDPattern.MatchString(s.Prefix) {
+			return fmt.Errorf("mcp server[%d] '%s': prefix '%s' 不合法，只允许字母、数字、下划线，最长32字符", i, s.ID, s.Prefix)
+		}
 	}
 
 	// 安全策略校验
@@ -142,8 +187,20 @@ func (c *MCPConfig) GetEnabledServers() []ServerConfig {
 	var result []ServerConfig
 	for _, s := range c.Servers {
 		if s.Enabled {
+			// Prefix默认值为ID
+			if s.Prefix == "" {
+				s.Prefix = s.ID
+			}
 			result = append(result, s)
 		}
 	}
 	return result
+}
+
+// GetPrefix 获取Server的前缀（如果为空则返回ID）
+func (s *ServerConfig) GetPrefix() string {
+	if s.Prefix == "" {
+		return s.ID
+	}
+	return s.Prefix
 }

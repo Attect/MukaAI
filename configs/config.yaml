@@ -1,0 +1,80 @@
+agent:
+    max_iterations: 2000
+    temperature: 0.7
+compressor:
+    keep_recent_tool_calls: 3
+    llm_summary_timeout: 1000
+    max_messages_to_keep: 12
+    min_messages_to_keep: 6
+    summary_max_length: 2000
+    trigger_threshold: 0.7
+lsp:
+    enabled: true
+    idle_timeout: 600
+    servers:
+        go:
+            command: gopls
+        python:
+            command: pylsp
+        typescript:
+            args:
+                - --stdio
+            command: typescript-language-server
+mcp:
+    enabled: true
+    servers:
+        - id: chrome
+          enabled: true
+          prefix: "chrome"
+          transport: stdio
+          command: "npx"
+          args: ["-y", "chrome-devtools-mcp@latest", "--no-usage-statistics"]
+          timeout: 60
+        - id: windows
+          enabled: true
+          prefix: "win"
+          transport: stdio
+          command: "uvx"
+          args: ["windows-mcp"]
+          env:
+            ANONYMIZED_TELEMETRY: "false"
+          timeout: 60
+        - id: idea
+          enabled: true
+          prefix: "idea"
+          transport: sse
+          url: http://127.0.0.1:64342/sse
+          timeout: 60
+model:
+    api_key: no-key
+    context_size: 262144
+    endpoint: http://127.0.0.1:11453/v1/
+    model_name: mudler/Qwen3.6-35B-A3B-APEX-GGUF/Qwen3.6-35B-APEX-I-Compact
+security:
+    default_policy: allow
+state:
+    auto_save: true
+    dir: ./state
+tools:
+    allow_commands:
+        - go
+        - git
+        - ls
+        - cat
+        - mkdir
+        - rm
+        - python
+        - rmdir
+        - cmd
+        - powershell
+        - gcc
+        - make
+        - java
+        - javac
+        - find
+        - curl
+        - wget
+        - bun
+        - rust
+        - node
+    work_dir: .

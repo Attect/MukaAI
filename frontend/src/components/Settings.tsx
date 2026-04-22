@@ -1,11 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { getSettings, saveSettings, onEvent, chooseDirectory } from "../wailsRuntime";
 
-interface SettingsProps {
-  visible: boolean;
-  onClose: () => void;
-}
-
 interface SettingsForm {
   endpoint: string;
   api_key: string;
@@ -31,6 +26,11 @@ export default function Settings({ visible, onClose }: SettingsProps): React.Rea
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [messageType, setMessageType] = useState<"success" | "warning" | "error">("success");
+  const [activeTab, setActiveTab] = useState<"model" | "mcp">("model");
+
+  // MCP相关状态
+  const [mcpEnabled, setMcpEnabled] = useState(true);
+  const [mcpServers, setMcpServers] = useState<any[]>([]);
 
   useEffect(() => {
     if (visible) {
@@ -64,6 +64,16 @@ export default function Settings({ visible, onClose }: SettingsProps): React.Rea
           max_iterations: Number(result.max_iterations || defaultForm.max_iterations),
           work_dir: String(result.work_dir || defaultForm.work_dir),
         });
+        // 加载MCP配置
+        setMcpEnabled(result.mcp_enabled !== undefined ? Boolean(result.mcp_enabled) : true);
+        if (result.mcp_servers && Array.isArray(result.mcp_servers)) {
+          setMcpServers(result.mcp_servers.map((s: any) => ({
+            ...s,
+            enabled: s.enabled !== undefined ? Boolean(s.enabled) : true,
+            prefix: s.prefix || "",
+            tools: s.tools || {},
+          })));
+        }
       }
     } catch (err) {
       console.error("Failed to load settings:", err);
@@ -83,6 +93,8 @@ export default function Settings({ visible, onClose }: SettingsProps): React.Rea
         temperature: form.temperature,
         max_iterations: form.max_iterations,
         work_dir: form.work_dir,
+        mcp_enabled: mcpEnabled,
+        mcp_servers: mcpServers,
       });
       setMessage("设置已保存。模型名称和上下文大小已即时生效；API端点/密钥修改需重启生效。");
       setMessageType("success");
@@ -92,7 +104,7 @@ export default function Settings({ visible, onClose }: SettingsProps): React.Rea
       setMessageType("error");
     }
     setLoading(false);
-  }, [form]);
+  }, [form, mcpEnabled, mcpServers]);
 
   const handleChange = useCallback((key: keyof SettingsForm, value: string | number) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -108,6 +120,44 @@ export default function Settings({ visible, onClose }: SettingsProps): React.Rea
       console.error("Failed to choose directory:", err);
     }
   }, []);
+
+  // MCP服务器操作
+  const updateServer = useCallback((index: number, updates: Partial<any>) => {
+    setMcpServers((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], ...updates };
+      return next;
+    });
+  }, []);
+
+  const toggleServerEnabled = useCallback((index: number) => {
+    updateServer(index, { enabled: !mcpServers[index].enabled });
+  }, [mcpServers, updateServer]);
+
+  const updateServerPrefix = useCallback((index: number, prefix: string) => {
+    updateServer(index, { prefix });
+  }, [updateServer]);
+
+  const updateToolSetting = useCallback((serverIndex: number, toolName: string, updates: Partial<any>) => {
+    setMcpServers((prev) => {
+      const next = [...prev];
+      const server = { ...next[serverIndex] };
+      const tools = { ...server.tools };
+      if (!tools[toolName]) {
+        tools[toolName] = { enabled: true, description: "" };
+      }
+      tools[toolName] = { ...tools[toolName], ...updates };
+      server.tools = tools;
+      next[serverIndex] = server;
+      return next;
+    });
+  }, []);
+
+  const toggleToolEnabled = useCallback((serverIndex: number, toolName: string) => {
+    const server = mcpServers[serverIndex];
+    const toolSetting = server.tools?.[toolName] || { enabled: true, description: "" };
+    updateToolSetting(serverIndex, toolName, { enabled: !toolSetting.enabled });
+  }, [mcpServers, updateToolSetting]);
 
   if (!visible) return <></>;
 
@@ -131,6 +181,155 @@ export default function Settings({ visible, onClose }: SettingsProps): React.Rea
     marginTop: "0.75rem",
   };
 
+  // Tab样式
+  const tabStyle = (isActive: boolean) => ({
+    padding: "0.5rem 1rem",
+    fontSize: "0.875rem",
+    fontWeight: isActive ? 600 : 400,
+    borderRadius: "0.375rem",
+    border: "none",
+    background: isActive ? "var(--bg-button)" : "transparent",
+    color: isActive ? "#fff" : "var(--text-muted)",
+    cursor: "pointer",
+  });
+
+  // 渲染MCP标签页内容
+  const renderMCPTab = () => (
+    <div>
+      {/* MCP总开关 */}
+      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "1rem" }}>
+        <label style={{ ...labelStyle, marginTop: 0, marginBottom: 0 }}>启用 MCP</label>
+        <button
+          onClick={() => setMcpEnabled(!mcpEnabled)}
+          style={{
+            padding: "0.25rem 0.75rem",
+            fontSize: "0.8125rem",
+            borderRadius: "0.375rem",
+            border: "1px solid var(--border-color)",
+            background: mcpEnabled ? "var(--bg-button)" : "var(--bg-input)",
+            color: mcpEnabled ? "#fff" : "var(--text-muted)",
+            cursor: "pointer",
+          }}
+        >
+          {mcpEnabled ? "已启用" : "已禁用"}
+        </button>
+      </div>
+
+      {/* 服务器列表 */}
+      <div style={{ marginTop: "1rem" }}>
+        <label style={labelStyle}>MCP 服务器配置</label>
+        {mcpServers.length === 0 && (
+          <div style={{ padding: "0.75rem", fontSize: "0.8125rem", color: "var(--text-muted)", background: "var(--bg-input)", borderRadius: "0.375rem" }}>
+            暂无MCP服务器配置。配置文件中的服务器将在此显示。
+          </div>
+        )}
+        {mcpServers.map((server, index) => (
+          <div key={server.id || `server-${index}`} style={{
+            border: "1px solid var(--border-color)",
+            borderRadius: "0.375rem",
+            padding: "0.75rem",
+            marginBottom: "0.75rem",
+            background: "var(--bg-input)",
+          }}>
+            {/* 服务器头部 */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
+              <span style={{ fontWeight: 600, fontSize: "0.875rem" }}>
+                {server.id || `服务器 ${index + 1}`}
+              </span>
+              <button
+                onClick={() => toggleServerEnabled(index)}
+                style={{
+                  padding: "0.25rem 0.5rem",
+                  fontSize: "0.75rem",
+                  borderRadius: "0.25rem",
+                  border: "1px solid var(--border-color)",
+                  background: server.enabled ? "var(--bg-button)" : "var(--bg-input)",
+                  color: server.enabled ? "#fff" : "var(--text-muted)",
+                  cursor: "pointer",
+                }}
+              >
+                {server.enabled ? "启用" : "禁用"}
+              </button>
+            </div>
+
+            {/* 前缀配置 */}
+            <div style={{ marginBottom: "0.5rem" }}>
+              <label style={{ ...labelStyle, marginTop: 0 }}>ID（只读）</label>
+              <input
+                style={{ ...inputStyle, background: "var(--bg-disabled)", color: "var(--text-muted)" }}
+                type="text"
+                value={server.id || ""}
+                readOnly
+              />
+            </div>
+
+            <div style={{ marginBottom: "0.5rem" }}>
+              <label style={labelStyle}>工具名前缀</label>
+              <input
+                style={inputStyle}
+                type="text"
+                value={server.prefix || ""}
+                onChange={(e) => updateServerPrefix(index, e.target.value)}
+                placeholder="默认使用ID作为前缀"
+              />
+            </div>
+
+            {/* 工具列表 */}
+            <div style={{ marginTop: "0.75rem" }}>
+              <label style={labelStyle}>已发现工具</label>
+              {server.tools && Object.keys(server.tools).length > 0 ? (
+                <div style={{ maxHeight: "200px", overflowY: "auto" }}>
+                  {Object.entries(server.tools).map(([toolName, toolConfig]: [string, any]) => (
+                    <div key={toolName} style={{
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: "0.5rem",
+                      padding: "0.375rem 0",
+                      borderBottom: "1px solid var(--border-color)",
+                    }}>
+                      <button
+                        onClick={() => toggleToolEnabled(index, toolName)}
+                        style={{
+                          padding: "0.125rem 0.375rem",
+                          fontSize: "0.6875rem",
+                          borderRadius: "0.25rem",
+                          border: "1px solid var(--border-color)",
+                          background: toolConfig.enabled ? "var(--bg-button)" : "var(--bg-input)",
+                          color: toolConfig.enabled ? "#fff" : "var(--text-muted)",
+                          cursor: "pointer",
+                          whiteSpace: "nowrap",
+                          flexShrink: 0,
+                        }}
+                      >
+                        {toolConfig.enabled ? "启用" : "禁用"}
+                      </button>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: "0.8125rem", fontWeight: 500, marginBottom: "0.125rem" }}>
+                          {toolName}
+                        </div>
+                        <input
+                          style={{ ...inputStyle, fontSize: "0.75rem", padding: "0.25rem 0.5rem" }}
+                          type="text"
+                          value={toolConfig.description || ""}
+                          onChange={(e) => updateToolSetting(index, toolName, { description: e.target.value })}
+                          placeholder="自定义工具描述（可选）"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ padding: "0.5rem", fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                  服务器连接后将显示已发现的工具。
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
   return (
     <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal-content">
@@ -144,85 +343,103 @@ export default function Settings({ visible, onClose }: SettingsProps): React.Rea
           </button>
         </div>
 
-        <label style={labelStyle}>API 端点</label>
-        <input
-          style={inputStyle}
-          type="url"
-          value={form.endpoint}
-          onChange={(e) => handleChange("endpoint", e.target.value)}
-          placeholder="http://127.0.0.1:11453/v1/"
-        />
-
-        <label style={labelStyle}>API 密钥</label>
-        <input
-          style={inputStyle}
-          type="password"
-          value={form.api_key}
-          onChange={(e) => handleChange("api_key", e.target.value)}
-          placeholder="no-key"
-        />
-
-        <label style={labelStyle}>模型名称</label>
-        <input
-          style={inputStyle}
-          type="text"
-          value={form.model_name}
-          onChange={(e) => handleChange("model_name", e.target.value)}
-          placeholder="模型名称"
-        />
-
-        <label style={labelStyle}>上下文大小</label>
-        <input
-          style={inputStyle}
-          type="number"
-          value={form.context_size}
-          onChange={(e) => handleChange("context_size", Number(e.target.value))}
-        />
-
-        <label style={labelStyle}>温度 ({form.temperature.toFixed(1)})</label>
-        <input
-          style={{ ...inputStyle, padding: "0.25rem" }}
-          type="range"
-          min="0"
-          max="2"
-          step="0.1"
-          value={form.temperature}
-          onChange={(e) => handleChange("temperature", Number(e.target.value))}
-        />
-
-        <label style={labelStyle}>最大迭代次数</label>
-        <input
-          style={inputStyle}
-          type="number"
-          value={form.max_iterations}
-          onChange={(e) => handleChange("max_iterations", Number(e.target.value))}
-        />
-
-        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-          <label style={labelStyle}>工作目录</label>
-          <button
-            onClick={handleBrowseWorkDir}
-            style={{
-              padding: "0.375rem 0.625rem",
-              fontSize: "0.8125rem",
-              borderRadius: "0.375rem",
-              border: "1px solid var(--border-color)",
-              background: "var(--bg-input)",
-              color: "var(--text-muted)",
-              cursor: "pointer",
-              whiteSpace: "nowrap",
-            }}
-            title="选择目录"
-          >
-            浏览...
+        {/* Tab切换 */}
+        <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
+          <button onClick={() => setActiveTab("model")} style={tabStyle(activeTab === "model")}>
+            模型
+          </button>
+          <button onClick={() => setActiveTab("mcp")} style={tabStyle(activeTab === "mcp")}>
+            MCP
           </button>
         </div>
-        <input
-          style={inputStyle}
-          type="text"
-          value={form.work_dir}
-          onChange={(e) => handleChange("work_dir", e.target.value)}
-        />
+
+        {/* Model Tab */}
+        {activeTab === "model" && (
+          <>
+            <label style={labelStyle}>API 端点</label>
+            <input
+              style={inputStyle}
+              type="url"
+              value={form.endpoint}
+              onChange={(e) => handleChange("endpoint", e.target.value)}
+              placeholder="http://127.0.0.1:11453/v1/"
+            />
+
+            <label style={labelStyle}>API 密钥</label>
+            <input
+              style={inputStyle}
+              type="password"
+              value={form.api_key}
+              onChange={(e) => handleChange("api_key", e.target.value)}
+              placeholder="no-key"
+            />
+
+            <label style={labelStyle}>模型名称</label>
+            <input
+              style={inputStyle}
+              type="text"
+              value={form.model_name}
+              onChange={(e) => handleChange("model_name", e.target.value)}
+              placeholder="模型名称"
+            />
+
+            <label style={labelStyle}>上下文大小</label>
+            <input
+              style={inputStyle}
+              type="number"
+              value={form.context_size}
+              onChange={(e) => handleChange("context_size", Number(e.target.value))}
+            />
+
+            <label style={labelStyle}>温度 ({form.temperature.toFixed(1)})</label>
+            <input
+              style={{ ...inputStyle, padding: "0.25rem" }}
+              type="range"
+              min="0"
+              max="2"
+              step="0.1"
+              value={form.temperature}
+              onChange={(e) => handleChange("temperature", Number(e.target.value))}
+            />
+
+            <label style={labelStyle}>最大迭代次数</label>
+            <input
+              style={inputStyle}
+              type="number"
+              value={form.max_iterations}
+              onChange={(e) => handleChange("max_iterations", Number(e.target.value))}
+            />
+
+            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+              <label style={labelStyle}>工作目录</label>
+              <button
+                onClick={handleBrowseWorkDir}
+                style={{
+                  padding: "0.375rem 0.625rem",
+                  fontSize: "0.8125rem",
+                  borderRadius: "0.375rem",
+                  border: "1px solid var(--border-color)",
+                  background: "var(--bg-input)",
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+                title="选择目录"
+              >
+                浏览...
+              </button>
+            </div>
+            <input
+              style={inputStyle}
+              type="text"
+              value={form.work_dir}
+              onChange={(e) => handleChange("work_dir", e.target.value)}
+            />
+          </>
+        )}
+
+        {/* MCP Tab */}
+        {activeTab === "mcp" && renderMCPTab()}
 
         {message && (
           <div style={{

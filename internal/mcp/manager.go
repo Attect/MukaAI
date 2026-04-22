@@ -70,8 +70,12 @@ func (mgr *MCPClientManager) connectServer(ctx context.Context, cfg ServerConfig
 		resolveMapEnvVars(cfg.Headers)
 	}
 
-	// 创建Session
+	// Prefix默认值为ID
+	prefix := cfg.GetPrefix()
+
+	// 创建Session（传入工具设置）
 	session := NewMCPSession(cfg.ID, cfg)
+	session.toolsSettings = cfg.ToolSettings
 
 	// 连接
 	logMCP("正在连接Server '%s' (transport: %s)...", cfg.ID, cfg.Transport)
@@ -101,13 +105,31 @@ func (mgr *MCPClientManager) connectServer(ctx context.Context, cfg ServerConfig
 	// 创建适配器并注册到ToolRegistry
 	registered := 0
 	for _, mcpTool := range mcpTools {
+		// 检查工具设置：如果配置了禁用，跳过
+		if cfg.ToolSettings != nil {
+			if setting, ok := cfg.ToolSettings[mcpTool.Name]; ok && !setting.Enabled {
+				logMCP("工具 '%s' 被配置禁用，跳过", mcpTool.Name)
+				continue
+			}
+		}
+
+		// 获取自定义描述
+		customDesc := ""
+		if cfg.ToolSettings != nil {
+			if setting, ok := cfg.ToolSettings[mcpTool.Name]; ok {
+				customDesc = setting.Description
+			}
+		}
+
 		adapter := NewMCPToolAdapter(
+			prefix,
 			cfg.ID,
 			mcpTool,
 			session,
 			cfg.GetTimeout(),
 			mgr.security,
 			cfg.ProjectPath,
+			customDesc,
 		)
 
 		if err := mgr.registry.RegisterTool(adapter); err != nil {
@@ -177,16 +199,35 @@ func (mgr *MCPClientManager) GetMCPTools() []tools.Tool {
 	defer mgr.mu.RUnlock()
 
 	var result []tools.Tool
-	for _, session := range mgr.sessions {
+	for serverID, session := range mgr.sessions {
 		mcpTools := session.GetTools()
+		prefix := session.config.GetPrefix()
+		toolSettings := session.GetToolSettings()
 		for _, mcpTool := range mcpTools {
+			// 检查工具设置：如果配置了禁用，跳过
+			if toolSettings != nil {
+				if setting, ok := toolSettings[mcpTool.Name]; ok && !setting.Enabled {
+					continue
+				}
+			}
+
+			// 获取自定义描述
+			customDesc := ""
+			if toolSettings != nil {
+				if setting, ok := toolSettings[mcpTool.Name]; ok {
+					customDesc = setting.Description
+				}
+			}
+
 			adapter := NewMCPToolAdapter(
-				session.id,
+				prefix,
+				serverID,
 				mcpTool,
 				session,
 				session.config.GetTimeout(),
 				mgr.security,
 				session.config.ProjectPath,
+				customDesc,
 			)
 			result = append(result, adapter)
 		}

@@ -70,8 +70,16 @@ type MCPServerConfig struct {
 	URL     string            `yaml:"url"`
 	Headers map[string]string `yaml:"headers"`
 	// 通用配置
-	Timeout     int    `yaml:"timeout"`      // 秒
-	ProjectPath string `yaml:"project_path"` // 项目路径，自动注入到MCP工具参数
+	Timeout      int                             `yaml:"timeout"`      // 秒
+	ProjectPath  string                          `yaml:"project_path"` // 项目路径，自动注入到MCP工具参数
+	Prefix       string                          `yaml:"prefix"`       // 工具名前缀，默认使用ID
+	ToolSettings map[string]MCPToolSettingConfig `yaml:"tools"`        // 每个工具的独立配置
+}
+
+// MCPToolSettingConfig 单个MCP工具的独立配置
+type MCPToolSettingConfig struct {
+	Enabled     bool   `yaml:"enabled"`     // 是否启用该工具，默认true
+	Description string `yaml:"description"` // 自定义工具描述/提示词，覆盖MCP返回的默认描述
 }
 
 // MCPSecurityConfig MCP安全策略配置
