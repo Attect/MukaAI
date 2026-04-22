@@ -105,6 +105,15 @@ export async function regenerateConversationTitle(id: string): Promise<void> {
   await wailsRegenerateConversationTitle(id);
 }
 
+export async function getMCPToolList(serverID: string): Promise<any[]> {
+  // 通过 runtime.Call 调用后端 GetMCPToolList 方法
+  const w = window as any;
+  if (w && w.go && w.go.gui && w.go.gui.App) {
+    return await w.go.gui.App.GetMCPToolList(serverID);
+  }
+  return [];
+}
+
 export function onEvent(event: string, callback: (...args: any[]) => void): () => void {
   return EventsOn(event, callback);
 }

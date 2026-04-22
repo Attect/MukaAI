@@ -47,6 +47,12 @@ mcp:
           auto_reconnect: true
           max_retries: 3
           retry_interval_sec: 2
+          # 工具级别配置 - 可以单独禁用特定工具
+          tools:
+            # 示例：禁用 PowerShell 工具（如果不需要）
+            # PowerShell:
+            #   enabled: false
+            #   description: ""
         - id: idea
           enabled: true
           prefix: "idea"

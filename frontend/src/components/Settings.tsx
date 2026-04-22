@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { getSettings, saveSettings, onEvent, chooseDirectory } from "../wailsRuntime";
+import { getSettings, saveSettings, onEvent, chooseDirectory, getMCPToolList } from "../wailsRuntime";
 
 interface SettingsForm {
   endpoint: string;
@@ -163,6 +163,45 @@ export default function Settings({ visible, onClose }: SettingsProps): React.Rea
     const toolSetting = server.tools?.[toolName] || { enabled: true, description: "" };
     updateToolSetting(serverIndex, toolName, { enabled: !toolSetting.enabled });
   }, [mcpServers, updateToolSetting]);
+
+  // 获取 MCP Server 的真实工具列表
+  const fetchMCPTools = useCallback(async (serverIndex: number) => {
+    const server = mcpServers[serverIndex];
+    if (!server || !server.id) return;
+
+    try {
+      const tools = await getMCPToolList(server.id);
+      if (tools && tools.length > 0) {
+        // 将工具列表转换为 tools 对象格式
+        const toolsMap: Record<string, any> = {};
+        tools.forEach((tool: any) => {
+          // 保留现有的工具设置（如果存在）
+          const existingSetting = server.tools?.[tool.name] || {};
+          toolsMap[tool.name] = {
+            enabled: existingSetting.enabled !== undefined ? existingSetting.enabled : tool.enabled !== false,
+            description: existingSetting.description || "",
+          };
+        });
+
+        setMcpServers((prev) => {
+          const next = [...prev];
+          next[serverIndex] = { ...next[serverIndex], tools: toolsMap };
+          return next;
+        });
+      }
+    } catch (err) {
+      console.error(`Failed to fetch tools for server ${server.id}:`, err);
+    }
+  }, [mcpServers]);
+
+  // 当 MCP Tab 打开时，获取所有已连接 Server 的工具列表
+  useEffect(() => {
+    if (visible && activeTab === "mcp") {
+      mcpServers.forEach((_, index) => {
+        fetchMCPTools(index);
+      });
+    }
+  }, [visible, activeTab, fetchMCPTools]);
 
   if (!visible) return <></>;
 
