@@ -21,6 +21,11 @@ const defaultForm: SettingsForm = {
   work_dir: ".",
 };
 
+export interface SettingsProps {
+  visible: boolean;
+  onClose: () => void;
+}
+
 export default function Settings({ visible, onClose }: SettingsProps): React.ReactElement {
   const [form, setForm] = useState<SettingsForm>({ ...defaultForm });
   const [loading, setLoading] = useState(false);
