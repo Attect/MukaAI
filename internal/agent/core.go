@@ -713,33 +713,6 @@ func (a *Agent) finalizeResult(result *RunResult) {
 	}
 }
 
-// isTaskComplete 检查任务是否完成
-func (a *Agent) isTaskComplete(content string) bool {
-	// 检查是否包含完成标志
-	lowerContent := strings.ToLower(content)
-	completeMarkers := []string{
-		"任务已完成",
-		"task completed",
-		"任务完成",
-		"all done",
-		"已经完成",
-		"完成了",
-		"finished",
-		"done",
-		"任务结束",
-		"修复成功",
-		"测试成功",
-	}
-
-	for _, marker := range completeMarkers {
-		if strings.Contains(lowerContent, marker) {
-			return true
-		}
-	}
-
-	return false
-}
-
 // Stop 停止Agent运行
 func (a *Agent) Stop() {
 	a.mu.RLock()

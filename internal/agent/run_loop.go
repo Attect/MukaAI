@@ -4,7 +4,9 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Attect/MukaAI/internal/model"
@@ -199,51 +201,118 @@ func (a *Agent) handleToolCallsIteration(runCtx context.Context, response *model
 }
 
 // handleNoToolCallIteration 处理无工具调用的迭代
-// 返回nil表示主循环应continue，非nil表示应break或return
+// 返回 nil 表示主循环应 continue，非 nil 表示应 break 或 return
 func (a *Agent) handleNoToolCallIteration(runCtx context.Context, response *modelResponse, result *RunResult, taskGoal string, totalIterations int, consecutiveNoToolCalls int) *iterationResult {
 	// 无工具调用时也执行监督检查
 	if ir := a.runSupervision(runCtx, response, nil, taskGoal, totalIterations); ir != nil {
 		return ir
 	}
 
-	// 检查是否完成（通过文本内容判断）
-	if a.isTaskComplete(response.Content) {
-		// 在完成任务前进行校验
-		passed, ret, err := a.verifyAndCorrect(runCtx, taskGoal, result, totalIterations, "任务完成校验失败且重试次数耗尽")
-		if err != nil {
-			return &iterationResult{action: "return", result: ret, err: err}
-		}
-		if !passed {
-			// 校验失败但可重试
-			return &iterationResult{action: "continue"}
+	// 连续无工具调用超过阈值，使用 LLM 代理检查任务是否完成
+	if consecutiveNoToolCalls >= 5 {
+		complete, finalResponse := a.checkTaskCompletionViaLLM(runCtx, taskGoal, response.Content)
+		if complete {
+			// LLM 判断任务已完成
+			result.Status = "completed"
+			result.EndTime = time.Now()
+			result.FinalResponse = finalResponse
+			result.Iterations = totalIterations
+			a.finalizeResult(result)
+			return &iterationResult{action: "break"}
 		}
 
-		// 校验通过，标记任务完成（但不立即返回）
-		result.Status = "completed"
-		result.EndTime = time.Now()
-		result.FinalResponse = response.Content
+		// LLM 判断未完成，继续迭代
+		promptMsg := "请根据上述内容继续执行。如果已经完成，请调用 complete_task 工具。"
+		if a.onHistoryAdd != nil {
+			a.onHistoryAdd("user", promptMsg)
+		}
+		a.history.AddMessage(model.NewUserMessage(promptMsg))
 		result.Iterations = totalIterations
-		return &iterationResult{action: "break"}
-	}
-
-	// 连续无工具调用超过阈值，视为纯对话，直接完成
-	if consecutiveNoToolCalls >= 2 {
-		result.Status = "completed"
-		result.EndTime = time.Now()
-		result.FinalResponse = response.Content
-		result.Iterations = totalIterations
-		a.finalizeResult(result)
-		return &iterationResult{action: "break"}
+		return &iterationResult{action: "continue"}
 	}
 
 	// 前几次尝试时，给模型一个温和的提示
-	promptMsg := "请根据上述内容继续执行。如果已经完成，请调用complete_task工具。"
+	promptMsg := "请根据上述内容继续执行。如果已经完成，请调用 complete_task 工具。"
 	if a.onHistoryAdd != nil {
 		a.onHistoryAdd("user", promptMsg)
 	}
 	a.history.AddMessage(model.NewUserMessage(promptMsg))
 	result.Iterations = totalIterations
 	return &iterationResult{action: "continue"}
+}
+
+// checkTaskCompletionViaLLM 通过 LLM 代理检查任务是否完成
+// 返回 (complete bool, finalResponse string)
+func (a *Agent) checkTaskCompletionViaLLM(ctx context.Context, taskGoal string, lastResponse string) (bool, string) {
+	// 获取当前消息历史
+	messages := a.history.GetMessagesRef()
+
+	// 构建检查 prompt
+	checkPrompt := fmt.Sprintf(`你是一个任务完成检查代理。请分析以下对话内容，判断用户请求的任务是否已经完成。
+
+任务目标：%s
+
+最近一次助手回复：
+%s
+
+请只返回 JSON 格式的判断结果，不要包含其他内容。JSON 格式如下：
+{
+  "complete": true/false,
+  "reason": "简要说明判断理由"
+}
+
+判断标准：
+1. 如果任务已经完成（包括明确回复完成、或内容已满足用户需求），complete 为 true
+2. 如果任务尚未完成（如模型还在思考、需要继续执行等），complete 为 false
+3. 不要误判，宁可多一次迭代也不提前结束`, taskGoal, lastResponse)
+
+	// 构建检查请求的消息历史
+	checkMessages := append([]model.Message{
+		model.NewSystemMessage("你是一个任务完成检查代理，负责判断用户请求的任务是否已经完成。请严格按照 JSON 格式返回判断结果。"),
+		model.NewUserMessage(checkPrompt),
+	}, messages...)
+
+	// 调用模型进行检查
+	retryConfig := model.DefaultRetryConfig()
+	streamChan, err := a.modelClient.StreamChatCompletionWithRetry(ctx, checkMessages, nil, retryConfig)
+	if err != nil {
+		fmt.Printf("[checkTaskCompletionViaLLM] 模型调用失败: %v\n", err)
+		return false, ""
+	}
+
+	// 收集响应
+	var responseBuilder strings.Builder
+	for event := range streamChan {
+		if event.Error != nil {
+			fmt.Printf("[checkTaskCompletionViaLLM] 流式响应错误: %v\n", event.Error)
+			return false, ""
+		}
+		if event.Done {
+			break
+		}
+		if event.Response == nil || len(event.Response.Choices) == 0 {
+			continue
+		}
+		choice := event.Response.Choices[0]
+		if choice.Delta != nil && choice.Delta.Content != "" {
+			responseBuilder.WriteString(choice.Delta.Content)
+		}
+	}
+
+	checkResult := responseBuilder.String()
+
+	// 解析 JSON 结果
+	var checkResp struct {
+		Complete bool   `json:"complete"`
+		Reason   string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(checkResult), &checkResp); err != nil {
+		fmt.Printf("[checkTaskCompletionViaLLM] JSON 解析失败: %v, 原始内容: %s\n", err, checkResult)
+		return false, ""
+	}
+
+	fmt.Printf("[checkTaskCompletionViaLLM] LLM 判断: complete=%v, reason=%s\n", checkResp.Complete, checkResp.Reason)
+	return checkResp.Complete, lastResponse
 }
 
 // handleForcedVerification 处理外层循环的强制校验
