@@ -266,11 +266,35 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 						return ir.result, ir.err
 					case "continue":
 						consecutiveNoToolCalls++ // 重复输出视为无有效工具调用
+						// 连续重复达到阈值，使用 LLM 代理检查任务是否完成
+						if consecutiveNoToolCalls >= 3 {
+							complete, finalResponse := a.checkTaskCompletionViaLLM(runCtx, taskGoal, "")
+							if complete && finalResponse != "" {
+								result.Status = "completed"
+								result.EndTime = time.Now()
+								result.FinalResponse = finalResponse
+								result.Iterations = totalIterations
+								a.finalizeResult(result)
+								return result, nil
+							}
+						}
 						continue
 					}
 				}
 				// 重试失败兜底，跳过本次迭代
 				consecutiveNoToolCalls++ // 重复输出视为无有效工具调用
+				// 连续重复达到阈值，使用 LLM 代理检查任务是否完成
+				if consecutiveNoToolCalls >= 3 {
+					complete, finalResponse := a.checkTaskCompletionViaLLM(runCtx, taskGoal, "")
+					if complete && finalResponse != "" {
+						result.Status = "completed"
+						result.EndTime = time.Now()
+						result.FinalResponse = finalResponse
+						result.Iterations = totalIterations
+						a.finalizeResult(result)
+						return result, nil
+					}
+				}
 				continue
 			}
 

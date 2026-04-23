@@ -209,9 +209,9 @@ func (a *Agent) handleNoToolCallIteration(runCtx context.Context, response *mode
 	}
 
 	// 连续无工具调用超过阈值，使用 LLM 代理检查任务是否完成
-	if consecutiveNoToolCalls >= 5 {
+	if consecutiveNoToolCalls >= 3 {
 		complete, finalResponse := a.checkTaskCompletionViaLLM(runCtx, taskGoal, response.Content)
-		if complete {
+		if complete && finalResponse != "" {
 			// LLM 判断任务已完成
 			result.Status = "completed"
 			result.EndTime = time.Now()
@@ -242,13 +242,30 @@ func (a *Agent) handleNoToolCallIteration(runCtx context.Context, response *mode
 }
 
 // checkTaskCompletionViaLLM 通过 LLM 代理检查任务是否完成
+// lastResponse: 最近一次助手回复内容，如果为空则从历史消息中获取最后一条 assistant 消息
 // 返回 (complete bool, finalResponse string)
 func (a *Agent) checkTaskCompletionViaLLM(ctx context.Context, taskGoal string, lastResponse string) (bool, string) {
 	// 获取当前消息历史
 	messages := a.history.GetMessagesRef()
 
-	// 构建检查 prompt
-	checkPrompt := fmt.Sprintf(`你是一个任务完成检查代理。请分析以下对话内容，判断用户请求的任务是否已经完成。
+	// 如果 lastResponse 为空，从历史消息中获取最后一条 assistant 消息
+	if lastResponse == "" {
+		for i := len(messages) - 1; i >= 0; i-- {
+			if messages[i].Role == model.RoleAssistant {
+				lastResponse = messages[i].Content
+				break
+			}
+		}
+	}
+
+	// 只取最近 5 条消息作为上下文（避免 token 过多导致推理慢）
+	recentMessages := messages
+	if len(recentMessages) > 10 {
+		recentMessages = recentMessages[len(recentMessages)-10:]
+	}
+
+	// 构建检查 prompt（简化版，减少 token 量）
+	checkPrompt := fmt.Sprintf(`你是一个任务完成检查代理。请判断用户请求的任务是否已经完成。
 
 任务目标：%s
 
@@ -256,23 +273,20 @@ func (a *Agent) checkTaskCompletionViaLLM(ctx context.Context, taskGoal string, 
 %s
 
 请只返回 JSON 格式的判断结果，不要包含其他内容。JSON 格式如下：
-{
-  "complete": true/false,
-  "reason": "简要说明判断理由"
-}
+{"complete": true/false, "reason": "简短理由"}
 
 判断标准：
-1. 如果任务已经完成（包括明确回复完成、或内容已满足用户需求），complete 为 true
-2. 如果任务尚未完成（如模型还在思考、需要继续执行等），complete 为 false
+1. 如果任务已完成（包括明确回复完成、或内容已满足用户需求），complete 为 true
+2. 如果任务尚未完成，complete 为 false
 3. 不要误判，宁可多一次迭代也不提前结束`, taskGoal, lastResponse)
 
-	// 构建检查请求的消息历史
-	checkMessages := append([]model.Message{
+	// 构建检查请求的消息历史（简化版：只包含系统提示和最近消息）
+	checkMessages := []model.Message{
 		model.NewSystemMessage("你是一个任务完成检查代理，负责判断用户请求的任务是否已经完成。请严格按照 JSON 格式返回判断结果。"),
 		model.NewUserMessage(checkPrompt),
-	}, messages...)
+	}
 
-	// 调用模型进行检查
+	// 调用模型进行检查（使用简化版消息历史）
 	retryConfig := model.DefaultRetryConfig()
 	streamChan, err := a.modelClient.StreamChatCompletionWithRetry(ctx, checkMessages, nil, retryConfig)
 	if err != nil {
