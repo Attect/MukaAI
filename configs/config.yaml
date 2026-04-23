@@ -69,7 +69,7 @@ model:
     api_key: no-key
     context_size: 262144
     endpoint: http://127.0.0.1:11453/v1/
-    model_name: mudler/Qwen3.6-35B-A3B-APEX-GGUF/Qwen3.6-35B-APEX-I-Compact
+    model_name: mudler/Qwen3.6-35B-A3B-APEX-GGUF/Qwen3.6-35B-A3B-APEX-I-Compact
 security:
     default_policy: allow
 state:
