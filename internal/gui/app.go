@@ -81,6 +81,9 @@ type App struct {
 
 	// mcpManager MCP客户端管理器（可选，用于获取MCP工具列表）
 	mcpManager *mcp.MCPClientManager
+
+	// autoNewConv 启动时是否创建新对话的标志
+	autoNewConv bool
 }
 
 // conversation 内部对话结构，包含消息列表和当前流式消息
@@ -140,6 +143,15 @@ func (a *App) Startup(ctx context.Context) {
 		a.conversations = conversations
 		// 激活最后一个（最新的）对话
 		a.activeConvID = conversations[len(conversations)-1].id
+
+		// 如果设置了 autoNewConv，创建新对话
+		a.mu.RLock()
+		autoNewConv := a.autoNewConv
+		a.mu.RUnlock()
+		if autoNewConv {
+			a.createDefaultConversation()
+			fmt.Printf("[App] 已创建新对话（启动参数 --new-conv）\n")
+		}
 	} else {
 		// 没有历史对话，创建一个新的默认对话
 		a.createDefaultConversation()
@@ -174,6 +186,14 @@ func (a *App) Shutdown() {
 func (a *App) SetConfigPath(path string) {
 	a.mu.Lock()
 	a.configPath = path
+	a.mu.Unlock()
+}
+
+// SetAutoNewConv 设置启动时是否创建新对话的标志
+// 由外部初始化代码调用，通过命令行参数 --new-conv 传递
+func (a *App) SetAutoNewConv(enable bool) {
+	a.mu.Lock()
+	a.autoNewConv = enable
 	a.mu.Unlock()
 }
 

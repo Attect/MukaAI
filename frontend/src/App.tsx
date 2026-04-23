@@ -52,13 +52,14 @@ function App(): React.ReactElement {
     generatingIds,
   } = useConversation();
 
-  const [sidebarVisible, setSidebarVisible] = useState(false);
+  const [sidebarVisible, setSidebarVisible] = useState(true);
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [terminalVisible, setTerminalVisible] = useState(false);
   const [wailsReady, setWailsReady] = useState(false);
   const [isDarkTheme, setIsDarkTheme] = useState(getInitialTheme);
   const [supervisorResults, setSupervisorResults] = useState<SupervisorResult[]>([]);
   const [compressionEvents, setCompressionEvents] = useState<CompressionEvent[]>([]);
+  const [autoNewConv, setAutoNewConv] = useState(false);
 
   // 初始化主题
   useEffect(() => {
@@ -79,6 +80,13 @@ function App(): React.ReactElement {
     };
     checkReady();
   }, [loadConversations, setWorkDir]);
+
+  // 启动时自动创建新对话（如果设置了 autoNewConv）
+  useEffect(() => {
+    if (wailsReady && autoNewConv && conversations.length > 0) {
+      newConv();
+    }
+  }, [wailsReady, autoNewConv, conversations.length, newConv]);
 
   const handleConversationUpdated = useCallback((data: ConversationData) => {
     setConversationData(data);

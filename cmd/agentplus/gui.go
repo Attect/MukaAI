@@ -39,6 +39,7 @@ type GUIOptions struct {
 	InitialTask string // 初始任务描述
 	LogPath     string // 日志文件路径
 	AutoSend    bool   // 是否自动发送初始任务
+	NewConv     bool   // 启动时是否创建新对话
 }
 
 // runGUICommand 运行 GUI 模式
@@ -174,6 +175,10 @@ func runGUICommand() {
 	}
 	if opts.AutoSend {
 		log.Printf("Auto-send enabled")
+	}
+	if opts.NewConv {
+		log.Printf("New conversation on startup enabled")
+		app.SetAutoNewConv(true)
 	}
 
 	// 创建终端管理器和 WebSocket 服务器
@@ -311,6 +316,7 @@ func parseGUIFlags() *GUIOptions {
 	guiFlagSet.StringVar(&opts.InitialTask, "task", "", "初始任务描述")
 	guiFlagSet.StringVar(&opts.LogPath, "log-path", "", "日志文件路径（默认：ai/logs/gui-log-时间戳.log）")
 	guiFlagSet.BoolVar(&opts.AutoSend, "auto-send", false, "启动后自动发送初始任务")
+	guiFlagSet.BoolVar(&opts.NewConv, "new-conv", false, "启动时创建新对话")
 
 	guiFlagSet.Usage = func() {
 		fmt.Fprintf(os.Stderr, "MukaAI GUI Mode\n\n")
