@@ -21,6 +21,11 @@ function estimateSize(index: number, items: MessageListItem[]): number {
   // 基础高度
   let height = 48; // 头部 + padding
 
+  // 空消息（占位符）至少60px，确保虚拟滚动可见
+  if (msg.role === "assistant" && !msg.content && !msg.thinking && (!msg.toolCalls || msg.toolCalls.length === 0)) {
+    return Math.max(height, 60);
+  }
+
   // 思考内容
   if (msg.thinking) {
     height += Math.min(msg.thinking.length / 2, 200);
@@ -80,7 +85,7 @@ export default function MessageList({ items }: MessageListProps): React.ReactEle
     count: items.length,
     getScrollElement: () => parentRef.current,
     estimateSize: (index: number) => estimateSize(index, items),
-    overscan: 8,
+    overscan: 12,
     // 动态测量实际高度
     measureElement: (el) => el?.getBoundingClientRect().height ?? 80,
   });

@@ -742,15 +742,20 @@ func (a *App) DeleteConversation(id string) error {
 // SendMessage 发送用户消息并启动推理
 // 这是前端调用的主要入口，会异步启动Agent推理过程
 func (a *App) SendMessage(content string) error {
+	fmt.Printf("[GUI] >>> SendMessage called, content length: %d\n", len(content))
+
 	if a.agent == nil {
+		fmt.Printf("[GUI] >>> ERROR: agent is nil\n")
 		return fmt.Errorf("agent not initialized")
 	}
 
 	a.mu.Lock()
 	if a.isStreaming {
 		a.mu.Unlock()
+		fmt.Printf("[GUI] >>> ERROR: already streaming, rejecting\n")
 		return fmt.Errorf("agent is already running")
 	}
+	fmt.Printf("[GUI] >>> Agent check passed, starting message send\n")
 
 	conv := a.getOrCreateActiveConversation()
 	conv.messages = append(conv.messages, &message{
@@ -758,24 +763,35 @@ func (a *App) SendMessage(content string) error {
 		content:   content,
 		timestamp: time.Now(),
 	})
-	conv.currentMessage = nil
+	// 立即创建空的assistant currentMessage作为占位符，使前端能立即看到Assistant标记
+	conv.currentMessage = &message{
+		role:      "assistant",
+		timestamp: time.Now(),
+	}
 	a.isStreaming = true
 	a.saveConv(conv) // 持久化：保存用户消息
+	fmt.Printf("[GUI] >>> User message saved to conversation\n")
 
 	// 构建对话历史（不包括当前用户消息），注入到 Agent
 	history := a.buildConversationHistory(conv.messages[:len(conv.messages)-1])
+	fmt.Printf("[GUI] >>> Built history with %d messages, injecting to Agent\n", len(history))
 	a.agent.SetExternalHistory(history)
 
 	a.mu.Unlock()
 
 	a.emit("conversation:updated", a.GetConversationData())
+	fmt.Printf("[GUI] >>> Emitted conversation:updated event\n")
 
 	go func() {
+		fmt.Printf("[GUI] >>> Starting background goroutine for Agent.SendMessage\n")
+
 		// 使用defer作为最终保障
 		// StreamBridge.OnTaskDone会先执行重置，这里作为兜底防止isStreaming永久卡死
 		defer func() {
+			fmt.Printf("[GUI] >>> Background goroutine finishing, checking isStreaming state\n")
 			a.mu.Lock()
 			if a.isStreaming {
+				fmt.Printf("[GUI] >>> WARNING: isStreaming still true, forcing reset\n")
 				a.isStreaming = false
 				a.mu.Unlock()
 				a.emit("stream:done")
@@ -786,10 +802,13 @@ func (a *App) SendMessage(content string) error {
 		}()
 
 		if err := a.agent.SendMessage(content); err != nil {
+			fmt.Printf("[GUI] >>> ERROR: Agent.SendMessage failed: %v\n", err)
 			a.mu.Lock()
 			a.isStreaming = false
 			a.mu.Unlock()
 			a.emit("stream:error", err.Error())
+		} else {
+			fmt.Printf("[GUI] >>> Agent.SendMessage started successfully\n")
 		}
 	}()
 

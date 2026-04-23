@@ -46,13 +46,16 @@ export function useConversation() {
   }, []);
 
   const sendMessage = useCallback(async (content: string) => {
+    if (conversationData.isStreaming) {
+      return; // 正在推理中，拒绝发送
+    }
     setError(null);
     try {
       await wailsSendMessage(content);
     } catch (err: any) {
       setError(err?.message || String(err));
     }
-  }, []);
+  }, [conversationData.isStreaming]);
 
   const interruptInference = useCallback(async () => {
     try {
