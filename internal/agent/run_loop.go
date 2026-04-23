@@ -172,21 +172,10 @@ func (a *Agent) handleToolCallsIteration(runCtx context.Context, response *model
 	// 检查是否有任务完成/失败的工具调用
 	for _, tc := range response.ToolCalls {
 		if tc.Function.Name == "complete_task" {
-			// 在完成任务前进行校验
-			passed, ret, err := a.verifyAndCorrect(runCtx, taskGoal, result, totalIterations, "任务完成校验失败且重试次数耗尽")
-			if err != nil {
-				return &iterationResult{action: "return", result: ret, err: err}
-			}
-			if !passed {
-				// 校验失败但可重试
-				return &iterationResult{action: "continue"}
-			}
-
-			// 校验通过，标记任务完成（但不立即返回）
+			// complete_task 工具直接完成任务，不进行校验
 			result.Status = "completed"
 			result.EndTime = time.Now()
 			result.Iterations = totalIterations
-			// 不设置verificationPassed，让外层循环执行强制校验
 			return &iterationResult{action: "break"}
 		}
 		if tc.Function.Name == "fail_task" {
