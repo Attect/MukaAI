@@ -217,14 +217,18 @@ func NewAgent(config *Config) (*Agent, error) {
 // 主循环结构：外层循环支持强制校验后的重试，内层循环执行迭代
 // 每次迭代：调用模型 → 审查输出 → 执行工具/处理响应 → 校验完成
 func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
+	fmt.Printf("[Agent] >>> Run called, task: %s\n", truncateString(taskGoal, 100))
+
 	// 初始化运行上下文（状态锁、取消上下文、任务ID、日志、状态管理）
 	runCtx, result, totalIterations, maxTotalIterations, cleanup, err := a.initRunContext(ctx, taskGoal)
 	if err != nil {
+		fmt.Printf("[Agent] >>> ERROR: initRunContext failed: %v\n", err)
 		return nil, err
 	}
+	fmt.Printf("[Agent] >>> Run context initialized, max iterations: %d\n", maxTotalIterations)
 	defer cleanup()
 
-	// 校验状态局部变量（仅在Run内使用，避免并发安全隐患）
+	// 校验状态局部变量（仅在 Run 内使用，避免并发安全隐患）
 	verificationPassed := false
 	consecutiveNoToolCalls := 0
 
@@ -261,10 +265,12 @@ func (a *Agent) Run(ctx context.Context, taskGoal string) (*RunResult, error) {
 					case "return":
 						return ir.result, ir.err
 					case "continue":
+						consecutiveNoToolCalls++ // 重复输出视为无有效工具调用
 						continue
 					}
 				}
 				// 重试失败兜底，跳过本次迭代
+				consecutiveNoToolCalls++ // 重复输出视为无有效工具调用
 				continue
 			}
 
@@ -721,6 +727,8 @@ func (a *Agent) isTaskComplete(content string) bool {
 		"finished",
 		"done",
 		"任务结束",
+		"修复成功",
+		"测试成功",
 	}
 
 	for _, marker := range completeMarkers {
@@ -766,39 +774,57 @@ func (a *Agent) GetTaskID() string {
 // SendMessage 发送用户消息并启动推理
 // 这是一个异步方法，会在后台启动推理过程
 func (a *Agent) SendMessage(content string) error {
-	// 检查是否已在运行，并将running=true设在同一临界区内，消除TOCTOU竞态
+	fmt.Printf("[Agent] >>> SendMessage called, content length: %d\n", len(content))
+
+	// 检查是否已在运行，并将 running=true 设在同一临界区内，消除 TOCTOU 竞态
 	a.mu.Lock()
 	if a.running {
 		a.mu.Unlock()
+		fmt.Printf("[Agent] >>> ERROR: already running, rejecting\n")
 		return fmt.Errorf("agent is already running")
 	}
 	a.running = true
 	a.mu.Unlock()
+	fmt.Printf("[Agent] >>> Running flag set to true, starting background goroutine\n")
 
 	// 在后台启动推理
 	go func() {
-		// goroutine结束时重置running标志（持锁保护）
+		fmt.Printf("[Agent] >>> Background goroutine started for Run\n")
+
+		// goroutine 结束时重置 running 标志（持锁保护）
 		defer func() {
+			fmt.Printf("[Agent] >>> Background goroutine finishing, resetting running flag\n")
 			a.mu.Lock()
 			a.running = false
 			a.mu.Unlock()
 		}()
 
 		ctx := context.Background()
-		_, err := a.Run(ctx, content)
+		fmt.Printf("[Agent] >>> Calling Run with task: %s...\n", truncateString(content, 100))
+		result, err := a.Run(ctx, content)
+
 		if err != nil {
+			fmt.Printf("[Agent] >>> ERROR: Run failed: %v\n", err)
 			// 如果有流式处理器，发送错误消息
 			if handler := a.GetStreamHandler(); handler != nil {
+				fmt.Printf("[Agent] >>> Sending error to stream handler\n")
 				handler.OnError(err)
 			}
+		} else {
+			fmt.Printf("[Agent] >>> Run completed successfully, status: %s\n", result.Status)
 		}
+
 		// 无论成功还是失败，都发送一个任务完成信号
 		// 使用 OnTaskDone 通知 GUI 推理已完全结束
+		fmt.Printf("[Agent] >>> Sending task done signal to stream handler\n")
 		if handler := a.GetStreamHandler(); handler != nil {
 			handler.OnTaskDone()
+		} else {
+			fmt.Printf("[Agent] >>> WARNING: stream handler is nil, cannot send task done\n")
 		}
 	}()
 
+	fmt.Printf("[Agent] >>> SendMessage returned successfully\n")
 	return nil
 }
 

@@ -227,7 +227,7 @@ func (a *Agent) handleNoToolCallIteration(runCtx context.Context, response *mode
 	}
 
 	// 连续无工具调用超过阈值，视为纯对话，直接完成
-	if consecutiveNoToolCalls >= 3 {
+	if consecutiveNoToolCalls >= 2 {
 		result.Status = "completed"
 		result.EndTime = time.Now()
 		result.FinalResponse = response.Content
